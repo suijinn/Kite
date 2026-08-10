@@ -1,0 +1,61 @@
+# Kite - Doxygen 設定。
+#
+# リポジトリのルートから実行すること。ここに書いたパスは実行時の CWD 基準:
+#
+#     doxygen docs/Doxyfile
+#
+# 出力は build/doxygen/html/index.html、@todo の一覧は同 todo.html。
+
+PROJECT_NAME           = "Kite"
+PROJECT_BRIEF          = "Windows 向け軽量ファイラー"
+OUTPUT_DIRECTORY       = build/doxygen
+OUTPUT_LANGUAGE        = Japanese
+
+# ヘッダのみが対象。.cpp 内部の実装は文書化しない。
+INPUT                  = src
+INPUT_ENCODING         = UTF-8
+FILE_PATTERNS          = *.h
+RECURSIVE              = YES
+
+# 宣言そのものではなくコメントの有無で抽出する。これと
+# WARN_IF_UNDOCUMENTED の組み合わせが「書き漏れを警告にする」肝。
+EXTRACT_ALL            = NO
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = NO
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+
+# 書き漏れは警告として検出する。警告ゼロを維持すること。
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = YES
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = YES
+
+JAVADOC_AUTOBRIEF      = NO
+QT_AUTOBRIEF           = NO
+ALWAYS_DETAILED_SEC    = NO
+TAB_SIZE               = 4
+BUILTIN_STL_SUPPORT    = YES
+SORT_MEMBER_DOCS       = NO
+
+# X マクロで生成される Cmd 列挙は展開しない。展開すると 110 個の列挙子に
+# それぞれコメントを要求されるが、実体は KITE_COMMAND_LIST の 1 行なので
+# マクロ側に説明を置くほうが正しい。
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = NO
+EXPAND_ONLY_PREDEF     = NO
+SKIP_FUNCTION_MACROS   = NO
+
+# KITE_X は KITE_COMMAND_LIST を展開するためだけの使い捨てマクロ（定義した直後に
+# #undef される）。API ではないので文書化の対象から外す。
+EXCLUDE_SYMBOLS        = KITE_X
+
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+HTML_OUTPUT            = html
+GENERATE_TREEVIEW      = YES
+
+# Graphviz 未インストール環境でも通るようにしてある。クラス図が欲しければ
+# winget install Graphviz.Graphviz を入れて YES にする。
+HAVE_DOT               = NO

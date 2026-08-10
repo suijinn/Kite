@@ -1,6 +1,9 @@
-// Kite - the narrow set of free functions every platform backend must provide.
-// Everything else crosses the OS boundary through the interfaces in
-// core/fs/FileSystem.h, core/app/Host.h and ui/Renderer.h.
+/// @file
+/// @brief 各プラットフォームが必ず実装する自由関数群。
+///
+/// core 層が OS に触れてよいのはここだけ。これ以外の OS 境界は
+/// core/fs/FileSystem.h、core/app/Host.h、ui/Renderer.h のインターフェース経由。
+
 #pragma once
 
 #include <cstdint>
@@ -9,14 +12,29 @@
 
 namespace kite::plat {
 
+/// @brief テキストファイルを丸ごと読み込む。
+/// @param[in] utf8Path 読み込むファイルのパス（UTF-8）
+/// @param[out] out 読み込んだ内容。失敗時は空にされる
+/// @return 成功したら true。存在しない・開けない・巨大すぎる場合は false
 bool ReadTextFile(const std::string& utf8Path, std::string& out);
+
+/// @brief テキストファイルを新規作成または上書きする。
+/// @param[in] utf8Path 書き込むファイルのパス（UTF-8）
+/// @param[in] data 書き込む内容
+/// @return 成功したら true
 bool WriteTextFile(const std::string& utf8Path, std::string_view data);
+
+/// @brief ディレクトリを（必要なら親ごと）作成する。
+/// @param[in] utf8Path 作成するディレクトリのパス（UTF-8）
+/// @return 成功、またはすでに存在していれば true
 bool EnsureDirectory(const std::string& utf8Path);
 
-// Milliseconds since an arbitrary fixed origin; monotonic.
+/// @brief 単調増加する経過時間を返す。
+/// @return 任意の固定原点からのミリ秒。壁時計ではないので日時計算には使えない
 uint64_t NowMs();
 
-// BCP-47-ish UI language of the current user, e.g. "ja" or "en".
+/// @brief ユーザーの UI 言語を返す。
+/// @return "ja" や "en" のような言語コード。判定できない場合は "en"
 std::string PreferredLanguage();
 
 }  // namespace kite::plat
