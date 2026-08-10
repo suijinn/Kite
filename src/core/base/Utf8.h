@@ -1,5 +1,9 @@
-// Kite - UTF-8 code point helpers. All Kite strings are UTF-8 internally;
-// conversion to UTF-16 happens only at the Win32 boundary.
+/// @file
+/// @brief UTF-8 のコードポイント操作。
+///
+/// Kite の文字列は内部すべて UTF-8。UTF-16 への変換は platform/win/ の境界でのみ
+/// 起きるため、コアはこのヘッダだけで文字単位の処理を完結させる。
+
 #pragma once
 
 #include <cstdint>
@@ -8,26 +12,59 @@
 
 namespace kite::utf8 {
 
+/// @brief 不正なバイト列に遭遇したときに返すコードポイント（U+FFFD）。
 constexpr uint32_t kReplacement = 0xFFFD;
 
-// Decodes the code point starting at `i` and advances `i` past it.
+/// @brief `i` の位置から 1 文字を復号し、`i` をその次の文字の先頭へ進める。
+/// @param[in] s 走査対象の UTF-8 文字列
+/// @param[in,out] i 開始バイト位置。呼び出し後は次の文字の先頭を指す
+/// @return 復号したコードポイント。壊れた列や途中で切れた列では kReplacement
+/// @note 不正な列でも `i` は必ず 1 バイト以上進む。呼び出し側の無限ループを防ぐため
 uint32_t Decode(std::string_view s, size_t& i);
 
+/// @brief コードポイントを UTF-8 に符号化して末尾に追加する。
+/// @param[in] cp 符号化するコードポイント
+/// @param[out] out 追加先の文字列。既存の内容は保持される
 void Encode(uint32_t cp, std::string& out);
+
+/// @brief コードポイントを UTF-8 に符号化した文字列を返す。
+/// @param[in] cp 符号化するコードポイント
+/// @return 符号化結果の文字列
 std::string Encode(uint32_t cp);
 
-// Byte offset of the code point boundary before / after `i`.
+/// @brief `i` の直前にある文字の先頭バイト位置を返す。
+/// @param[in] s 走査対象の UTF-8 文字列
+/// @param[in] i 基準となるバイト位置
+/// @return 直前の文字の先頭位置。`i` が 0 なら 0
 size_t PrevBoundary(std::string_view s, size_t i);
+
+/// @brief `i` の次にある文字の先頭バイト位置を返す。
+/// @param[in] s 走査対象の UTF-8 文字列
+/// @param[in] i 基準となるバイト位置
+/// @return 次の文字の先頭位置。末尾に達していれば文字列長
 size_t NextBoundary(std::string_view s, size_t i);
 
+/// @brief 文字数（コードポイント数）を数える。
+/// @param[in] s 対象の UTF-8 文字列
+/// @return コードポイントの個数。バイト数ではない
 size_t CharCount(std::string_view s);
 
-// ASCII-only case folding; enough for extension and command-name comparison.
+/// @brief ASCII 範囲だけを小文字化する。
+/// @param[in] s 変換元の文字列
+/// @return 変換後の文字列。マルチバイト文字はそのまま
 std::string ToLowerAscii(std::string_view s);
+
+/// @brief ASCII 範囲のみ大文字小文字を無視して比較する。
+/// @param[in] a 比較する文字列
+/// @param[in] b 比較する文字列
+/// @return 等しければ true
 bool EqualsIgnoreCaseAscii(std::string_view a, std::string_view b);
 
-// True when the code point is a wide (East Asian) glyph. Used only for
-// fallback text measuring when no real text engine is available.
+/// @brief 東アジアの全角文字かどうかを判定する。
+/// @param[in] cp 判定するコードポイント
+/// @return 全角なら true
+/// @note 実テキストエンジンが無い場合の概算幅計算にのみ使う。DirectWrite が
+///       使える経路では実測値を優先すること
 bool IsWide(uint32_t cp);
 
 }  // namespace kite::utf8

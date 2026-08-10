@@ -1,6 +1,9 @@
-// Kite - the controller. Owns all state, executes every command, and knows
-// nothing about pixels or Win32. The UI layer reads from it and feeds it
-// events; the platform layer supplies the filesystem, shell and window.
+/// @file
+/// @brief コントローラ。全状態を保持し、全コマンドを実行する。
+///
+/// ピクセルのことも Win32 のことも知らない。UI 層がここから読み取り、イベントを
+/// 流し込む。プラットフォーム層がファイルシステム・シェル・ウィンドウを提供する。
+
 #pragma once
 
 #include <memory>
@@ -21,108 +24,234 @@
 
 namespace kite {
 
+/// @brief 画面下部の入力欄が何を尋ねているか。
 enum class PromptKind : uint8_t {
-    None,
-    Path,
-    Filter,
-    Rename,
-    NewFolder,
-    NewFile,
-    SessionName,
-    ConfirmDelete,
-    ConfirmDeletePermanent,
+    None,                    ///< 入力欄は出ていない
+    Path,                    ///< 移動先パスの入力
+    Filter,                  ///< 一覧の絞り込み
+    Rename,                  ///< 名前の変更
+    NewFolder,               ///< 新しいフォルダ名
+    NewFile,                 ///< 新しいファイル名
+    SessionName,             ///< セッション名の変更
+    ConfirmDelete,           ///< ごみ箱への削除の確認
+    ConfirmDeletePermanent,  ///< 完全削除の確認
 };
 
+/// @brief 入力欄の状態。
 struct Prompt {
-    PromptKind kind = PromptKind::None;
-    std::string labelKey;
-    std::string text;
-    size_t caret = 0;  // byte offset into `text`
-    std::vector<std::string> pendingPaths;
+    PromptKind kind = PromptKind::None;      ///< 何を尋ねているか
+    std::string labelKey;                    ///< 見出しの i18n キー
+    std::string text;                        ///< 入力中の文字列
+    size_t caret = 0;                        ///< キャレット位置。text へのバイト添字
+    std::vector<std::string> pendingPaths;   ///< 確認待ちの操作対象
 
+    /// @brief 入力欄が表示されているかを判定する。
+    /// @return 表示中なら true
     bool active() const { return kind != PromptKind::None; }
+
+    /// @brief 文字入力ではなく Yes/No の確認かを判定する。
+    /// @return 確認なら true
     bool isConfirm() const {
         return kind == PromptKind::ConfirmDelete || kind == PromptKind::ConfirmDeletePermanent;
     }
 };
 
+/// @brief ウィンドウの位置とサイズ。
 struct WindowPlacement {
-    int x = -1, y = -1, w = 1180, h = 720;
-    bool maximized = false;
+    int x = -1;             ///< 左端。負値なら OS 既定に任せる
+    int y = -1;             ///< 上端。負値なら OS 既定に任せる
+    int w = 1180;           ///< 幅
+    int h = 720;            ///< 高さ
+    bool maximized = false; ///< 最大化状態で復元するか
 };
 
+/// @brief アプリケーション本体。状態の保持とコマンド実行を担う。
 class App {
 public:
-    // `watcher` is optional: without one Kite simply does not auto-refresh,
-    // which is also how the unit tests run it.
+    /// @brief 依存オブジェクトを受け取って構築する。
+    /// @param[in] filesystem ファイルシステム。App より長生きすること
+    /// @param[in] shell シェル連携。App より長生きすること
+    /// @param[in] host ウィンドウ。App より長生きすること
+    /// @param[in] watcher 変更監視。nullptr なら自動更新を行わない
     App(fs::IFileSystem& filesystem, IShellIntegration& shell, IHost& host,
         fs::IDirectoryWatcher* watcher = nullptr);
+
+    /// @brief ワーカースレッドを止めて破棄する。
     ~App();
 
     App(const App&) = delete;
     App& operator=(const App&) = delete;
 
+    /// @brief 設定とワークスペースを読み込み、最初の列挙を開始する。
+    /// @param[in] startPaths コマンドラインで指定されたパス。追加タブとして開く
+    /// @return 常に true
     bool Init(const std::vector<std::string>& startPaths);
+
+    /// @brief 設定を保存し、ワーカースレッドを停止する。
     void Shutdown();
 
-    // --- input ---------------------------------------------------------------
-    // Returns true when the key was consumed.
+    /// @brief キー入力を処理する。
+    /// @param[in] chord 押された和音
+    /// @return 消費したら true。false ならプラットフォーム側が既定処理を行ってよい
     bool OnKey(const Chord& chord);
+
+    /// @brief 文字入力を処理する。
+    /// @param[in] codepoint 入力された Unicode コードポイント
+    /// @return 消費したら true。入力欄が出ていなければ false
     bool OnChar(uint32_t codepoint);
+
+    /// @brief コマンドを実行する。ここがコマンド処理の唯一の入口。
+    /// @param[in] cmd 実行するコマンド
     void Execute(Cmd cmd);
 
-    // --- background work -----------------------------------------------------
+    /// @brief 完了した列挙結果と変更通知を取り込む。
+    /// @note IHost::Wake() を受けた UI スレッドから呼ぶ
     void PumpLoader();
 
-    // --- accessors used by the UI layer --------------------------------------
+    /// @brief ワークスペースを返す。
+    /// @return ワークスペースへの参照
     Workspace& workspace() { return workspace_; }
+
+    /// @brief ワークスペースを返す（const 版）。
+    /// @return ワークスペースへの参照
     const Workspace& workspace() const { return workspace_; }
+
+    /// @brief 現在のテーマを返す。
+    /// @return テーマへの参照
     const Theme& theme() const { return theme_; }
+
+    /// @brief 文字列表を返す。
+    /// @return 文字列表への参照
     const Strings& strings() const { return strings_; }
+
+    /// @brief キー割り当て表を返す。
+    /// @return キーマップへの参照
     const KeyMap& keys() const { return keymap_; }
+
+    /// @brief ファイルシステムを返す。
+    /// @return ファイルシステムへの参照
     fs::IFileSystem& filesystem() { return fs_; }
+
+    /// @brief シェル連携を返す。
+    /// @return シェル連携への参照
     IShellIntegration& shell() { return shell_; }
+
+    /// @brief ウィンドウを返す。
+    /// @return ウィンドウへの参照
     IHost& host() { return host_; }
 
+    /// @brief 入力欄の状態を返す。
+    /// @return 入力欄への参照
     const Prompt& prompt() const { return prompt_; }
+
+    /// @brief 入力欄の状態を返す（変更可能）。
+    /// @return 入力欄への参照
     Prompt& prompt() { return prompt_; }
+
+    /// @brief ショートカット一覧が表示中かを返す。
+    /// @return 表示中なら true
     bool keyHelpVisible() const { return keyHelp_; }
+
+    /// @brief サイドバーが表示中かを返す。
+    /// @return 表示中なら true
     bool sidebarVisible() const { return sidebarVisible_; }
+
+    /// @brief ステータスバーに出すメッセージを返す。
+    /// @return メッセージ。無ければ空文字列
     const std::string& statusMessage() const { return statusMessage_; }
+
+    /// @brief ステータスメッセージの表示期限が切れたかを返す。
+    /// @return 期限切れなら true
     bool statusExpired() const;
 
+    /// @brief ドライブ一覧を返す。
+    /// @return ルート項目の一覧
     const std::vector<fs::Root>& roots() const { return roots_; }
+
+    /// @brief クイックアクセス項目を返す。
+    /// @return 既知フォルダの一覧
     const std::vector<fs::Root>& quickAccess() const { return quickAccess_; }
 
+    /// @brief 保存されたウィンドウ位置を返す。
+    /// @return ウィンドウ位置
     const WindowPlacement& placement() const { return placement_; }
+
+    /// @brief ウィンドウ位置を記録する。
+    /// @param[in] p 記録する位置とサイズ
     void SetPlacement(const WindowPlacement& p) { placement_ = p; }
 
-    // --- operations the UI triggers directly ---------------------------------
+    /// @brief ペインにフォーカスを移す。
+    /// @param[in] pane フォーカスするペイン。nullptr なら何もしない
     void FocusPane(Pane* pane);
+
+    /// @brief パスを開く。
+    /// @param[in] path 開くパス
+    /// @param[in] newTab true なら新しいタブで開く
     void OpenPath(const std::string& path, bool newTab);
+
+    /// @brief フォーカス中のタブを別のフォルダへ移動させる。
+    /// @param[in] path 移動先のパス
+    /// @note 履歴に積み、絞り込みとカーソルを初期化して再列挙を要求する
     void NavigateFocused(const std::string& path);
+
+    /// @brief 一覧の項目を開く。フォルダなら移動、ファイルならシェルに委ねる。
+    /// @param[in] visibleIndex 開く項目。Tab::visible への添字
+    /// @param[in] newTab true なら新しいタブで開く（フォルダのみ）
     void ActivateEntry(int visibleIndex, bool newTab);
+
+    /// @brief カーソルが画面内に入るようスクロール量を調整する。
     void EnsureCursorVisible();
+
+    /// @brief ステータスバーに一時的なメッセージを出す。
+    /// @param[in] message 表示する文字列
     void SetStatus(const std::string& message);
+
+    /// @brief フォーカス中のタブを再列挙する。
     void RefreshFocused();
+
+    /// @brief シェルのコンテキストメニューを表示する。
+    /// @param[in] screenX 表示位置の X（スクリーン座標）。負ならカーソル位置
+    /// @param[in] screenY 表示位置の Y（スクリーン座標）。負ならカーソル位置
+    /// @param[in] extended true なら拡張メニューを最初から出す
     void ShowContextMenuAt(int screenX, int screenY, bool extended);
+
+    /// @brief ブックマークの登録と解除を切り替える。
+    /// @param[in] path 対象のパス
     void ToggleBookmark(const std::string& path);
+
+    /// @brief パスがブックマーク済みかを判定する。
+    /// @param[in] path 対象のパス
+    /// @return 登録済みなら true
     bool HasBookmark(const std::string& path) const;
 
-    // --- drag & drop ---------------------------------------------------------
-    // Copies or moves `paths` into `destDir`. Rejects the no-op cases (dropping
-    // a folder into itself or into its own subtree) before touching the disk.
+    /// @brief ドロップされたパスを転送先へコピーまたは移動する。
+    /// @param[in] paths 転送するパス列
+    /// @param[in] destDir 転送先ディレクトリ
+    /// @param[in] move true なら移動、false ならコピー
+    /// @return 実際に転送を行ったら true。不正な転送先、または移動が無意味な
+    ///         場合（すでに転送先にある）は何もせず false
     bool PerformDrop(const std::vector<std::string>& paths, const std::string& destDir, bool move);
 
-    // True when `destDir` is a legal drop destination for `paths`.
+    /// @brief 転送先として妥当かを判定する。
+    /// @param[in] paths 転送するパス列
+    /// @param[in] destDir 転送先ディレクトリ
+    /// @return 妥当なら true。自分自身、または自分のサブツリーへの転送は false
+    /// @note ここだけがデータを壊しうる判定なので、OS 非依存の core に置いて
+    ///       直接テストしている
     static bool IsValidDropTarget(const std::vector<std::string>& paths,
                                   const std::string& destDir);
 
-    // Re-registers filesystem watches for the tabs currently on screen.
+    /// @brief 画面に出ているタブに合わせて監視を張り直す。
+    /// @note 新しく監視対象になったフォルダは、見ていない間の変更が不明なので
+    ///       強制的に再列挙する
     void SyncWatches();
 
+    /// @brief 設定とワークスペースをすべて保存する。
     void SaveAll();
 
+    /// @brief 設定フォルダ内のファイルパスを組み立てる。
+    /// @param[in] file ファイル名
+    /// @return 組み立てたフルパス
     std::string ConfigPath(const char* file) const;
 
 private:

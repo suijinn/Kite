@@ -1,9 +1,13 @@
+/// @file
+/// @brief Win32 ウィンドウ。メッセージポンプ、入力変換、IHost の実装。
+
 #pragma once
 
 #include <windows.h>
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "core/app/App.h"
 #include "core/app/Host.h"
@@ -13,27 +17,58 @@
 
 namespace kite::win {
 
-// The Win32 window: message pump, input translation and the IHost services the
-// controller needs. Nothing here knows what a tab or a bookmark is.
+/// @brief メインウィンドウ。
+///
+/// タブやブックマークが何であるかは一切知らない。OS のイベントを UI 層の型に
+/// 変換し、コントローラが必要とするウィンドウ機能を提供するだけ。
 class WinWindow final : public IHost {
 public:
+    /// @brief 空のウィンドウオブジェクトを作る。
     WinWindow();
+
+    /// @brief 破棄する。
     ~WinWindow() override;
 
+    /// @brief コントローラと UI を結び付ける。
+    /// @param[in] app コントローラ。本オブジェクトより長生きすること
+    /// @param[in] appUi UI。本オブジェクトより長生きすること
+    /// @note Create() より前に呼ぶこと。ウィンドウ作成時にテーマを参照する
     void Attach(App* app, ui::AppUi* appUi);
+
+    /// @brief ウィンドウを作成して表示する。
+    /// @param[in] placement 復元する位置とサイズ
+    /// @return 成功したら true。ウィンドウまたは描画資源の作成に失敗したら false
     bool Create(const WindowPlacement& placement);
+
+    /// @brief メッセージループを回す。
+    /// @return WM_QUIT の終了コード
     int Run();
 
+    /// @brief ウィンドウハンドルを返す。
+    /// @return ハンドル。未作成なら nullptr
     HWND handle() const { return hwnd_; }
 
-    // IHost
+    /// @copydoc IHost::Invalidate
     void Invalidate() override;
+
+    /// @copydoc IHost::SetTitle
     void SetTitle(const std::string& utf8) override;
+
+    /// @copydoc IHost::Close
     void Close() override;
+
+    /// @copydoc IHost::SetImePosition
     void SetImePosition(float x, float y) override;
+
+    /// @copydoc IHost::SetCursorShape
     void SetCursorShape(int shape) override;
+
+    /// @copydoc IHost::BeginFileDrag
     bool BeginFileDrag(const std::vector<std::string>& paths) override;
-    void Wake() override;  // called from loader threads
+
+    /// @copydoc fs::IWakeSink::Wake
+    /// @note ローダーと監視のワーカースレッドから呼ばれる
+    void Wake() override;
 
 private:
     static LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);

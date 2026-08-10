@@ -1,9 +1,13 @@
+/// @file
+/// @brief ReadDirectoryChangesW によるディレクトリ監視。
+
 #pragma once
 
 #include <windows.h>
 
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -15,23 +19,33 @@
 
 namespace kite::win {
 
-// ReadDirectoryChangesW driven by a single I/O completion port, so any number
-// of watched folders costs one thread.
-//
-// All handle ownership lives on the worker thread. Watch/Unwatch from the UI
-// thread only post commands, which removes the race between closing a
-// directory handle and its in-flight completion - the classic way this API is
-// got wrong.
+/// @brief 単一の I/O 完了ポートで駆動するディレクトリ監視。
+///
+/// 監視対象がいくつあってもスレッドは 1 本で済む。
+///
+/// @note ハンドルの所有権はすべてワーカースレッドにある。UI スレッドからの
+///       Watch()/Unwatch() はコマンドを投函するだけなので、「ディレクトリ
+///       ハンドルを閉じる」と「その読み取り完了通知が届く」の競合が起きない。
+///       この API を誤用する典型パターンを構造的に避けている
 class WinDirectoryWatcher final : public fs::IDirectoryWatcher {
 public:
+    /// @brief 完了ポートとワーカースレッドを用意する。
+    /// @param[in] wake 変更を検出したときに起こす相手。本オブジェクトより長生きすること
     explicit WinDirectoryWatcher(fs::IWakeSink& wake);
+
+    /// @brief ワーカースレッドを停止し、全ハンドルを閉じてから破棄する。
     ~WinDirectoryWatcher() override;
 
     WinDirectoryWatcher(const WinDirectoryWatcher&) = delete;
     WinDirectoryWatcher& operator=(const WinDirectoryWatcher&) = delete;
 
+    /// @copydoc fs::IDirectoryWatcher::Watch
     void Watch(uint64_t watchId, const std::string& path) override;
+
+    /// @copydoc fs::IDirectoryWatcher::Unwatch
     void Unwatch(uint64_t watchId) override;
+
+    /// @copydoc fs::IDirectoryWatcher::Drain
     void Drain(std::vector<fs::ChangeEvent>& out) override;
 
 private:

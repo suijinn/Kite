@@ -1,3 +1,6 @@
+/// @file
+/// @brief Direct2D 1.1 による ui::Renderer 実装。
+
 #pragma once
 
 #include <windows.h>
@@ -15,40 +18,81 @@
 
 namespace kite::win {
 
-// Direct2D 1.1 implementation of ui::Renderer, presenting through a DXGI flip
-// swap chain (D3D11 device -> ID2D1Device -> ID2D1DeviceContext).
-//
-// The older ID2D1HwndRenderTarget path was tried first and its EndDraw returns
-// S_OK while nothing ever reaches the screen on at least one Intel driver, so
-// the modern path is the only one used. It is also the one Microsoft has
-// recommended since Windows 8 and it composites better while resizing.
-//
-// Text goes through per-role IDWriteTextFormat objects that already carry
-// ellipsis trimming and vertical centring, so drawing a row cell is one call.
+/// @brief DXGI フリップスワップチェーンに描く ui::Renderer 実装。
+///
+/// D3D11 デバイス → ID2D1Device → ID2D1DeviceContext という経路をとる。
+///
+/// @note 先に ID2D1HwndRenderTarget を試したが、少なくとも手元の Intel ドライバでは
+///       EndDraw が S_OK を返しながら画面に何も出なかった。40 行の最小再現コードでも
+///       同じだったため、Microsoft が Windows 8 以降推奨しているこちらの経路のみを
+///       使う。リサイズ時の見た目も良い。「単純化」して戻さないこと
 class D2DRenderer final : public ui::Renderer {
 public:
+    /// @brief COM オブジェクトをすべて解放する。
     ~D2DRenderer() override;
 
+    /// @brief ファクトリとフォントを用意する。
+    /// @param[in] hwnd 描画先のウィンドウ
+    /// @param[in] theme フォント名とサイズを取り出すテーマ
+    /// @param[in] dpi ウィンドウの DPI
+    /// @return 成功したら true
+    /// @note デバイスとスワップチェーンはここでは作らない。表示前のウィンドウに
+    ///       結び付けると、コンポジタが後で捨てるサーフェスに描き続けることになる
     bool Initialize(HWND hwnd, const Theme& theme, float dpi);
+
+    /// @brief テーマまたは DPI の変更を反映する。
+    /// @param[in] theme 新しいテーマ
+    /// @param[in] dpi 新しい DPI
     void UpdateTheme(const Theme& theme, float dpi);
+
+    /// @brief 描画対象の大きさを変更する。
+    /// @param[in] pixelWidth 新しい幅（ピクセル）
+    /// @param[in] pixelHeight 新しい高さ（ピクセル）
     void Resize(UINT pixelWidth, UINT pixelHeight);
 
+    /// @brief 1 フレームの描画を開始する。
+    /// @return 開始できたら true。デバイスを用意できなければ false
     bool BeginFrame();
-    // Returns false when the device was lost; resources are dropped and the
-    // next frame rebuilds them.
+
+    /// @brief 1 フレームの描画を終えて画面に出す。
+    /// @return 成功したら true。デバイスが失われた場合は false を返し、
+    ///         資源を破棄する（次フレームで再構築される）
     bool EndFrame();
 
+    /// @copydoc ui::Renderer::PushClip
     void PushClip(const RectF& r) override;
+
+    /// @copydoc ui::Renderer::PopClip
     void PopClip() override;
+
+    /// @copydoc ui::Renderer::FillRect
     void FillRect(const RectF& r, const Color& c) override;
+
+    /// @copydoc ui::Renderer::FillRoundRect
     void FillRoundRect(const RectF& r, float radius, const Color& c) override;
+
+    /// @copydoc ui::Renderer::StrokeRect
     void StrokeRect(const RectF& r, const Color& c, float width) override;
+
+    /// @copydoc ui::Renderer::DrawLine
     void DrawLine(float x1, float y1, float x2, float y2, const Color& c, float width) override;
+
+    /// @copydoc ui::Renderer::FillTriangle
     void FillTriangle(PointF a, PointF b, PointF c, const Color& color) override;
+
+    /// @copydoc ui::Renderer::DrawText
     void DrawText(std::string_view utf8, const RectF& r, const Color& c, ui::FontRole role,
                   ui::TextAlign align) override;
+
+    /// @copydoc ui::Renderer::MeasureText
+    /// @note 計測は一時的な IDWriteTextLayout を作るため毎行毎フレームには重すぎる。
+    ///       結果は変わらないので文字列をキーにキャッシュしている
     float MeasureText(std::string_view utf8, ui::FontRole role) override;
+
+    /// @copydoc ui::Renderer::LineHeight
     float LineHeight(ui::FontRole role) override;
+
+    /// @copydoc ui::Renderer::surfaceSize
     SizeF surfaceSize() const override;
 
 private:
@@ -77,8 +121,6 @@ private:
     int clipDepth_ = 0;
     bool drawing_ = false;
 
-    // Measuring builds a transient IDWriteTextLayout, far too slow to repeat
-    // per row per frame; widths are stable, so cache them by string.
     std::unordered_map<std::string, float> measureCache_[4];
 };
 

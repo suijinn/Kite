@@ -1,10 +1,12 @@
-// Kite - the command table.
-//
-// Every user-visible action in Kite is a Cmd. Nothing in the UI reacts to raw
-// key input except text fields, so "rebind anything" comes for free: the key
-// map turns a chord into a Cmd and App::Execute is the single dispatch point.
-//
-// Adding an action = one line in KITE_COMMAND_LIST + a case in App::Execute.
+/// @file
+/// @brief コマンド表。
+///
+/// Kite の利用者から見える操作はすべて Cmd。テキスト入力欄を除き UI は生のキー入力に
+/// 一切反応しないので、「どの操作にもキーを割り当てられる」が構造として保証される。
+/// キーマップが和音を Cmd に変え、App::Execute が唯一のディスパッチ点になる。
+///
+/// 操作の追加は KITE_COMMAND_LIST に 1 行と App::Execute に case を 1 つ。
+
 #pragma once
 
 #include <cstdint>
@@ -13,11 +15,28 @@
 
 namespace kite {
 
+/// @brief コマンドの分類。ショートカット一覧の見出しに使う。
 enum class CmdGroup : uint8_t {
-    App, Navigate, Select, Tab, Pane, Session, View, Bookmark, File, Shell, Count
+    App,       ///< アプリケーション全体
+    Navigate,  ///< 移動
+    Select,    ///< カーソルと選択
+    Tab,       ///< タブ
+    Pane,      ///< ペイン
+    Session,   ///< セッション
+    View,      ///< 表示
+    Bookmark,  ///< ブックマーク
+    File,      ///< ファイル操作
+    Shell,     ///< シェル連携
+    Count      ///< 列挙の終端。有効な分類ではない
 };
 
-// X(enumerator, config name, i18n label key, group)
+/// @brief 全コマンドの定義表。
+///
+/// `X(列挙子, 設定ファイル上の名前, i18n ラベルキー, 分類)` を並べたもの。
+/// Cmd 列挙と CommandInfo の表がここから生成されるため、両者がずれることはない。
+///
+/// @note ラベルキーは core/i18n/Strings.cpp の `kEn` と `kJa` の両方に実体が
+///       必要。片方でも欠けると test_strings.cpp が失敗する
 #define KITE_COMMAND_LIST(X)                                                                     \
     /* --- application ------------------------------------------------------ */                \
     X(Quit,               "app.quit",                "cmd.quit",               App)              \
@@ -140,6 +159,10 @@ enum class CmdGroup : uint8_t {
     X(RevealInExplorer,   "shell.reveal",            "cmd.reveal",             Shell)            \
     X(OpenTerminal,       "shell.terminal",          "cmd.terminal",           Shell)
 
+/// @brief コマンド識別子。KITE_COMMAND_LIST から生成される。
+///
+/// 先頭の `None` は「割り当て無し」、末尾の `Count` は列挙の終端を表す。
+/// その間の列挙子は KITE_COMMAND_LIST の記述順に並ぶ。
 enum class Cmd : uint16_t {
     None = 0,
 #define KITE_X(id, name, label, group) id,
@@ -148,17 +171,36 @@ enum class Cmd : uint16_t {
     Count
 };
 
+/// @brief 1 コマンド分のメタ情報。
 struct CommandInfo {
-    Cmd id;
-    const char* name;      // stable identifier used in keys.ini
-    const char* labelKey;  // i18n lookup key
-    CmdGroup group;
+    Cmd id;                ///< コマンド識別子
+    const char* name;      ///< keys.ini で使う安定した名前
+    const char* labelKey;  ///< i18n の検索キー
+    CmdGroup group;        ///< 分類
 };
 
+/// @brief 全コマンドのメタ情報を定義順に返す。
+/// @return コマンド表への参照。プロセス生存中は有効
 const std::vector<CommandInfo>& AllCommands();
+
+/// @brief 識別子からメタ情報を引く。
+/// @param[in] id 探すコマンド識別子
+/// @return 対応するメタ情報。Cmd::None や範囲外なら nullptr
 const CommandInfo* FindCommand(Cmd id);
+
+/// @brief 設定ファイル上の名前からコマンドを引く。
+/// @param[in] name keys.ini に書かれる名前。大文字小文字は区別しない
+/// @return 対応するコマンド。未知の名前なら Cmd::None
 Cmd CommandFromName(std::string_view name);
+
+/// @brief コマンドの設定ファイル上の名前を返す。
+/// @param[in] id 対象のコマンド
+/// @return 名前。未知のコマンドでは空文字列
 const char* CommandName(Cmd id);
+
+/// @brief 分類の見出しに使う i18n キーを返す。
+/// @param[in] g 対象の分類
+/// @return i18n の検索キー
 const char* GroupLabelKey(CmdGroup g);
 
 }  // namespace kite

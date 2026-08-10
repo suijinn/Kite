@@ -1,12 +1,13 @@
-// Kite - layout, painting and hit-testing for the whole window.
-//
-// Painting also records the interactive regions it drew, so mouse handling is
-// a reverse lookup over that list. No retained widget tree, no invalidation
-// bookkeeping: at these sizes a full repaint is well under a millisecond.
-//
-// Drag handling lives here too, including the parts a platform drag backend
-// needs (which folder is under the pointer, where to draw the drop feedback).
-// Only the OS drag transport itself is platform code.
+/// @file
+/// @brief ウィンドウ全体のレイアウト・描画・ヒットテスト。
+///
+/// 描画のたびに「そこに何を描いたか」も記録するので、マウス処理はその一覧を逆順に
+/// 引くだけで済む。保持型のウィジェットツリーも無効領域の管理も持たない。この規模
+/// なら全面再描画で 1 ミリ秒を大きく下回る。
+///
+/// プラットフォームのドラッグ実装が必要とする情報（ポインタの下にあるフォルダ、
+/// ドロップ先の強調表示位置）もここが提供する。OS 依存なのはドラッグの転送のみ。
+
 #pragma once
 
 #include <string>
@@ -17,50 +18,79 @@
 
 namespace kite::ui {
 
+/// @brief 現在押されているマウスボタンのビットマスク。
 enum MouseButtonMask : uint8_t {
-    kButtonNone = 0,
-    kButtonLeft = 1 << 0,
-    kButtonRight = 1 << 1,
-    kButtonMiddle = 1 << 2,
+    kButtonNone = 0,        ///< どのボタンも押されていない
+    kButtonLeft = 1 << 0,   ///< 左ボタン
+    kButtonRight = 1 << 1,  ///< 右ボタン
+    kButtonMiddle = 1 << 2, ///< 中ボタン
 };
 
+/// @brief マウスイベント。座標はクライアント DIP。
 struct MouseEvent {
-    enum class Type : uint8_t { Move, Down, Up, Wheel, Leave };
+    /// @brief イベントの種類。
+    enum class Type : uint8_t {
+        Move,   ///< 移動
+        Down,   ///< ボタン押下
+        Up,     ///< ボタン解放
+        Wheel,  ///< ホイール回転
+        Leave,  ///< ウィンドウ外へ出た
+    };
 
-    Type type = Type::Move;
-    float x = 0.0f;
-    float y = 0.0f;
-    int screenX = 0;
-    int screenY = 0;
-    int button = 0;            // 0 left, 1 right, 2 middle, 3 back, 4 forward
-    uint8_t buttons = 0;       // which buttons are currently held
-    int clicks = 1;
-    uint8_t mods = 0;
-    float wheel = 0.0f;
+    Type type = Type::Move;  ///< イベントの種類
+    float x = 0.0f;          ///< クライアント座標の X（DIP）
+    float y = 0.0f;          ///< クライアント座標の Y（DIP）
+    int screenX = 0;         ///< スクリーン座標の X（ピクセル）
+    int screenY = 0;         ///< スクリーン座標の Y（ピクセル）
+    int button = 0;          ///< 0=左 1=右 2=中 3=戻る 4=進む
+    uint8_t buttons = 0;     ///< 押下中ボタンの MouseButtonMask 和
+    int clicks = 1;          ///< クリック数。2 ならダブルクリック
+    uint8_t mods = 0;        ///< 修飾キーの Mod ビット和
+    float wheel = 0.0f;      ///< ホイールの回転量。1.0 で 1 ノッチ
 };
 
+/// @brief 画面の描画とマウス操作を担当する。
 class AppUi {
 public:
+    /// @brief コントローラを結び付けて構築する。
+    /// @param[in] app 描画対象のアプリケーション。AppUi より長生きすること
     explicit AppUi(App& app);
 
+    /// @brief 画面全体を描画する。
+    /// @param[in,out] r 描画先
+    /// @note 同時にヒットテスト用の領域一覧を作り直す
     void Paint(Renderer& r);
+
+    /// @brief マウスイベントを処理する。
+    /// @param[in] e 処理するイベント
+    /// @return 消費したら true
     bool OnMouse(const MouseEvent& e);
 
-    // Where the IME candidate window should sit, in client DIPs.
+    /// @brief IME の変換候補を出すべき位置を返す。
+    /// @return クライアント座標（DIP）
     PointF caretPosition() const { return caret_; }
+
+    /// @brief 望ましいマウスカーソル形状を返す。
+    /// @return IHost::SetCursorShape() に渡す形状番号
     int desiredCursorShape() const { return cursorShape_; }
 
-    // --- external drag & drop -------------------------------------------------
-    // Folder that a drop at this client point would go into; empty when the
-    // point is not over a valid destination.
+    /// @brief 指定位置にドロップした場合の転送先フォルダを返す。
+    /// @param[in] x クライアント座標の X（DIP）
+    /// @param[in] y クライアント座標の Y（DIP）
+    /// @return 転送先フォルダのパス。妥当な場所でなければ空文字列
     std::string DropTargetAt(float x, float y) const;
 
-    // Highlights that destination. Called by the platform drop target while a
-    // drag hovers, then cleared on leave or drop.
+    /// @brief ドロップ先の強調表示を設定する。
+    /// @param[in] x クライアント座標の X（DIP）
+    /// @param[in] y クライアント座標の Y（DIP）
+    /// @note ドラッグが上を通過している間、プラットフォームのドロップターゲットが呼ぶ
     void SetDropFeedback(float x, float y);
+
+    /// @brief ドロップ先の強調表示を消す。
     void ClearDropFeedback();
 
 private:
+    /// 描画時に記録する当たり判定の種別。
     enum class Hit : uint8_t {
         None,
         SessionChip,
@@ -77,7 +107,7 @@ private:
         Splitter,
     };
 
-    // What the left button is currently doing.
+    /// 左ボタンが今おこなっている操作。
     enum class Drag : uint8_t {
         None,
         Splitter,
@@ -114,7 +144,6 @@ private:
     bool HandleListClick(const Region& region, const MouseEvent& e);
     void ScrollPane(Pane* pane, float deltaPixels);
 
-    // Tab drag helpers.
     bool ResolveTabDrop(float x, float y, Pane** outPane, int* outIndex) const;
     void FinishTabDrag();
     void CancelDrag();
@@ -129,19 +158,16 @@ private:
     float dragStartX_ = 0.0f;
     float dragStartY_ = 0.0f;
 
-    // Splitter drag.
     SplitNode* dragSplitter_ = nullptr;
     float dragOrigin_ = 0.0f;
     float dragRatio_ = 0.5f;
 
-    // Tab drag.
     Pane* dragTabPane_ = nullptr;
     int dragTabIndex_ = -1;
     Pane* dropTabPane_ = nullptr;
     int dropTabIndex_ = -1;
     RectF dropTabMarker_{};
 
-    // External file drop feedback.
     bool dropActive_ = false;
     RectF dropHighlight_{};
     std::string dropPath_;

@@ -1,12 +1,14 @@
 # CLAUDE.md
 
-Kite — a lightweight Windows file manager in C++20, built to replace Explorer.
-This file is the working brief for anyone (human or agent) editing the repo.
+Kite — Windows エクスプローラーを置き換えることを目的とした、C++20 製の軽量ファイラー。
+このファイルは、このリポジトリを編集する人（人間・エージェントを問わず）向けの作業指針。
 
-## Build and test
+ロードマップと未実装項目は [docs/ROADMAP.md](docs/ROADMAP.md) を参照。
 
-Everything runs from a **Developer PowerShell for VS 2022** (CMake, Ninja and
-ctest all ship inside Visual Studio; nothing else needs installing).
+## ビルドとテスト
+
+**Developer PowerShell for VS 2022** から実行する。CMake・Ninja・ctest はすべて
+Visual Studio に同梱されているので、追加インストールは不要。
 
 ```bash
 cmake --preset release
@@ -14,141 +16,206 @@ cmake --build --preset release
 ctest --preset release
 ```
 
-Output: `build/release/kite.exe` and `build/release/kite_tests.exe`.
-There is also a `debug` preset with the same three commands.
+生成物は `build/release/kite.exe` と `build/release/kite_tests.exe`。
+同じ 3 コマンドで使える `debug` プリセットもある。
 
-`build.ps1` does the same thing from an ordinary PowerShell by importing the
-MSVC environment itself — useful when a shell is not a developer prompt.
+開発者プロンプトでない普通の PowerShell からは、MSVC 環境を自前で読み込む
+`build.ps1` を使う。
 
-Running a bare `cmake --build build/release` from a non-developer shell fails
-with confusing "cannot open include file `<mutex>`" errors: that means `INCLUDE`
-is unset, not that anything is wrong with the code.
+開発者プロンプト以外で `cmake --build build/release` を直接叩くと
+「`<mutex>` を開けません」という紛らわしいエラーになる。これはコードの問題ではなく
+`INCLUDE` 環境変数が未設定なだけ。
 
-Run one suite directly for a fast loop:
+1 スイートだけ回す高速ループ:
 
 ```bash
 build/release/kite_tests.exe --filter app.
 ```
 
-`--list` prints every test name.
+`--list` で全テスト名を列挙できる。
 
-## Architecture
+## アーキテクチャ
 
-Three layers, strictly separated. This is the project's main design constraint
-and the reason it can move to another OS later.
+3 層に厳密分離。これがこのプロジェクト最大の設計制約であり、将来他 OS へ移せる根拠。
 
 ```
-src/core/       No OS calls at all, beyond the five free functions declared in
-                core/base/Platform.h. Never include <windows.h> here.
-src/ui/         Layout, painting, hit-testing and drag logic. Draws only
-                through the abstract ui::Renderer.
-src/platform/   The only place Windows headers appear.
-tests/          Links kite_core alone - if a Windows header leaks into core or
-                ui, the test build breaks. That is the guardrail.
+src/core/       OS 呼び出しを一切行わない。例外は core/base/Platform.h が宣言する
+                5 つの自由関数のみ。ここに <windows.h> を include してはならない。
+src/ui/         レイアウト・描画・ヒットテスト・ドラッグ処理。描画は抽象 ui::Renderer
+                経由のみ。
+src/platform/   Windows ヘッダが現れる唯一の場所。
+tests/          kite_core だけをリンクする。OS 非依存であるべき core/ ui/ に Windows
+                ヘッダが紛れ込めばテストのビルドが壊れる。これが分離の防波堤。
 ```
 
-`kite_core` (CMake target) = `core/` + `ui/`. `kite` = `kite_core` + `platform/`.
+CMake ターゲットとしては `kite_core` = `core/` + `ui/`、`kite` = `kite_core` + `platform/`。
 
-Porting to another OS means implementing five things and nothing else:
+他 OS へ移植する際に実装するのは以下だけで、それ以外は書き換えない:
 
-| Seam | Header |
+| 境界 | ヘッダ |
 | --- | --- |
-| Drawing | `ui/Renderer.h` |
-| Filesystem | `core/fs/FileSystem.h` |
-| Change notification | `core/fs/DirectoryWatcher.h` |
-| Shell / clipboard | `IShellIntegration` in `core/app/Host.h` |
-| Window services | `IHost` in `core/app/Host.h` |
-| File I/O, clock, locale | `core/base/Platform.h` |
+| 描画 | `ui/Renderer.h` |
+| ファイルシステム | `core/fs/FileSystem.h` |
+| 変更通知 | `core/fs/DirectoryWatcher.h` |
+| シェル／クリップボード | `core/app/Host.h` の `IShellIntegration` |
+| ウィンドウ機能 | `core/app/Host.h` の `IHost` |
+| ファイル入出力・時刻・ロケール | `core/base/Platform.h` |
 
-### Data model
+### データモデル
 
 ```
-Workspace -> Session[] (one active)
-Session   -> SplitNode tree; every leaf holds one Pane
-Pane      -> Tab[] (one active)
-Tab       -> path + listing + view state + history
+Workspace -> Session[]（1 つがアクティブ）
+Session   -> SplitNode ツリー。葉が 1 つの Pane を持つ
+Pane      -> Tab[]（1 つがアクティブ）
+Tab       -> パス + 一覧 + 表示状態 + 履歴
 ```
 
-All sessions stay resident so switching is an index change. Non-active tabs of
-a backgrounded session drop their listings to keep memory flat.
+全セッションが常駐しているので、切り替えはインデックスの移動だけで済む。
+背面に回ったセッションの非アクティブタブは一覧データを解放し、常駐メモリを
+画面に映っている量に比例させる。
 
-### Control flow
+### 制御フロー
 
-`App` (`core/app/App.cpp`) is the only dispatch point. The UI never reacts to
-raw key input except in text fields: the key map turns a chord into a `Cmd` and
-`App::Execute` runs it. That is what makes "rebind anything" structural rather
-than a feature.
+`App`（`core/app/App.cpp`）が唯一のディスパッチ点。テキスト入力欄を除き、UI は生の
+キー入力に一切反応しない。キーマップが和音を `Cmd` に変換し、`App::Execute` が実行する。
+「どの操作にもキーを割り当てられる」が機能ではなく構造として保証されるのはこのため。
 
-Directory enumeration never runs on the UI thread — a cold network share blocks
-for seconds inside a single `FindFirstFile`. Requests go through
-`DirectoryLoader`, results are collected in `App::PumpLoader` after
-`IHost::Wake()`.
+ディレクトリ列挙は UI スレッドで絶対に動かさない。冷えたネットワーク共有は 1 回の
+`FindFirstFile` で数秒ブロックする。リクエストは `DirectoryLoader` を通り、結果は
+`IHost::Wake()` の後に `App::PumpLoader` が回収する。
 
-## How to add things
+## 追加のしかた
 
-**A command** — one line in `KITE_COMMAND_LIST` (`core/input/Commands.h`), one
-`case` in `App::Execute`, a label in both language tables
-(`core/i18n/Strings.cpp`), and usually a default binding in
-`core/input/KeyMap.cpp`. `test_strings.cpp` fails if a label is missing, and
-`test_keymap.cpp` fails on a duplicate chord.
+**コマンドを足す** — `KITE_COMMAND_LIST`（`core/input/Commands.h`）に 1 行、
+`App::Execute` に `case` を 1 つ、両言語テーブル（`core/i18n/Strings.cpp`）にラベル、
+たいていは `core/input/KeyMap.cpp` に既定バインドも足す。ラベル漏れは
+`test_strings.cpp` が、和音の重複は `test_keymap.cpp` が落として教えてくれる。
 
-**A user-visible string** — add to both `kEn` and `kJa` in
-`core/i18n/Strings.cpp`. Never hard-code display text anywhere else.
+**ユーザーに見える文字列を足す** — `core/i18n/Strings.cpp` の `kEn` と `kJa` の両方に
+追加する。それ以外の場所に表示文字列を直書きしない。
 
-**A theme colour** — field in `Theme`, defaults in `Theme::Dark()` and
-`Theme::Light()`, plus a `ReadColor` line in `Theme::ApplyIni`.
+**テーマ色を足す** — `Theme` にフィールド、`Theme::Dark()` と `Theme::Light()` に既定値、
+`Theme::ApplyIni` に `ReadColor` の行を追加。
 
-**A new language** — no rebuild needed: users drop `lang.<code>.ini` into the
-config folder. Built-in tables exist only for `en` and `ja`.
+**言語を足す** — 再ビルド不要。利用者が設定フォルダに `lang.<code>.ini` を置けばよい。
+組み込みテーブルは `en` と `ja` のみ。
 
-## Conventions
+## 開発手順
 
-- Strings are **UTF-8 everywhere**. UTF-16 exists only inside
-  `platform/win/`, converted at the boundary by `WinUtf.h`.
-- Comments explain *why*, not *what*. Do not narrate the code.
-- 4-space indent, 100-column limit, `.clang-format` is authoritative.
-- `/W4 /permissive-` and the build is warning-clean; keep it that way.
-- No third-party dependencies. The test harness is 100 lines for this reason.
+コードを変更したら、次の 2 つは必ず満たしてから完了とすること。
 
-## Traps already hit here
+### 1. ヘッダに Doxygen コメント（必須）
 
-Recorded because each one cost real time.
+`src/**/*.h` に宣言を追加・変更したら、必ず Doxygen コメントを書く。記述は日本語。
+対象はヘッダのみで、`.cpp` 内部の関数は対象外。
 
-- **`<windows.h>` macros.** `CreateDirectory` and `CreateFile` are macros, so
-  the filesystem interface uses `MakeDirectory` / `MakeFile`. Watch for the same
-  with `GetObject`, `SendMessage`, `min`/`max` (`NOMINMAX` is set).
-- **`WIN32_LEAN_AND_MEAN`** keeps `ole2.h` out of `windows.h`. Any header that
-  mentions `IDataObject`, `IDropTarget` etc. must include `<objidl.h>` itself.
-- **`ID2D1HwndRenderTarget` is not usable.** On at least one Intel driver its
-  `EndDraw` returns `S_OK` while nothing ever reaches the screen — reproduced
-  with a 40-line standalone program. The renderer uses the modern path instead:
-  D3D11 device → `ID2D1Device` → `ID2D1DeviceContext` → DXGI flip swap chain.
-  Do not "simplify" it back.
-- **The D2D target must be created after the window is visible.** It is built
-  lazily on the first `BeginFrame` for that reason.
-- **`ReadDirectoryChangesW` handle lifetime.** Closing a directory handle with a
-  read outstanding delivers a completion afterwards. `WinDirectoryWatcher` owns
-  every handle on its worker thread and frees an entry only once its
-  cancellation has arrived; `Watch`/`Unwatch` merely post commands.
-- **Cloud placeholders.** Never read file contents during enumeration, and never
-  open a file directly — hand it to the shell. `FILE_ATTRIBUTE_RECALL_ON_OPEN`
-  and `RECALL_ON_DATA_ACCESS` mark files that only exist in the cloud;
-  touching them triggers a download.
-- **Shell icons are deliberately not used.** `SHGetFileInfo` calls into the
-  shell (and therefore cloud providers) per row. Icons are vector-drawn in
-  `ui/Glyphs.cpp`.
-- **Test macros copy their operands.** `KITE_EXPECT_EQ` uses `const auto`, not
-  `auto&&`: lifetime extension does not reach through a member call, so
-  `container().front()` bound by reference dangles and silently corrupts the
-  comparison.
+関数・メソッドには最低限これを書く:
 
-## Known gaps
+- `@brief` … 何をするか 1 行。必須
+- `@param[in]` / `@param[out]` / `@param[in,out]` … 全引数に必須。方向指定を省略しない
+- `@return` … 戻り値がある場合は必須。「失敗時 nullptr」のような異常系まで書く
 
-- `IContextMenu` handlers still run **in-process**. They are wrapped in SEH
-  guards, but a faulting Box/Google Drive extension can still take the app down.
-  The planned fix is an out-of-process `kite_shellhost.exe`; the
-  `IShellIntegration` boundary already passes nothing but paths and a screen
-  position, so the interface will not change.
-- No thumbnails, no search, no virtual folders (ZIP, "This PC", Recycle Bin).
-- Key sequences are single chords only; `Chord` is shaped to grow into
-  two-key sequences.
+型・構造体には `@brief` を、public メンバには `///<` を付ける（private メンバは
+`EXTRACT_PRIVATE = NO` のため任意。自明でないものだけでよい）。加えて必要に応じて:
+
+- `@pre` … 事前条件（`Session::PaneInDirection()` が直前のレイアウトを要求する、など）
+- `@note` … スレッド制約や呼び出し順の注意
+- `@todo` … 既知の未対応・制限。憶測で書かず、実際に未実装な箇所だけに書く
+
+基底クラスと同じ説明でよい override は `@copydoc` で参照する。書式の見本は
+`core/fs/FileSystem.h` と `ui/Renderer.h`。
+
+**落とし穴**: `///<` は複数宣言子の行では最後の 1 つにしか付かない。
+`float l = 0, r = 0;  ///< 端` と書くと `l` が未文書化になる。1 行 1 宣言に分けること。
+
+チェックはリポジトリのルートから:
+
+```bash
+doxygen docs/Doxyfile
+```
+
+出力は `build/doxygen/html/index.html`、`@todo` の一覧は同 `todo.html`。
+`WARN_IF_UNDOCUMENTED` と `WARN_NO_PARAMDOC` を有効にしてあるので、`@brief` や
+`@param` の書き漏れは警告として出る。**警告ゼロを維持すること。** ただし
+`The selected output language "japanese" has not been updated` の 1 件だけは
+Doxygen 側の翻訳が未更新なことによる無害な通知で、消せない（無視してよい）。
+
+doxygen が無ければ `winget install DimitriVanHeesch.Doxygen`。クラス図は
+Graphviz に依存するが、未インストール環境でも通るよう `HAVE_DOT = NO` にしてある。
+図が欲しければ `winget install Graphviz.Graphviz` を入れて `YES` に変える。
+
+### 2. core 層は単体テストを書く（必須）
+
+`src/core/` に振る舞いを追加・変更したら、`tests/` にテストを足すこと。
+`src/ui/` も抽象 `Renderer` の上にあるのでテスト可能で、判断ロジックを含むなら
+同様に書く。`src/platform/` は OS に触れるため対象外。
+
+テストは `kite_core`（= `core/` + `ui/`）だけをリンクする。OS 非依存であるべき層に
+Windows ヘッダが紛れ込めばテストのビルドが壊れる ─ レイヤ分離そのものの検査を
+兼ねているので、この依存関係を崩さないこと。
+
+OS 境界のフェイクは `tests/Fakes.h` に揃えてある（`FakeFileSystem`、`FakeShell`、
+`FakeHost`、`FakeWatcher`）。`tests/FakePlatform.cpp` が `core/base/Platform.h` の
+5 つの自由関数をメモリ上で実装するので、実ディスクにも実時計にも触れずに `App` を
+端から端まで動かせる。非同期ローダーは実スレッドで動くため、ウィンドウと同じように
+`test::PumpUntilSettled()` でポンプすること。
+
+スイートを足したら `CMakeLists.txt` の `KITE_TEST_SUITES` にも名前を追加する
+（ctest に 1 スイート 1 エントリで登録される）。
+
+```bash
+ctest --preset release
+build/release/kite_tests.exe --filter app.   # 1 スイートだけ回す
+```
+
+判定に使うのは自作の 100 行のハーネス（`tests/TestFramework.h`）。
+`KITE_EXPECT` / `KITE_EXPECT_EQ` / `KITE_EXPECT_NE` / `KITE_EXPECT_NEAR` /
+`KITE_EXPECT_FALSE` / `KITE_FAIL` がある。
+
+## 規約
+
+- 文字列は**全面的に UTF-8**。UTF-16 は `platform/win/` の内部にのみ存在し、
+  `WinUtf.h` が境界で変換する。
+- コメントは *why* を書く。*what* は書かない。コードの逐語訳をしない。
+- インデント 4 スペース、100 桁上限。`.clang-format` が正。
+- `/W4 /permissive-` で警告ゼロを維持する。
+- サードパーティ依存なし。テストハーネスが 100 行程度の自作なのもこの方針のため。
+
+## すでに踏んだ罠
+
+いずれも実際に時間を溶かしたので記録しておく。
+
+- **`<windows.h>` のマクロ**。`CreateDirectory` と `CreateFile` はマクロなので、
+  ファイルシステムのインターフェースは `MakeDirectory` / `MakeFile` という名前にしてある。
+  `GetObject`、`SendMessage`、`min`/`max`（`NOMINMAX` 設定済み）も同様に注意。
+- **`WIN32_LEAN_AND_MEAN`** は `ole2.h` を `windows.h` から外す。`IDataObject` や
+  `IDropTarget` に触れるヘッダは自分で `<objidl.h>` を include すること。
+- **`ID2D1HwndRenderTarget` は使えない**。少なくとも手元の Intel ドライバでは
+  `EndDraw` が `S_OK` を返しながら画面に何も出ない。40 行の最小再現コードでも同じだった。
+  レンダラは D3D11 デバイス → `ID2D1Device` → `ID2D1DeviceContext` → DXGI フリップ
+  スワップチェーンという現代的な経路を使っている。「単純化」して戻さないこと。
+- **D2D のターゲットはウィンドウを表示した後に作る**。そのため最初の `BeginFrame` で
+  遅延生成している。
+- **`ReadDirectoryChangesW` のハンドル寿命**。読み取りが未完了のままハンドルを閉じると、
+  後から完了通知が届く。`WinDirectoryWatcher` は全ハンドルをワーカースレッドが所有し、
+  キャンセル通知が届いてから初めてエントリを解放する。`Watch`/`Unwatch` はコマンドを
+  投函するだけ。
+- **クラウドのプレースホルダ**。列挙中にファイル内容を読まない。ファイルを直接開かず
+  シェルに委ねる。`FILE_ATTRIBUTE_RECALL_ON_OPEN` と `RECALL_ON_DATA_ACCESS` が付いた
+  ファイルはクラウドにしか実体がなく、触れるとダウンロードが走る。
+- **シェルアイコンは意図的に使っていない**。`SHGetFileInfo` は 1 行ごとにシェル（つまり
+  クラウドプロバイダ）を呼ぶ。アイコンは `ui/Glyphs.cpp` でベクタ描画している。
+- **`OleInitialize` は 100 ms 以上かかる**。ドラッグ＆ドロップの登録は初回描画から
+  200 ms 後のタイマーに逃がしてある。起動パスに戻さないこと。
+- **テストマクロはオペランドをコピーする**。`KITE_EXPECT_EQ` は `auto&&` ではなく
+  `const auto` を使う。生存期間延長はメンバ呼び出しを貫通しないため、
+  `container().front()` を参照で束縛するとダングリングし、比較が静かに壊れる。
+
+## 現時点の弱点
+
+- `IContextMenu` のハンドラは**まだ自プロセス内で動く**。SEH でガードしてあるが、
+  Box や Google Drive の拡張がフォールトすればアプリごと落ちうる。対策は
+  `kite_shellhost.exe` への切り出し。`IShellIntegration` の境界はパスと画面座標しか
+  渡さない形にしてあるので、インターフェースは変わらない。
+- サムネイル・検索・仮想フォルダ（ZIP、「PC」、ごみ箱）は未実装。
+- キーシーケンスは 1 打鍵のみ。`Chord` は 2 打鍵に拡張できる形にしてある。
