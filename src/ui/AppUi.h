@@ -105,6 +105,8 @@ private:
         ListRow,
         ListBackground,
         Splitter,
+        KeyPanel,
+        KeyRow,
     };
 
     /// 左ボタンが今おこなっている操作。
@@ -134,6 +136,8 @@ private:
     void PaintStatusBar(Renderer& r, const RectF& area);
     void PaintPrompt(Renderer& r, const RectF& area);
     void PaintKeyHelp(Renderer& r, const RectF& area);
+    void PaintKeySettings(Renderer& r, const RectF& area);
+    bool HandleKeySettingsClick(const MouseEvent& e);
     void PaintNode(Renderer& r, SplitNode* node, const RectF& area);
     void PaintPane(Renderer& r, Pane* pane, const RectF& area);
     void PaintTabBar(Renderer& r, Pane* pane, const RectF& area);

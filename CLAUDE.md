@@ -54,11 +54,12 @@ tests/          kite_core だけをリンクする。OS 非依存であるべき
 ```
 
 CMake ターゲットは 3 つ。`kite_core` = `core/` + `ui/`、`kite` = `kite_core` +
-`platform/`（`ShellMenu.cpp` を除く）、`kite_shellhost` = `tools/shellhost/` +
-`ShellMenu.cpp` + `ShellPipe.cpp` + `WinUtf.cpp`。
+`platform/`（`ShellMenu.cpp` と `ShellIcons.cpp` を除く）、`kite_shellhost` =
+`tools/shellhost/` + `ShellMenu.cpp` + `ShellIcons.cpp` + `ShellPipe.cpp` + `WinUtf.cpp`。
 
-**`ShellMenu.cpp` を `kite` ターゲットに足してはならない。** これが `IContextMenu` を
-触る唯一のファイルであり、`kite.exe` にリンクした時点で隔離の意味が消える。
+**`ShellMenu.cpp` と `ShellIcons.cpp` を `kite` ターゲットに足してはならない。**
+前者は `IContextMenu` を、後者は `SHGFI_ADDOVERLAYS`（＝アイコンオーバーレイ
+ハンドラ）を触る唯一のファイル。`kite.exe` にリンクした時点で隔離の意味が消える。
 
 他 OS へ移植する際に実装するのは以下だけで、それ以外は書き換えない:
 
@@ -68,6 +69,7 @@ CMake ターゲットは 3 つ。`kite_core` = `core/` + `ui/`、`kite` = `kite_
 | ファイルシステム | `core/fs/FileSystem.h` |
 | 変更通知 | `core/fs/DirectoryWatcher.h` |
 | シェル／クリップボード | `core/app/Host.h` の `IShellIntegration` |
+| アイコン | `core/app/IconProvider.h` の `IIconProvider` |
 | ウィンドウ機能 | `core/app/Host.h` の `IHost` |
 | ファイル入出力・時刻・ロケール | `core/base/Platform.h` |
 
@@ -90,16 +92,25 @@ Tab       -> パス + 一覧 + 表示状態 + 履歴
 キー入力に一切反応しない。キーマップが和音を `Cmd` に変換し、`App::Execute` が実行する。
 「どの操作にもキーを割り当てられる」が機能ではなく構造として保証されるのはこのため。
 
+例外は 2 つだけで、どちらも「入力そのものを対象にする」画面。プロンプト行
+（`App::HandlePromptKey`）と、`Ctrl+F1` のショートカット設定画面
+（`core/input/KeyEditor`）。設定画面は表示中のキーをすべて飲み込む ─ 割り当てたい
+和音が、その場で別のコマンドを実行してしまっては設定にならない。判断は `KeyEditor`
+が持ち、UI は行を描いて入力を渡すだけ。変更のたびに `keys.ini` を書き直すので
+保存操作は無い。
+
 ディレクトリ列挙は UI スレッドで絶対に動かさない。冷えたネットワーク共有は 1 回の
 `FindFirstFile` で数秒ブロックする。リクエストは `DirectoryLoader` を通り、結果は
 `IHost::Wake()` の後に `App::PumpLoader` が回収する。
 
 ### シェル拡張の隔離
 
-コンテキストメニューだけは自プロセスで処理しない。
+サードパーティの DLL が動く経路は 2 つある ─ コンテキストメニュー
+（`IContextMenu`）と、アイコンオーバーレイ（`IShellIconOverlayIdentifier`）。
+**どちらも自プロセスで処理しない。**
 
 ```
-kite.exe                                  kite_shellhost.exe
+kite.exe                                  kite_shellhost.exe（メニュー用）
   App::ShowContextMenuAt
   → WinShell::ShowContextMenu
     → ShellHostClient  ── 名前付きパイプ ──→  ReadPipeFrame
@@ -108,11 +119,26 @@ kite.exe                                  kite_shellhost.exe
                                                 TrackPopupMenu
                                                 InvokeCommand
        応答（出せた／実行した／失敗） ←───────  WritePipeFrame
+
+kite.exe                                  kite_shellhost.exe（アイコン用）
+  AppUi::PaintList
+  → App::IconFor → IconCache（要求を貯める）
+    → WinIconProvider のワーカースレッド
+      → IconHostClient ── 名前付きパイプ ──→  ReadPipeFrame
+                                              LoadShellIcon
+                                                SHGetFileInfo
+                                                  （SHGFI_ADDOVERLAYS）
+       ID 列 + 新規ビットマップ ←────────────  WritePipeFrame
+  → D2DRenderer::UploadIcon
 ```
 
-送るのはパスと画面座標だけ、受け取るのは結果の種別だけ。書式は
-`platform/win/ShellMenuProtocol.h`（Windows 非依存。`tests/test_shellproto.cpp` が
+送るのはパスと画面座標とテーマだけ、受け取るのは結果の種別と画素だけ。書式は
+`platform/win/ShellHostProtocol.h`（Windows 非依存。`tests/test_hostproto.cpp` が
 直接検証している）。
+
+**ホストは 2 つ起動する。** メニューのホストは表示中ずっと `TrackPopupMenu` の中に
+いるので、接続を共有するとメニューを開いている間アイコンが 1 枚も更新されない。
+起動と寿命管理は `ShellHostProcess` が両方に提供する。
 
 知っておくべき点:
 
@@ -127,9 +153,26 @@ kite.exe                                  kite_shellhost.exe
 - **ダイアログの親は Kite 本体のウィンドウ。** `TrackPopupMenu` はホストの隠し
   ウィンドウ（呼び出しスレッド所有が必須）だが、`InvokeCommand` に渡す `hwnd` は
   Kite 側にしている。隠しウィンドウを親にすると削除の確認や進捗が背後に回る。
+- **メニューの明暗は要求ごとに送る。** OS の設定ではなく Kite 自身のテーマに従わせる
+  （明るいデスクトップで Kite だけ暗くしている場合、メニューだけ白く光るのが一番
+  目に付く）。ホストは常駐しテーマは実行中に変わるので、起動時ではなく毎回送る。
+  実体は uxtheme.dll の非公開エクスポート（序数 104 / 133 / 135 / 136）で、
+  `SetShellMenuDarkMode` が包んでいる。**序数の意味が変わった 1903 より前では
+  何もしない** ─ 誤った関数を呼ぶくらいなら白いメニューのほうが安全。
 - **ホストはジョブオブジェクトに入れる。** Kite が強制終了されても道連れにするため。
   ただし `SILENT_BREAKAWAY_OK` 付き ─ メニューが起動したプロセス（7-Zip の展開など）
   までジョブに入れてしまうと、Kite 終了時に一緒に殺してしまう。
+- **アイコンの要求にだけ時間制限がある。** `SHGetFileInfo` は中断もタイムアウトも
+  できないので、オーバーレイハンドラが返らなければそのスレッドは永久に止まる。
+  自プロセスなら再起動以外に手が無いが、別プロセスなので読み取りを打ち切って
+  ホストごと捨てられる。失うのはそのバッチ分のアイコンだけで、次の要求で
+  黙って起動し直す。**これがアイコンを別プロセスに置いた最大の理由。**
+  メニュー側に同じ制限を付けていないのは、開いたままのメニューを勝手に消す方が
+  実害が大きいため。
+- **アイコンはまとめて要求し、ビットマップは重複排除して返す。** オーバーレイの
+  ぶんアイコンはパスごとに変わりうるので要求はパス単位だが、実際の絵は数種類しか
+  無い。ホストが画素のハッシュで ID を振り、同じ絵は 2 度送らない。1 万件の
+  フォルダでも実際に転送されるのは数枚で済む。
 
 ## 追加のしかた
 
@@ -142,7 +185,9 @@ kite.exe                                  kite_shellhost.exe
 追加する。それ以外の場所に表示文字列を直書きしない。
 
 **テーマ色を足す** — `Theme` にフィールド、`Theme::Dark()` と `Theme::Light()` に既定値、
-`Theme::ApplyIni` に `ReadColor` の行を追加。
+`Theme::ApplyIni` に `ReadColor` の行を追加。ダーク既定は**無彩色**で通している
+（`test_theme.cpp` が RGB のばらつきを検査する）。色相を持つのは `textError` だけ。
+色を足したくなったら、まず明度で表現できないか考えること。
 
 **言語を足す** — 再ビルド不要。利用者が設定フォルダに `lang.<code>.ini` を置けばよい。
 組み込みテーブルは `en` と `ja` のみ。
@@ -250,8 +295,17 @@ build/release/kite_tests.exe --filter app.   # 1 スイートだけ回す
 - **クラウドのプレースホルダ**。列挙中にファイル内容を読まない。ファイルを直接開かず
   シェルに委ねる。`FILE_ATTRIBUTE_RECALL_ON_OPEN` と `RECALL_ON_DATA_ACCESS` が付いた
   ファイルはクラウドにしか実体がなく、触れるとダウンロードが走る。
-- **シェルアイコンは意図的に使っていない**。`SHGetFileInfo` は 1 行ごとにシェル（つまり
-  クラウドプロバイダ）を呼ぶ。アイコンは `ui/Glyphs.cpp` でベクタ描画している。
+- **シェルアイコンは UI スレッドから取らない**。`SHGetFileInfo` は 1 行ごとにシェル
+  （つまりクラウドプロバイダとオーバーレイハンドラ）を呼ぶ。要求は画面に見えている
+  行の分だけを貯めて、ワーカースレッドからホストへまとめて投げる。届くまでは
+  `ui/Glyphs.cpp` のベクタ描画が同じ位置に出る。`[ui] shell_icons = false` で
+  シェルを一切呼ばない運用にも戻せる。
+- **`small` は `<rpcndr.h>` のマクロ**（`char` に展開される）。`<shlobj.h>` 経由で
+  入ってくるので、`bool small = ...` と書くと意味不明な構文エラーになる。
+  `<windows.h>` のマクロ群と同じ扱いで避けること。
+- **ワーカーの `Wake()` は再描画を意味しない**。`App::PumpLoader` は列挙結果が
+  無ければ `Invalidate` せずに戻るため、アイコンだけが届いた場合に画面が更新
+  されない。`WM_KITE_WAKE` の側で必ず `Invalidate()` する。
 - **`OleInitialize` は 100 ms 以上かかる**。ドラッグ＆ドロップの登録は初回描画から
   200 ms 後のタイマーに逃がしてある。起動パスに戻さないこと。同じ理由で
   `kite_shellhost.exe` も最初のメニュー要求まで起動しない。
@@ -276,5 +330,11 @@ build/release/kite_tests.exe --filter app.   # 1 スイートだけ回す
   待機は終わらない。ウィンドウは再描画され続け、タイトルバーの × で閉じられるが、
   クライアント領域は反応しない。タイムアウトを入れていないのは、開いたままの
   メニューを勝手に消す方が実害が大きいと判断したため。
+- **アイコンオーバーレイの枠は OS 全体で 15 個**しかなく、先に登録されたものから
+  埋まる（キー名の先頭に空白を入れて順番を奪い合うのが慣例）。OneDrive が 7、
+  Google Drive が 4 使う環境では TortoiseGit の 9 個はほぼ載らない。これは
+  エクスプローラーでも同じで、Kite 側では直せない。出したいものが出ない場合は
+  `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ShellIconOverlayIdentifiers`
+  を整理してもらうしかない。
 - サムネイル・検索・仮想フォルダ（ZIP、「PC」、ごみ箱）は未実装。
 - キーシーケンスは 1 打鍵のみ。`Chord` は 2 打鍵に拡張できる形にしてある。

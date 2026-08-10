@@ -29,37 +29,42 @@ void ReadColor(const Ini& ini, const std::string& sec, const char* key, Color* o
 
 }  // namespace
 
+// Deliberately achromatic: every surface, every line and every piece of text in
+// the dark theme is a pure grey, so nothing on screen carries a colour cast.
+// Hierarchy comes from brightness alone - folders are brighter than files,
+// selection is a lighter grey than the row under it. Only the error colour keeps
+// a hue, because "this failed" has to read as such at a glance.
 Theme Theme::Dark() {
     Theme t;
     t.dark = true;
-    t.windowBg = Color::hex(0x14161A);
-    t.panelBg = Color::hex(0x181B20);
-    t.listBg = Color::hex(0x1B1E24);
-    t.listBgAlt = Color::hex(0x1E2228);
-    t.border = Color::hex(0x2B3038);
+    t.windowBg = Color::hex(0x1B1B1B);
+    t.panelBg = Color::hex(0x202020);
+    t.listBg = Color::hex(0x1E1E1E);
+    t.listBgAlt = Color::hex(0x232323);
+    t.border = Color::hex(0x333333);
 
-    t.text = Color::hex(0xD8DEE9);
-    t.textDim = Color::hex(0x7C8695);
-    t.textFolder = Color::hex(0x9CC4FF);
-    t.textError = Color::hex(0xE88388);
+    t.text = Color::hex(0xD4D4D4);
+    t.textDim = Color::hex(0x8C8C8C);
+    t.textFolder = Color::hex(0xEDEDED);
+    t.textError = Color::hex(0xD98C86);
 
-    t.accent = Color::hex(0x3E7BFA);
-    t.accentText = Color::hex(0xFFFFFF);
+    t.accent = Color::hex(0xC0C0C0);
+    t.accentText = Color::hex(0x1B1B1B);
     t.rowHover = Color::hex(0xFFFFFF, 0.05f);
-    t.rowSelected = Color::hex(0x2C4A7C);
-    t.rowSelectedText = Color::hex(0xEAF1FF);
-    t.cursorBorder = Color::hex(0x6E9BFF);
-    t.paneFocusBorder = Color::hex(0x3E7BFA);
+    t.rowSelected = Color::hex(0x3A3A3A);
+    t.rowSelectedText = Color::hex(0xF2F2F2);
+    t.cursorBorder = Color::hex(0x909090);
+    t.paneFocusBorder = Color::hex(0x767676);
 
-    t.tabActiveBg = Color::hex(0x1B1E24);
-    t.tabInactiveBg = Color::hex(0x15181D);
-    t.tabActiveText = Color::hex(0xE6ECF5);
-    t.tabInactiveText = Color::hex(0x808A99);
-    t.sessionActiveBg = Color::hex(0x263043);
-    t.scrollThumb = Color::hex(0x4A515C);
-    t.scrollTrack = Color::hex(0x1B1E24, 0.0f);
-    t.overlayScrim = Color::hex(0x000000, 0.55f);
-    t.overlayBg = Color::hex(0x20242B);
+    t.tabActiveBg = Color::hex(0x1E1E1E);
+    t.tabInactiveBg = Color::hex(0x191919);
+    t.tabActiveText = Color::hex(0xE8E8E8);
+    t.tabInactiveText = Color::hex(0x8C8C8C);
+    t.sessionActiveBg = Color::hex(0x333333);
+    t.scrollThumb = Color::hex(0x4D4D4D);
+    t.scrollTrack = Color::hex(0x1E1E1E, 0.0f);
+    t.overlayScrim = Color::hex(0x000000, 0.60f);
+    t.overlayBg = Color::hex(0x252525);
     return t;
 }
 

@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-#include "platform/win/ShellMenuProtocol.h"
+#include "platform/win/ShellHostProtocol.h"
 
 namespace kite::win {
 
@@ -35,6 +35,18 @@ namespace kite::win {
 shellhost::Result ShowShellContextMenu(HWND menuOwner, HWND dialogOwner,
                                        const std::vector<std::string>& paths, int screenX,
                                        int screenY, bool extended);
+
+/// @brief 以降に作るメニューをダーク／ライトのどちらで描かせるかを指定する。
+/// @param[in] menuOwner メニューを追跡するウィンドウ
+/// @param[in] dark true ならダーク、false ならライト
+/// @return 指定を適用できたら true。未対応の Windows では何もせず false
+/// @note 実体は uxtheme.dll の非公開エクスポート（序数 104 / 133 / 135 / 136）。
+///       序数の意味が変わった 1903 より前のビルドでは、誤った関数を呼ばないよう
+///       何もしない。呼ぶのは ShowShellContextMenu() より前で、同じ値なら
+///       2 回目以降は素通りする
+/// @todo オーナードローの項目を出す拡張（TortoiseGit など）は自前の配色を使うため、
+///       この指定に従わない
+bool SetShellMenuDarkMode(HWND menuOwner, bool dark);
 
 /// @brief オーナードローのシェルメニューに必要なメッセージを中継する。
 /// @param[in] message メッセージ ID

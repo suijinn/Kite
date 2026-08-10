@@ -60,6 +60,11 @@ std::string App::ConfigPath(const char* file) const {
     return path::Join(fs_.ConfigDir(), file);
 }
 
+uint32_t App::IconFor(const std::string& path) {
+    if (!icons_ || !shellIcons_) return 0;
+    return icons_->IconFor(path);
+}
+
 void App::RefreshRoots() {
     roots_ = fs_.Roots();
     quickAccess_ = fs_.QuickAccess();
@@ -95,6 +100,10 @@ void App::LoadConfig() {
     }
 
     sidebarVisible_ = settings_.GetBool("ui", "sidebar", true);
+    // The escape hatch for the one thing shell icons cost: they are what pulls
+    // third-party overlay handlers into the picture at all. Off, Kite draws its
+    // own vector glyphs and never asks the shell about a file.
+    shellIcons_ = settings_.GetBool("ui", "shell_icons", true);
 
     defaultView_.showHidden = settings_.GetBool("view", "show_hidden", false);
     defaultView_.dirsFirst = settings_.GetBool("view", "dirs_first", true);
@@ -115,8 +124,9 @@ void App::LoadConfig() {
         keymap_.ApplyIni(keysIni, &warnings);
         if (!warnings.empty()) SetStatus(warnings.front());
     } else {
-        WriteDefaultKeysFile();
+        WriteKeysFile();
     }
+    keyEditor_.Close();
 
     workspace_.bookmarks.clear();
     Ini bookmarksIni;
@@ -130,7 +140,7 @@ void App::LoadConfig() {
     }
 }
 
-void App::WriteDefaultKeysFile() {
+void App::WriteKeysFile() {
     std::string out =
         "# Kite key bindings.\n"
         "#\n"
@@ -139,16 +149,28 @@ void App::WriteDefaultKeysFile() {
         "#   Repeat a command on several lines to give it several chords.\n"
         "#   Use \"<command> = none\" to remove every binding for that command.\n"
         "#\n"
-        "# This file was generated with the current defaults; edit freely and\n"
-        "# reload with Ctrl+Alt+C.\n\n";
+        "# Written from the bindings that were active at the time. Edit it here and\n"
+        "# reload with Ctrl+Alt+C, or edit it on screen with Ctrl+F1 - which rewrites\n"
+        "# this file, comments and all.\n\n";
     out += keymap_.ToIni().Serialize();
     plat::WriteTextFile(ConfigPath("keys.ini"), out);
+}
+
+void App::CloseKeyEditor() {
+    keyEditor_.Close();
+    // Every change went to disk as it was made; this only confirms it once, on
+    // the way out, instead of after every keystroke.
+    if (keysChanged_) {
+        SetStatus(strings_.Get("ui.key_settings_saved"));
+        keysChanged_ = false;
+    }
 }
 
 void App::SaveSettings() {
     settings_.Set("ui", "theme", darkTheme_ ? "dark" : "light");
     settings_.Set("ui", "language", language_);
     settings_.SetBool("ui", "sidebar", sidebarVisible_);
+    settings_.SetBool("ui", "shell_icons", shellIcons_);
 
     settings_.SetBool("view", "show_hidden", defaultView_.showHidden);
     settings_.SetBool("view", "dirs_first", defaultView_.dirsFirst);
@@ -561,7 +583,7 @@ void App::ShowContextMenuAt(int screenX, int screenY, bool extended) {
     if (!t) return;
     std::vector<std::string> paths = t->SelectionPaths();
     if (paths.empty()) paths.push_back(t->path);
-    if (!shell_.ShowContextMenu(paths, screenX, screenY, extended)) {
+    if (!shell_.ShowContextMenu(paths, screenX, screenY, extended, theme_.dark)) {
         // The menu runs in a separate process; losing it means that process
         // could not be started, or a shell extension took it down. Say so rather
         // than letting a right-click look like it did nothing.
@@ -747,6 +769,11 @@ bool App::HandlePromptKey(const Chord& chord) {
 }
 
 bool App::OnChar(uint32_t cp) {
+    if (keyEditor_.visible()) {
+        if (!keyEditor_.HandleChar(cp, strings_, keymap_)) return false;
+        host_.Invalidate();
+        return true;
+    }
     if (!prompt_.active() || prompt_.isConfirm()) return false;
     if (cp < 0x20 || cp == 0x7F) return false;
 
@@ -767,6 +794,29 @@ bool App::OnChar(uint32_t cp) {
 }
 
 bool App::OnKey(const Chord& chord) {
+    if (keyEditor_.visible()) {
+        // Its own chord still toggles it shut, so the key that opened the screen
+        // is also the key that leaves it. Everything else the editor decides -
+        // including whether it is currently swallowing the whole keyboard to
+        // capture a new binding.
+        if (!keyEditor_.capturing() && keymap_.Lookup(chord) == Cmd::ShowKeySettings) {
+            Execute(Cmd::ShowKeySettings);
+            return true;
+        }
+        const bool consumed = keyEditor_.HandleKey(chord, keymap_, strings_);
+        if (keyEditor_.dirty()) {
+            // Written out immediately rather than on close: a binding the user
+            // just watched take effect must survive the app being killed.
+            WriteKeysFile();
+            keyEditor_.ClearDirty();
+            keysChanged_ = true;
+        }
+        // Escape closes the screen from the inside; take the same exit as the
+        // command would have, so the confirmation is not lost.
+        if (!keyEditor_.visible()) CloseKeyEditor();
+        host_.Invalidate();
+        return consumed;
+    }
     if (keyHelp_) {
         // Any key closes the cheat sheet except the one that re-opens it.
         const Cmd c = keymap_.Lookup(chord);
@@ -875,10 +925,24 @@ void App::Execute(Cmd cmd) {
         }
         case Cmd::ShowKeyHelp:
             keyHelp_ = !keyHelp_;
+            if (keyHelp_) keyEditor_.Close();
+            host_.Invalidate();
+            break;
+        case Cmd::ShowKeySettings:
+            if (keyEditor_.visible()) {
+                CloseKeyEditor();
+            } else {
+                // The read-only sheet and the editor show the same table; two of
+                // them on screen at once would only be confusing.
+                keyHelp_ = false;
+                keyEditor_.Open(strings_, keymap_);
+            }
             host_.Invalidate();
             break;
         case Cmd::CancelOverlay:
-            if (keyHelp_) {
+            if (keyEditor_.visible()) {
+                CloseKeyEditor();
+            } else if (keyHelp_) {
                 keyHelp_ = false;
             } else if (prompt_.active()) {
                 CancelPrompt();

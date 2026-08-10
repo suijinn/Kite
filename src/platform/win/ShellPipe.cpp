@@ -1,6 +1,6 @@
 #include "platform/win/ShellPipe.h"
 
-#include "platform/win/ShellMenuProtocol.h"
+#include "platform/win/ShellHostProtocol.h"
 
 namespace kite::win {
 namespace {

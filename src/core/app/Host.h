@@ -27,12 +27,14 @@ public:
     /// @param[in] screenY 表示位置の Y 座標（スクリーン座標）。負ならカーソル位置
     /// @param[in] extended true なら Windows 11 の「その他のオプション」に相当する
     ///            拡張メニューを最初から表示する
+    /// @param[in] dark true ならダークテーマでメニューを描く。OS の設定ではなく
+    ///            Kite 自身のテーマを渡すこと
     /// @return メニューを表示できたら true。何も選ばれずに閉じた場合も true。
     ///         メニューを出せなかった場合（別プロセスのホストを起動できない、
     ///         表示中にホストが落ちた、など）は false
     /// @note メニューが閉じるまで戻らない
     virtual bool ShowContextMenu(const std::vector<std::string>& paths, int screenX, int screenY,
-                                 bool extended) = 0;
+                                 bool extended, bool dark) = 0;
 
     /// @brief 既定の関連付けでパスを開く。
     /// @param[in] path 開くファイルまたはフォルダのパス

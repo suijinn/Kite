@@ -55,6 +55,80 @@ HRESULT GuardedInvoke(IContextMenu* menu, CMINVOKECOMMANDINFOEX* info) {
     }
 }
 
+// --- dark mode --------------------------------------------------------------
+// Menus are drawn by user32 against uxtheme's app-wide colour policy, and there
+// is no documented way to ask for the dark one. These four exports are what
+// Explorer itself uses; they are ordinal-only, so each is resolved by number.
+//
+// The ordinals were reshuffled in 1903 (18362): 135 was AllowDarkModeForApp
+// before it and SetPreferredAppMode after. Calling the wrong one passes an enum
+// where a bool is expected, so anything older is left alone entirely - a light
+// menu is a far better outcome than a wrong call into uxtheme.
+
+enum class PreferredAppMode : int {
+    Default = 0,
+    AllowDark = 1,
+    ForceDark = 2,
+    ForceLight = 3,
+};
+
+using SetPreferredAppModeFn = PreferredAppMode(WINAPI*)(PreferredAppMode);
+using AllowDarkModeForWindowFn = BOOL(WINAPI*)(HWND, BOOL);
+using FlushMenuThemesFn = void(WINAPI*)();
+using RefreshImmersiveColorPolicyStateFn = void(WINAPI*)();
+
+struct DarkModeApi {
+    SetPreferredAppModeFn setPreferredAppMode = nullptr;
+    AllowDarkModeForWindowFn allowDarkModeForWindow = nullptr;
+    FlushMenuThemesFn flushMenuThemes = nullptr;
+    RefreshImmersiveColorPolicyStateFn refreshColorPolicy = nullptr;
+    bool usable = false;
+};
+
+/// Reports the real build number.
+///
+/// GetVersionEx and friends lie to processes without the matching manifest
+/// entry; this one does not, which is what makes the 1903 cut-off dependable.
+DWORD WindowsBuild() {
+    using RtlGetNtVersionNumbersFn = void(WINAPI*)(DWORD*, DWORD*, DWORD*);
+    HMODULE ntdll = ::GetModuleHandleW(L"ntdll.dll");
+    if (!ntdll) return 0;
+    auto get = reinterpret_cast<RtlGetNtVersionNumbersFn>(
+        reinterpret_cast<void*>(::GetProcAddress(ntdll, "RtlGetNtVersionNumbers")));
+    if (!get) return 0;
+    DWORD major = 0;
+    DWORD minor = 0;
+    DWORD build = 0;
+    get(&major, &minor, &build);
+    // The top bits are a checked/free marker, not part of the number.
+    build &= 0x0FFFFFFF;
+    return (major > 10 || (major == 10 && minor >= 0)) ? build : 0;
+}
+
+const DarkModeApi& DarkMode() {
+    static const DarkModeApi api = [] {
+        DarkModeApi loaded;
+        if (WindowsBuild() < 18362) return loaded;
+        HMODULE uxtheme = ::LoadLibraryExW(L"uxtheme.dll", nullptr,
+                                           LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if (!uxtheme) return loaded;
+
+        auto proc = [uxtheme](int ordinal) {
+            return reinterpret_cast<void*>(::GetProcAddress(uxtheme, MAKEINTRESOURCEA(ordinal)));
+        };
+        loaded.refreshColorPolicy =
+            reinterpret_cast<RefreshImmersiveColorPolicyStateFn>(proc(104));
+        loaded.allowDarkModeForWindow = reinterpret_cast<AllowDarkModeForWindowFn>(proc(133));
+        loaded.setPreferredAppMode = reinterpret_cast<SetPreferredAppModeFn>(proc(135));
+        loaded.flushMenuThemes = reinterpret_cast<FlushMenuThemesFn>(proc(136));
+        loaded.usable = loaded.setPreferredAppMode && loaded.flushMenuThemes;
+        // Deliberately not freeing uxtheme.dll: the pointers stay live for the
+        // life of the process, and it is already loaded by user32 anyway.
+        return loaded;
+    }();
+    return api;
+}
+
 PIDLIST_ABSOLUTE ParsePath(const std::string& path) {
     PIDLIST_ABSOLUTE pidl = nullptr;
     const std::wstring w = ToWide(path);
@@ -63,6 +137,28 @@ PIDLIST_ABSOLUTE ParsePath(const std::string& path) {
 }
 
 }  // namespace
+
+bool SetShellMenuDarkMode(HWND menuOwner, bool dark) {
+    const DarkModeApi& api = DarkMode();
+    if (!api.usable) return false;
+
+    // ForceDark / ForceLight rather than AllowDark: the menu follows Kite's own
+    // theme, which the user may have set against the system's.
+    static int applied = -1;
+    const int wanted = dark ? 1 : 0;
+    if (applied != wanted) {
+        applied = wanted;
+        api.setPreferredAppMode(dark ? PreferredAppMode::ForceDark : PreferredAppMode::ForceLight);
+        if (api.refreshColorPolicy) api.refreshColorPolicy();
+        // Without this the change only reaches menus created after the next
+        // theme broadcast, which for a popup menu means "never".
+        api.flushMenuThemes();
+    }
+    if (api.allowDarkModeForWindow && menuOwner) {
+        api.allowDarkModeForWindow(menuOwner, dark ? TRUE : FALSE);
+    }
+    return true;
+}
 
 bool ForwardContextMenuMessage(UINT message, WPARAM wparam, LPARAM lparam, LRESULT* result) {
     if (!g_contextMenu2 && !g_contextMenu3) return false;

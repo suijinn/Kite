@@ -395,6 +395,18 @@ KITE_TEST(app, the_extended_context_menu_is_a_distinct_command) {
     KITE_EXPECT_EQ(h.shell.contextMenuCalls, 2);
 }
 
+KITE_TEST(app, the_shell_menu_is_asked_for_the_theme_kite_is_using) {
+    // The menu is drawn by another process, which has no way of knowing that
+    // Kite is dark while the desktop is light - so it is told, every time.
+    Harness h;
+    h.app.Execute(Cmd::ContextMenu);
+    KITE_EXPECT(h.shell.lastContextMenuDark);
+
+    h.app.Execute(Cmd::ToggleTheme);
+    h.app.Execute(Cmd::ContextMenu);
+    KITE_EXPECT_FALSE(h.shell.lastContextMenuDark);
+}
+
 KITE_TEST(app, a_shell_menu_that_cannot_be_shown_is_reported) {
     // The menu lives in another process now, so "it did not open" is a state the
     // user has to be told about instead of a right-click that does nothing.
@@ -421,6 +433,68 @@ KITE_TEST(app, theme_and_language_can_be_toggled_at_runtime) {
     KITE_EXPECT_EQ(h.app.strings().code(), std::string("en"));
     h.app.Execute(Cmd::ToggleLanguage);
     KITE_EXPECT_EQ(h.app.strings().code(), std::string("ja"));
+}
+
+KITE_TEST(app, the_shortcut_editor_writes_every_change_straight_to_keys_ini) {
+    Harness h;
+    h.app.Execute(Cmd::ShowKeySettings);
+    KITE_EXPECT(h.app.keyEditor().visible());
+
+    // Put Ctrl+Alt+Shift+F9 on "new folder", the way the user would.
+    for (size_t i = 0; i < h.app.keyEditor().rows().size(); ++i) {
+        if (h.app.keyEditor().rows()[i].cmd == Cmd::NewFolder) {
+            h.app.keyEditor().SelectRow(static_cast<int>(i));
+            break;
+        }
+    }
+    h.app.OnKey(ParseChord("Enter"));
+    h.app.OnKey(ParseChord("Ctrl+Alt+Shift+F9"));
+
+    const std::string& written = test::FakeFiles()["C:\\home\\config\\keys.ini"];
+    KITE_EXPECT_NE(written.find("file.new_folder=Ctrl+Alt+Shift+F9"), std::string::npos);
+
+    // And the binding is live the moment the screen closes - which also says so.
+    h.app.OnKey(ParseChord("Escape"));
+    KITE_EXPECT_FALSE(h.app.keyEditor().visible());
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.key_settings_saved"));
+    KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+Alt+Shift+F9")));
+    KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::NewFolder);
+}
+
+KITE_TEST(app, keys_pressed_in_the_shortcut_editor_do_not_reach_the_file_list) {
+    Harness h;
+    const size_t tabs = h.pane()->tabs.size();
+
+    h.app.Execute(Cmd::ShowKeySettings);
+    KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+T")));
+    KITE_EXPECT_EQ(h.pane()->tabs.size(), tabs);
+
+    // Its own chord is the exception: it closes the screen again.
+    KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+F1")));
+    KITE_EXPECT_FALSE(h.app.keyEditor().visible());
+}
+
+KITE_TEST(app, the_shortcut_editor_and_the_cheat_sheet_are_never_both_up) {
+    Harness h;
+    h.app.Execute(Cmd::ShowKeyHelp);
+    h.app.Execute(Cmd::ShowKeySettings);
+    KITE_EXPECT(h.app.keyEditor().visible());
+    KITE_EXPECT_FALSE(h.app.keyHelpVisible());
+
+    h.app.Execute(Cmd::ShowKeyHelp);
+    KITE_EXPECT(h.app.keyHelpVisible());
+    KITE_EXPECT_FALSE(h.app.keyEditor().visible());
+}
+
+KITE_TEST(app, typing_in_the_shortcut_editor_filters_instead_of_reaching_a_prompt) {
+    Harness h;
+    h.app.Execute(Cmd::ShowKeySettings);
+    KITE_EXPECT(h.app.OnChar('t'));
+    KITE_EXPECT(h.app.OnChar('a'));
+    KITE_EXPECT(h.app.OnChar('b'));
+
+    KITE_EXPECT_EQ(h.app.keyEditor().filter(), std::string("tab"));
+    KITE_EXPECT_FALSE(h.app.prompt().active());
 }
 
 KITE_TEST(app, quit_asks_the_host_to_close) {

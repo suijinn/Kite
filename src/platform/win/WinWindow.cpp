@@ -5,6 +5,7 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <cmath>
 
 #include "platform/win/WinShell.h"
 #include "platform/win/WinUtf.h"
@@ -173,6 +174,21 @@ void WinWindow::Wake() {
 void WinWindow::Paint() {
     if (!rendererReady_ || !ui_ || !app_) return;
 
+    // Cmd::ToggleTheme changes the theme inside the core, which has no way to
+    // reach the caption; catching it here keeps the frame in step with the
+    // client area instead of only matching at start-up.
+    ApplyDarkTitleBar();
+
+    if (icons_) {
+        // Icons are drawn into a cell as tall as a row, so that - scaled by DPI -
+        // is the size worth asking the shell for.
+        icons_->SetPixelSize(
+            static_cast<uint32_t>(std::lround(app_->theme().rowHeight * 0.8f * dpiScale_)));
+        // Before BeginFrame: this uploads bitmaps, which must not happen between
+        // BeginDraw and EndDraw.
+        icons_->Pump(renderer_);
+    }
+
     if (!renderer_.BeginFrame()) return;
     ui_->Paint(renderer_);
     if (!renderer_.EndFrame()) {
@@ -245,7 +261,14 @@ bool WinWindow::BeginFileDrag(const std::vector<std::string>& paths) {
 
 void WinWindow::ApplyDarkTitleBar() {
     if (!hwnd_ || !app_) return;
-    const BOOL dark = app_->theme().dark ? TRUE : FALSE;
+    // Called on every frame, so do the work only when the theme actually moved:
+    // DwmSetWindowAttribute redraws the frame, and doing that 60 times a second
+    // makes the caption flicker.
+    const int wanted = app_->theme().dark ? 1 : 0;
+    if (titleBarDark_ == wanted) return;
+    titleBarDark_ = wanted;
+
+    const BOOL dark = wanted ? TRUE : FALSE;
     // DWMWA_USE_IMMERSIVE_DARK_MODE
     ::DwmSetWindowAttribute(hwnd_, 20, &dark, sizeof(dark));
 }
@@ -345,6 +368,11 @@ LRESULT WinWindow::Handle(UINT message, WPARAM wparam, LPARAM lparam) {
 
         case WM_KITE_WAKE:
             if (app_) app_->PumpLoader();
+            // A wake means some worker finished something. PumpLoader only
+            // repaints when a listing arrived, and icons come back on the same
+            // signal without going through it - without this they would sit in
+            // the queue until an unrelated event happened to redraw the window.
+            Invalidate();
             return 0;
 
         case WM_KITE_DROP:

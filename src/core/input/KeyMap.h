@@ -59,6 +59,12 @@ public:
     /// @param[in] id 対象のコマンド
     void UnbindCommand(Cmd id);
 
+    /// @brief 組み込みの既定割り当てを返す。現在の割り当ては見ない。
+    /// @param[in] id 対象のコマンド
+    /// @return 既定の和音列。既定を持たないコマンドでは空
+    /// @note 設定画面の「既定に戻す」が、1 コマンドだけを戻すために使う
+    static std::vector<Chord> DefaultChordsFor(Cmd id);
+
 private:
     std::unordered_map<uint32_t, Cmd> byChord_;
     std::vector<std::pair<Chord, Cmd>> order_;  // insertion order, for display

@@ -13,6 +13,7 @@
 #include "core/app/Host.h"
 #include "platform/win/D2DRenderer.h"
 #include "platform/win/WinDropTarget.h"
+#include "platform/win/WinIconProvider.h"
 #include "ui/AppUi.h"
 
 namespace kite::win {
@@ -66,6 +67,11 @@ public:
     /// @copydoc IHost::BeginFileDrag
     bool BeginFileDrag(const std::vector<std::string>& paths) override;
 
+    /// @brief シェルアイコンの取得口を結び付ける。
+    /// @param[in] icons 取得口。nullptr なら何もしない。ウィンドウより長生きすること
+    /// @note 描画の直前に取り込みと要求を回す。行の高さと DPI から寸法も決める
+    void SetIconProvider(WinIconProvider* icons) { icons_ = icons; }
+
     /// @copydoc fs::IWakeSink::Wake
     /// @note ローダーと監視のワーカースレッドから呼ばれる
     void Wake() override;
@@ -85,11 +91,13 @@ private:
     HWND hwnd_ = nullptr;
     App* app_ = nullptr;
     ui::AppUi* ui_ = nullptr;
+    WinIconProvider* icons_ = nullptr;
     D2DRenderer renderer_;
 
     float dpiScale_ = 1.0f;
     bool rendererReady_ = false;
     bool closing_ = false;
+    int titleBarDark_ = -1;  ///< タイトルバーに適用済みのテーマ。-1 は未適用
     uint32_t highSurrogate_ = 0;
     PointF imeCaret_{ 0.0f, 0.0f };
     int cursorShape_ = 0;
