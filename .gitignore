@@ -8,3 +8,4 @@ out/
 *.ilk
 *.exe
 CMakeSettings.json
+dist/

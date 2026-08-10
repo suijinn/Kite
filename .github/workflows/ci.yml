@@ -1,0 +1,201 @@
+# main への push と PR で、ビルド・テスト・ドキュメント・層の分離を検証する。
+#
+# release.yml も同じビルドとテストを通すが、あちらが動くのはタグを打った後だけで、
+# 壊れたことに気付くのがリリースの瞬間になる。こちらは変更が main に入る前に落とすのが役目。
+#
+# 検証するのは CLAUDE.md の「壊してはならない」もののうち、機械で見られる 5 つ:
+#   1. ビルドが通り、core の単体テストが通る
+#   2. kite.exe と kite_shellhost.exe が同じフォルダに出る
+#      ―― 片方だけ別の場所にあるとコンテキストメニューが出なくなる
+#   3. core/ と ui/ に Windows ヘッダが混ざっていない
+#      ―― Windows しかビルドしないので、テストがリンクできることでは検査にならない
+#         (windows.h を core/ に入れても Windows 上では普通に通る)。ここは grep で見る
+#   4. Doxygen の警告がゼロ(@brief / @param の書き漏れはここで落ちる)
+#   5. .ps1 が UTF-8 BOM 付きのまま(落とすと release.bat が即死する)
+#
+# コンパイラ警告(/W4 /permissive-)は警告のままでは CI を落とせないので、
+# Configure に -DKITE_WERROR=ON を渡して /WX を足している
+# (CI 専用のスイッチ。既定は OFF。詳細は CMakeLists.txt のコメント)。
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 同じブランチへ続けて push したときは、走っている古い実行を打ち切る
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows (build + test)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash   # windows-latest の既定は pwsh。他のワークフローと記法を揃える
+    steps:
+      # 公式アクションは Node.js 24 で動くメジャーに揃えること。v4 系は Node.js 20 が
+      # 前提で、ランナーが強制的に 24 で動かしたうえで非推奨の注記を毎回出す
+      # (2025-09 の告知。いずれ動かなくなる)。tag.yml / release.yml も同じ版に揃える
+      - uses: actions/checkout@v7
+
+      - name: Configure
+        # プリセット (Ninja) ではなく Visual Studio ジェネレータを使う。プリセットは
+        # vcvars を要求し、CI では第三者製アクションへの依存が増えるため。
+        # ジェネレータのバージョンは決め打ちにしないこと(windows-latest が載せる VS は
+        # 更新される。"17 2022" のような決め打ちは、イメージが次の VS へ上がった日に
+        # "could not find any instance of Visual Studio" で壊れる)。
+        run: |
+          cmake --version
+          cmake -S . -B build/ci -A x64 -DKITE_WERROR=ON
+
+      - name: Build
+        run: cmake --build build/ci --config Release
+
+      - name: Test
+        run: ctest --test-dir build/ci -C Release --output-on-failure
+
+      - name: kite.exe と kite_shellhost.exe が並んでいるか
+        # kite.exe はホストを「自分と同じフォルダ」から起動する。CMakeLists.txt の
+        # RUNTIME_OUTPUT_DIRECTORY がそれを保証しているが、崩れても本体は動いてしまい、
+        # 右クリックしたときに初めて「シェルメニューを表示できませんでした」と出る
+        run: |
+          status=0
+          for exe in kite.exe kite_shellhost.exe; do
+            if [ ! -f "build/ci/Release/$exe" ]; then
+              echo "::error::build/ci/Release/$exe が無い"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: .ps1 が UTF-8 BOM 付きか
+        # Windows PowerShell 5.1 は BOM のない .ps1 を ANSI コードページ (日本語環境では
+        # CP932) として読むため、BOM を落とすと日本語コメントが化けて構文エラーになる。
+        # release.bat は powershell (=5.1) を呼ぶので、release.ps1 が死ぬとリリースできない。
+        # 今 ASCII だけの .ps1 も対象にする ─ 例外を作ると、後で日本語を 1 行足した人が
+        # 踏むのは「BOM が要る」ではなく「なぜか構文エラー」のほうになる
+        run: |
+          status=0
+          for f in $(git ls-files '*.ps1'); do
+            bom=$(head -c 3 "$f" | od -An -tx1 | tr -d ' ')
+            if [ "$bom" != "efbbbf" ]; then
+              echo "::error file=$f::UTF-8 BOM がない (先頭 3 バイト: $bom)"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: .ps1 が Windows PowerShell 5.1 で構文解析できるか
+        # スクリプト本体に非 ASCII を書かないこと。このステップの一時 .ps1 を書き出すのは
+        # ランナー側で、BOM の有無はこちらで決められない。BOM 無しだとまさにこの
+        # ワークフローが検査している化けを自分で踏む
+        shell: powershell   # pwsh ではなく Windows PowerShell 5.1。release.bat と同じ経路
+        run: |
+          $status = 0
+          foreach ($f in (git ls-files '*.ps1')) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $f).Path, [ref]$null, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              Write-Output "::error file=$f::parse error ($($errors.Count)): $($errors[0].Message)"
+              $status = 1
+            }
+          }
+          exit $status
+
+  layering:
+    name: 層の分離
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: core/ ui/ tests/ に Windows ヘッダが無いか
+        # 「core/ は OS を呼ばない」「ui/ は抽象 Renderer 経由でのみ描く」という
+        # このリポジトリ最大の設計制約。ビルドが Windows だけなので、破っても
+        # コンパイルもテストも通ってしまう ─ 検査できるのはここだけ
+        run: |
+          pattern='#[[:space:]]*include[[:space:]]*[<"](windows|windowsx|shlobj|shlwapi|shellapi|objbase|objidl|ole2|combaseapi|d2d1|d3d11|dwrite|dxgi|winuser|wtypes|tchar)'
+          if git grep -nIE "$pattern" -- src/core src/ui tests > hits.txt; then
+            while IFS= read -r hit; do
+              file=${hit%%:*}
+              rest=${hit#*:}
+              echo "::error file=$file,line=${rest%%:*}::OS 非依存の層に Windows ヘッダがある"
+            done < hits.txt
+            cat hits.txt
+            exit 1
+          fi
+          echo "Windows ヘッダの混入なし"
+
+      - name: シェル拡張が kite.exe に入っていないか
+        # ShellMenu.cpp は IContextMenu を、ShellIcons.cpp は SHGFI_ADDOVERLAYS
+        # (=アイコンオーバーレイハンドラ) を触る唯一のファイル。kite ターゲットに
+        # 足すと、サードパーティの DLL が Kite 本体のアドレス空間で動くようになり、
+        # プロセスを分けている意味がその時点で消える
+        run: |
+          block=$(awk '/^add_executable\(kite WIN32/ { f = 1 } f { print } f && /^\)/ { exit }' \
+            CMakeLists.txt)
+          if [ -z "$block" ]; then
+            echo "::error file=CMakeLists.txt::add_executable(kite WIN32 ...) が見つからない"
+            echo "(この検査はターゲット定義の書き方に依存している。整形し直したなら awk も直すこと)"
+            exit 1
+          fi
+          if printf '%s\n' "$block" | grep -nE 'Shell(Menu|Icons)\.cpp'; then
+            echo "::error file=CMakeLists.txt::ShellMenu.cpp / ShellIcons.cpp は kite_shellhost 専用。kite ターゲットに足してはならない"
+            exit 1
+          fi
+          echo "kite ターゲットにシェル拡張のコードは無い"
+
+  docs:
+    name: Doxygen (警告ゼロ)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: doxygen を入れる
+        # Doxyfile は HAVE_DOT = NO なので graphviz は要らない
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends doxygen
+          doxygen --version
+
+      - name: Doxygen を実行して警告を数える
+        # WARN_AS_ERROR = NO なので doxygen 自体は警告があっても 0 で終わる。
+        # 出力を見て判定する。Doxyfile 内のパスは実行時の CWD 基準なのでルートから実行する。
+        #
+        # 除外する 1 件は「日本語の翻訳が 1.8.15 以降更新されていない」という
+        # Doxygen 側の無害な通知で、こちらでは消せない(2 行に折り返して出る)。
+        #
+        # 先に mkdir -p が要る。OUTPUT_DIRECTORY = build/doxygen は入れ子のディレクトリを
+        # 作ってくれず、build/ は .gitignore 対象なのでクリーンなチェックアウトには無い
+        # (手元では build/ が既にあるので気付けない)。
+        #
+        # ランナーの doxygen は手元の版とは限らない。版が上がって新しい警告が出た場合、
+        # 出ているのはたいてい本物の書き漏れなので、まずヘッダを直すほうを疑うこと
+        run: |
+          mkdir -p build/doxygen
+          doxygen docs/Doxyfile 2> doxygen-warnings.txt || true
+          grep -v 'The selected output language "japanese" has not been updated' doxygen-warnings.txt \
+            | grep -v 'since release 1.8.15' \
+            | grep -v '^[[:space:]]*$' > doxygen-warnings-filtered.txt || true
+          count=$(wc -l < doxygen-warnings-filtered.txt)
+          if [ "$count" -ne 0 ]; then
+            echo "::error::Doxygen の警告が $count 行ある(@brief / @param の書き漏れ)"
+            cat doxygen-warnings-filtered.txt
+            exit 1
+          fi
+          echo "Doxygen の警告はゼロ"
+
+      - name: 警告ログを保存
+        # 落ちたときに Actions の画面から中身を落として読めるようにしておく
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: doxygen-warnings
+          path: doxygen-warnings.txt

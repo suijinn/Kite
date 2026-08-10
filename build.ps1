@@ -1,4 +1,4 @@
-<#
+﻿<#
     Kite build script.
 
     Uses the CMake and Ninja that ship inside Visual Studio 2022, so nothing

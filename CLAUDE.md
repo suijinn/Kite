@@ -285,6 +285,66 @@ build/release/kite_tests.exe --filter app.   # 1 スイートだけ回す
 `KITE_EXPECT` / `KITE_EXPECT_EQ` / `KITE_EXPECT_NE` / `KITE_EXPECT_NEAR` /
 `KITE_EXPECT_FALSE` / `KITE_FAIL` がある。
 
+## CI
+
+`.github/workflows/ci.yml` が main への push と PR で回る。手元で確認できることを
+先回りするだけなので、落ちたら手元で同じことをすれば再現する。
+
+| 見ているもの | 手元での再現 |
+| --- | --- |
+| ビルド＋全テスト（`-DKITE_WERROR=ON` で `/W4` の警告を `/WX` に格上げ） | `ctest --preset release` |
+| `kite.exe` と `kite_shellhost.exe` が同じフォルダに出るか | `ls build/release/*.exe` |
+| `core/` `ui/` `tests/` に Windows ヘッダが無いか | `git grep -nE '#include *[<"]windows' -- src/core src/ui tests` |
+| `ShellMenu.cpp` / `ShellIcons.cpp` が `kite` ターゲットに入っていないか | `CMakeLists.txt` の `add_executable(kite WIN32 ...)` を見る |
+| Doxygen の警告がゼロか | `doxygen docs/Doxyfile` |
+| `*.ps1` が UTF-8 BOM 付きで、PowerShell 5.1 で構文解析できるか | ─ |
+
+`KITE_WERROR` は CI 専用のスイッチで既定 OFF。手元では警告は警告のままにしておく
+（作業中のビルドを警告 1 つで止めない）。
+
+ローカルのビルドは Ninja プリセットだが、**CI は Visual Studio ジェネレータを使う**
+（`cmake -S . -B build/ci -A x64`）。プリセットは vcvars を要求し、CI では第三者製
+アクションへの依存が増えるため。バージョンは決め打ちにしないこと ─ `windows-latest`
+が載せる VS は更新される。
+
+Windows しかビルドしないので、**レイヤ分離はテストのビルドでは検査できない**
+（`core/` に `<windows.h>` を入れても Windows 上では普通に通る）。上表の grep が
+その代わりで、これを消すと分離を守っているものが無くなる。
+
+## リリース
+
+バージョンの正は `CMakeLists.txt` の `project(Kite VERSION x.y.z)` の 1 行だけ。
+タグも Release もそこからの派生物なので、**タグは手で打たない。**
+
+```powershell
+.\release.ps1 0.2.0
+```
+
+やっているのは VERSION の書き換えとコミット・push だけで、あとは Actions が続ける:
+
+```
+release.ps1  CMakeLists.txt の VERSION を書き換えて push
+  → tag.yml     main への push（CMakeLists.txt が変わったときだけ）を検知して
+                v0.2.0 を作り、release.yml を workflow_call で呼ぶ
+  → release.yml タグをチェックアウトしてビルド・テストし、
+                kite-v0.2.0-win-x64.zip を Release に添付
+```
+
+- **`tag.yml` から release.yml へは `workflow_call` で入る。** タグ push の連鎖には
+  できない ─ `GITHUB_TOKEN` で起こしたイベントは新しいワークフローを起動しない、
+  という GitHub の再帰防止があり、タグだけできて Release が作られない状態になる。
+- **手で打ったタグが残っていると自動化に乗らない。** `tag.yml` が「作成済み」と
+  判断して何もしないため。`release.ps1` は push 前にこれを検査して止まる。
+- **配布は zip 1 つ。** `kite.exe` と `kite_shellhost.exe` は同じフォルダに無いと
+  コンテキストメニューが出ないので、別々に落とせる形にはしない。書庫名に版番号を
+  入れているのは、exe に VERSIONINFO リソースが無く、展開した版がファイル名以外から
+  分からないため。
+- **`release.ps1` は UTF-8 BOM 付きで保存する。** `release.bat` が呼ぶ Windows
+  PowerShell 5.1 は BOM の無い `.ps1` を CP932 として読むので、BOM を落とすと
+  日本語コメントが化けて構文エラーになる（`ci.yml` が検査している）。
+- リリースが失敗して作り直したいときは `gh workflow run release.yml -f tag=v0.2.0`。
+  既にある Release には成果物を差し替えるだけなので、何度実行してもよい。
+
 ## 規約
 
 - 文字列は**全面的に UTF-8**。UTF-16 は `platform/win/` の内部にのみ存在し、
