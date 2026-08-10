@@ -42,7 +42,10 @@ KITE_TEST(app, starts_in_the_home_folder_with_one_session_and_one_pane) {
     KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home"));
     KITE_EXPECT(h.tab()->loaded);
     // .hidden is filtered out by default.
-    KITE_EXPECT_EQ(h.tab()->visible.size(), size_t{ 5 });
+    KITE_EXPECT_EQ(h.tab()->ItemCount(), 5);
+    // ".." leads the list, and the cursor starts below it.
+    KITE_EXPECT(h.tab()->IsParentRow(0));
+    KITE_EXPECT_EQ(h.tab()->cursor, 1);
 }
 
 KITE_TEST(app, writes_a_reference_keys_file_on_first_run) {
@@ -101,13 +104,32 @@ KITE_TEST(app, opening_a_file_goes_to_the_shell_not_the_navigator) {
     KITE_EXPECT_EQ(h.shell.opened[0], std::string("C:\\home\\notes.txt"));
 }
 
-KITE_TEST(app, cursor_movement_clears_marks_but_extending_keeps_them) {
+KITE_TEST(app, extending_selects_a_run_and_shrinking_it_releases_the_tail) {
     Harness h;
     h.app.Execute(Cmd::ExtendDown);
     h.app.Execute(Cmd::ExtendDown);
     KITE_EXPECT_EQ(h.tab()->MarkedCount(), 3);
 
+    h.app.Execute(Cmd::ExtendUp);
+    KITE_EXPECT_EQ(h.tab()->MarkedCount(), 2);
+}
+
+KITE_TEST(app, plain_cursor_movement_leaves_marks_alone) {
+    // Without this, Space could only ever collect neighbours: stepping to the
+    // next row would drop whatever was just marked.
+    Harness h;
+    h.app.Execute(Cmd::ToggleSelection);  // marks the first item, steps down
     h.app.Execute(Cmd::CursorDown);
+    h.app.Execute(Cmd::CursorDown);
+    h.app.Execute(Cmd::ToggleSelection);
+    KITE_EXPECT_EQ(h.tab()->MarkedCount(), 2);
+
+    const std::vector<std::string> paths = h.tab()->SelectionPaths();
+    KITE_EXPECT_EQ(paths.size(), size_t{ 2 });
+    KITE_EXPECT_EQ(paths[0], std::string("C:\\home\\alpha"));
+    KITE_EXPECT_EQ(paths[1], std::string("C:\\home\\image10.png"));
+
+    h.app.Execute(Cmd::SelectNone);
     KITE_EXPECT_EQ(h.tab()->MarkedCount(), 0);
 }
 
@@ -116,12 +138,56 @@ KITE_TEST(app, toggle_selection_accumulates_and_advances) {
     h.app.Execute(Cmd::ToggleSelection);
     h.app.Execute(Cmd::ToggleSelection);
     KITE_EXPECT_EQ(h.tab()->MarkedCount(), 2);
-    KITE_EXPECT_EQ(h.tab()->cursor, 2);
+    KITE_EXPECT_EQ(h.tab()->cursor, 3);
 
     // Toggling the same row again removes it.
     h.app.Execute(Cmd::CursorTop);
+    h.app.Execute(Cmd::CursorDown);
     h.app.Execute(Cmd::ToggleSelection);
     KITE_EXPECT_EQ(h.tab()->MarkedCount(), 1);
+}
+
+KITE_TEST(app, the_parent_row_is_a_move_not_a_selection) {
+    Harness h;
+    h.app.Execute(Cmd::CursorTop);  // onto ".."
+    KITE_EXPECT(h.tab()->IsParentRow(h.tab()->cursor));
+
+    // Space steps past it without marking anything.
+    h.app.Execute(Cmd::ToggleSelection);
+    KITE_EXPECT_EQ(h.tab()->MarkedCount(), 0);
+    KITE_EXPECT_EQ(h.tab()->cursor, 1);
+
+    // Select-all and invert leave it alone too.
+    h.app.Execute(Cmd::SelectAll);
+    KITE_EXPECT_EQ(h.tab()->MarkedCount(), 5);
+    h.app.Execute(Cmd::InvertSelection);
+    KITE_EXPECT_EQ(h.tab()->MarkedCount(), 0);
+}
+
+KITE_TEST(app, opening_the_parent_row_goes_up_and_lands_on_the_folder_left) {
+    Harness h;
+    h.app.Execute(Cmd::OpenSelected);  // into alpha
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home\\alpha"));
+
+    h.app.Execute(Cmd::CursorTop);  // onto ".."
+    h.app.Execute(Cmd::OpenSelected);
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home"));
+    KITE_EXPECT_EQ(h.CursorName(), std::string("alpha"));
+}
+
+KITE_TEST(app, a_root_folder_has_no_parent_row_to_open) {
+    Harness h;
+    h.files.AddDir("C:\\");
+    h.app.OpenPath("C:\\", false);
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\"));
+    KITE_EXPECT_FALSE(h.tab()->hasParentRow());
+
+    h.app.Execute(Cmd::GoUp);
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\"));
 }
 
 KITE_TEST(app, select_all_and_invert) {
@@ -154,9 +220,9 @@ KITE_TEST(app, sorting_the_active_column_again_flips_the_direction) {
 
 KITE_TEST(app, toggling_hidden_files_changes_the_listing) {
     Harness h;
-    KITE_EXPECT_EQ(h.tab()->visible.size(), size_t{ 5 });
+    KITE_EXPECT_EQ(h.tab()->ItemCount(), 5);
     h.app.Execute(Cmd::ToggleHidden);
-    KITE_EXPECT_EQ(h.tab()->visible.size(), size_t{ 6 });
+    KITE_EXPECT_EQ(h.tab()->ItemCount(), 6);
 }
 
 KITE_TEST(app, the_filter_prompt_narrows_the_list_while_typing) {
@@ -165,19 +231,19 @@ KITE_TEST(app, the_filter_prompt_narrows_the_list_while_typing) {
     KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::Filter);
 
     for (char c : std::string("image")) h.app.OnChar(static_cast<uint32_t>(c));
-    KITE_EXPECT_EQ(h.tab()->visible.size(), size_t{ 2 });
+    KITE_EXPECT_EQ(h.tab()->ItemCount(), 2);
 
     // Cursor keys stay live so the list is drivable while filtering.
-    KITE_EXPECT_EQ(h.tab()->cursor, 0);
-    h.app.OnKey(ParseChord("Down"));
     KITE_EXPECT_EQ(h.tab()->cursor, 1);
+    h.app.OnKey(ParseChord("Down"));
+    KITE_EXPECT_EQ(h.tab()->cursor, 2);
     // Printable keys still go into the filter, not the command dispatcher.
     KITE_EXPECT(h.app.OnChar('s'));
     KITE_EXPECT_EQ(h.app.prompt().text, std::string("images"));
 
     h.app.OnKey(ParseChord("Escape"));
     KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::None);
-    KITE_EXPECT_EQ(h.tab()->visible.size(), size_t{ 5 });
+    KITE_EXPECT_EQ(h.tab()->ItemCount(), 5);
 }
 
 KITE_TEST(app, the_path_prompt_navigates_on_enter) {
@@ -221,7 +287,7 @@ KITE_TEST(app, new_folder_prompt_creates_the_folder) {
     h.Settle();
 
     KITE_EXPECT(h.files.dirs.count("C:\\home\\gamma") == 1);
-    KITE_EXPECT_EQ(h.tab()->visible.size(), size_t{ 6 });
+    KITE_EXPECT_EQ(h.tab()->ItemCount(), 6);
 }
 
 KITE_TEST(app, rename_preselects_the_stem_of_a_file) {
@@ -599,7 +665,7 @@ KITE_TEST(app, a_change_notification_re_lists_the_folder) {
     h.Settle();
 
     KITE_EXPECT(h.files.listCalls > before);
-    KITE_EXPECT_EQ(h.tab()->visible.size(), size_t{ 6 });
+    KITE_EXPECT_EQ(h.tab()->ItemCount(), 6);
 }
 
 KITE_TEST(app, returning_to_an_unwatched_tab_re_lists_it) {
@@ -622,7 +688,7 @@ KITE_TEST(app, returning_to_an_unwatched_tab_re_lists_it) {
     h.Settle();
     KITE_EXPECT(h.files.listCalls > before);
     KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home"));
-    KITE_EXPECT_EQ(h.tab()->visible.size(), size_t{ 6 });
+    KITE_EXPECT_EQ(h.tab()->ItemCount(), 6);
 }
 
 KITE_TEST(app, a_stale_notification_for_a_navigated_tab_is_ignored) {

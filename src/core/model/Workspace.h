@@ -43,11 +43,19 @@ struct ViewState {
 /// @brief 1 つのタブ。表示中のフォルダとその一覧・選択状態・履歴を持つ。
 class Tab {
 public:
+    /// @brief 「..」行を表す visible の値。listing.entries への添字ではない。
+    ///
+    /// 親フォルダは列挙結果に含まれない（`fs::ListResult` は "." と ".." を返さない）
+    /// ので、実体を持たない行としてここに紛れ込ませる。こうすると行番号・カーソル・
+    /// スクロールの計算が「表示行 = visible への添字」のままで済む。
+    /// 添字として使う前に必ず IsParentRow() か EntryAt() を通すこと。
+    static constexpr int kParentRow = -1;
+
     std::string path;  ///< 表示しているディレクトリのパス
     ViewState view;    ///< 並べ替えと表示の設定
 
     fs::ListResult listing;       ///< 列挙結果そのもの
-    std::vector<int> visible;     ///< 絞り込みと並べ替え後の listing.entries への添字
+    std::vector<int> visible;     ///< 表示行。listing.entries への添字か kParentRow
     std::vector<uint8_t> marked;  ///< listing.entries と同じ長さの選択フラグ
 
     std::string filter;   ///< 絞り込み文字列。空なら絞り込みなし
@@ -75,7 +83,27 @@ public:
     /// @brief listing と filter、view から visible を作り直す。
     /// @note 可能な限りカーソルを同じ項目名の上に維持する。pendingFocusName が
     ///       設定されていればそちらを優先し、消費する
+    /// @note path に親があり、かつ列挙が成功していれば先頭に「..」行を足す。
+    ///       絞り込みにも並べ替えにも掛けない ─ 移動手段であって項目ではない
     void Rebuild();
+
+    /// @brief 先頭に「..」行があるかを判定する。
+    /// @return あれば true。path がルートなら false
+    bool hasParentRow() const { return !visible.empty() && visible.front() == kParentRow; }
+
+    /// @brief 表示行が「..」かを判定する。
+    /// @param[in] visibleIndex 判定する行。visible への添字
+    /// @return 「..」行なら true。範囲外なら false
+    bool IsParentRow(int visibleIndex) const;
+
+    /// @brief 表示行に対応する項目を返す。
+    /// @param[in] visibleIndex 対象の行。visible への添字
+    /// @return 対応する項目。「..」行または範囲外なら nullptr
+    const fs::Entry* EntryAt(int visibleIndex) const;
+
+    /// @brief 「..」行を除いた表示件数を返す。
+    /// @return 実際の項目数
+    int ItemCount() const;
 
     /// @brief 一覧データを解放する。背面に回ったタブのメモリを減らすために使う。
     /// @note path と履歴は残るので、再表示時に再列挙すれば元に戻る
@@ -103,14 +131,31 @@ public:
     uint64_t MarkedBytes() const;
 
     /// @brief 選択をすべて解除する。
+    /// @note ExtendTo() の途中なら、その土台も捨てて一区切りにする
     void ClearMarks();
 
     /// @brief 表示上の範囲をまとめて選択・解除する。
     /// @param[in] fromVisible 範囲の一端。visible への添字
     /// @param[in] toVisible 範囲のもう一端。visible への添字
     /// @param[in] value true で選択、false で解除
-    /// @note 添字の大小は問わない。範囲外はクランプされる
+    /// @note 添字の大小は問わない。範囲外はクランプされる。「..」行は飛ばす
     void MarkRange(int fromVisible, int toVisible, bool value);
+
+    /// @brief 範囲選択の起点を今のカーソル位置に置き直す。
+    /// @note 選択そのものには触れない。カーソルを動かしても印が消えないのは
+    ///       このため ─ 離れた項目を Space で拾っていける
+    void ResetAnchor();
+
+    /// @brief 起点から指定行までを範囲選択し、カーソルをそこへ移す。
+    /// @param[in] toVisible 範囲の終端。visible への添字。範囲外はクランプされる
+    /// @note 連続して呼ばれる間は「伸縮を始める前の選択」を土台に引き直す。
+    ///       範囲を縮めたときに印が残らず、Space で付けた離れた印も巻き添えに
+    ///       しない。ResetAnchor() が土台を捨てて一区切りにする
+    void ExtendTo(int toVisible);
+
+private:
+    std::vector<uint8_t> markBase;  // 伸縮を始める直前の marked。extending 中のみ有効
+    bool extending = false;         // 直前の操作が ExtendTo だったか
 };
 
 /// @brief 1 つのペイン。複数のタブを持ち、そのうち 1 つを表示する。
