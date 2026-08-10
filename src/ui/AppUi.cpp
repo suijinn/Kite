@@ -79,6 +79,7 @@ void AppUi::Paint(Renderer& r) {
     PaintDragOverlay(r);
 
     if (app_.keyHelpVisible()) PaintKeyHelp(r, full);
+    if (app_.keyEditor().visible()) PaintKeySettings(r, full);
 }
 
 void AppUi::PaintDragOverlay(Renderer& r) {
@@ -160,11 +161,18 @@ void AppUi::PaintSidebar(Renderer& r, const RectF& area) {
 
             const RectF icon = { row.l + 6.0f, row.t, row.l + 6.0f + kIconCell, row.b };
             const Color iconColor = selected ? th.rowSelectedText : th.textFolder;
-            switch (glyphKind) {
-                case 1: glyph::Drive(r, icon, iconColor); break;
-                case 2: glyph::Star(r, icon, th.accent); break;
-                case 3: glyph::Cloud(r, icon, iconColor); break;
-                default: glyph::Folder(r, icon, iconColor); break;
+            // Bookmarks keep the star: it says "you pinned this", which no icon
+            // the shell can supply would.
+            const uint32_t shellIcon = glyphKind == 2 ? 0u : app_.IconFor(fullPath);
+            if (shellIcon) {
+                r.DrawIcon(shellIcon, icon.inset(1.0f));
+            } else {
+                switch (glyphKind) {
+                    case 1: glyph::Drive(r, icon, iconColor); break;
+                    case 2: glyph::Star(r, icon, th.accent); break;
+                    case 3: glyph::Cloud(r, icon, iconColor); break;
+                    default: glyph::Folder(r, icon, iconColor); break;
+                }
             }
             r.DrawText(label, { icon.r + 6.0f, row.t, row.r - 6.0f, row.b },
                        selected ? th.rowSelectedText : th.text, FontRole::Ui, TextAlign::Left);
@@ -472,7 +480,13 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
         if (e.isHidden()) nameColor = nameColor.alpha(0.55f);
 
         const RectF icon = { row.l + 6.0f, row.t, row.l + 6.0f + kIconCell, row.b };
-        if (ghost) {
+        // The real icon arrives a frame or two later, and carries any overlay
+        // (version control, cloud sync) with it. Until then the drawn glyph
+        // holds the space, so rows never shift when it lands.
+        const uint32_t shellIcon = app_.IconFor(path::Join(tab->path, e.name));
+        if (shellIcon) {
+            r.DrawIcon(shellIcon, icon.inset(1.0f));
+        } else if (ghost) {
             glyph::Cloud(r, icon, th.textDim);
         } else if (e.isDir()) {
             glyph::Folder(r, icon, nameColor);
@@ -654,6 +668,109 @@ void AppUi::PaintKeyHelp(Renderer& r, const RectF& area) {
     r.PopClip();
 }
 
+void AppUi::PaintKeySettings(Renderer& r, const RectF& area) {
+    const Theme& th = app_.theme();
+    const Strings& str = app_.strings();
+    KeyEditor& editor = app_.keyEditor();
+
+    r.FillRect(area, th.overlayScrim);
+
+    // One column of rows, so a wide window gets a centred panel rather than a
+    // sheet of mostly empty space.
+    const float width = std::clamp(area.w() - 48.0f, 160.0f, 640.0f);
+    const float height = std::max(120.0f, area.h() - std::max(32.0f, area.h() * 0.08f) * 2.0f);
+    const float left = std::round(area.center().x - width * 0.5f);
+    const float top = std::round(area.center().y - height * 0.5f);
+    const RectF panel = { left, top, left + width, top + height };
+
+    r.FillRoundRect(panel, 8.0f, th.overlayBg);
+    r.StrokeRect(panel, th.border, 1.0f);
+    Add(panel, Hit::KeyPanel);
+
+    const RectF titleBox = { panel.l + 20.0f, panel.t + 8.0f, panel.r - 20.0f, panel.t + 38.0f };
+    r.DrawText(str.Get("ui.key_settings_title"), titleBox, th.text, FontRole::UiBold,
+               TextAlign::Left);
+    r.DrawText(editor.filter().empty() ? str.Get("ui.key_settings_search_hint")
+                                       : str.Format("ui.key_settings_filter", { editor.filter() }),
+               titleBox, editor.filter().empty() ? th.textDim.alpha(0.6f) : th.text,
+               FontRole::UiSmall, TextAlign::Right);
+
+    // The line under the title carries whatever the last action did - which
+    // command lost a chord, above all. Silence there means nothing happened.
+    const RectF messageBox = { panel.l + 20.0f, titleBox.b, panel.r - 20.0f, titleBox.b + 20.0f };
+    if (editor.capturing()) {
+        r.DrawText(str.Get("ui.key_settings_hint_capture"), messageBox, th.accent, FontRole::UiSmall,
+                   TextAlign::Left);
+    } else if (!editor.message().empty()) {
+        r.DrawText(editor.message(), messageBox, th.text, FontRole::UiSmall, TextAlign::Left);
+    } else {
+        r.DrawText(str.Format("ui.key_settings_count",
+                              { std::to_string(editor.commandCount()) }),
+                   messageBox, th.textDim.alpha(0.7f), FontRole::UiSmall, TextAlign::Left);
+    }
+
+    const RectF footer = { panel.l + 20.0f, panel.b - 26.0f, panel.r - 20.0f, panel.b - 6.0f };
+    r.DrawText(str.Get("ui.key_settings_hint"), footer, th.textDim, FontRole::UiSmall,
+               TextAlign::Left);
+
+    const RectF body = { panel.l + 12.0f, messageBox.b + 4.0f, panel.r - 12.0f, footer.t - 4.0f };
+    r.FillRect({ body.l, body.t, body.r, body.t + 1.0f }, th.border);
+
+    const float rowH = th.rowHeight;
+    const int pageRows = std::max(1, static_cast<int>((body.h() - 4.0f) / rowH));
+    // Told every frame: the panel is sized from the window, so the number of
+    // rows a PageDown should cover is only known here.
+    editor.SetPageRows(pageRows);
+
+    const std::vector<KeyEditor::Row>& rows = editor.rows();
+    const int first = editor.scroll();
+    const int last = std::min(static_cast<int>(rows.size()) - 1, first + pageRows - 1);
+
+    r.PushClip(body);
+    for (int i = first; i <= last; ++i) {
+        const KeyEditor::Row& row = rows[i];
+        const float y = body.t + 3.0f + static_cast<float>(i - first) * rowH;
+        const RectF box = { body.l + 4.0f, y, body.r - 6.0f, y + rowH };
+
+        if (row.header) {
+            r.DrawText(row.label, box.inset(6.0f, 0.0f), th.accent, FontRole::UiBold,
+                       TextAlign::Left);
+            continue;
+        }
+
+        const bool selected = (i == editor.cursor());
+        if (selected) r.FillRoundRect(box, 4.0f, th.rowSelected);
+
+        const float chordW = std::min(190.0f, box.w() * 0.5f);
+        r.DrawText(row.label, { box.l + 10.0f, box.t, box.r - chordW - 8.0f, box.b },
+                   selected ? th.rowSelectedText : th.text, FontRole::Ui, TextAlign::Left);
+
+        const bool capturingHere = selected && editor.capturing();
+        const std::string chordText = capturingHere ? str.Get("ui.key_settings_capture")
+                                      : row.chords.empty() ? str.Get("ui.key_settings_none")
+                                                           : row.chords;
+        const Color chordColor = capturingHere            ? th.accent
+                                 : row.chords.empty()     ? th.textDim.alpha(0.45f)
+                                 : selected               ? th.rowSelectedText
+                                                          : th.textDim;
+        r.DrawText(chordText, { box.r - chordW, box.t, box.r - 8.0f, box.b }, chordColor,
+                   FontRole::Mono, TextAlign::Right);
+
+        Add(box, Hit::KeyRow, i);
+    }
+    r.PopClip();
+
+    if (static_cast<int>(rows.size()) > pageRows) {
+        const RectF track = { body.r - 4.0f, body.t + 3.0f, body.r - 1.0f, body.b - 3.0f };
+        const float ratio = static_cast<float>(pageRows) / static_cast<float>(rows.size());
+        const float thumbH = std::max(24.0f, track.h() * ratio);
+        const float t = static_cast<float>(first) /
+                        static_cast<float>(std::max(1, static_cast<int>(rows.size()) - pageRows));
+        const float thumbTop = track.t + (track.h() - thumbH) * t;
+        r.FillRoundRect({ track.l, thumbTop, track.r, thumbTop + thumbH }, 1.5f, th.scrollThumb);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Mouse
 // ---------------------------------------------------------------------------
@@ -706,6 +823,27 @@ bool AppUi::HandleListClick(const Region& region, const MouseEvent& e) {
     }
     app_.EnsureCursorVisible();
     app_.host().Invalidate();
+    return true;
+}
+
+// Clicks while the shortcut editor is up. Nothing behind it is reachable: the
+// panel is modal in the same sense the shell's own menu is.
+bool AppUi::HandleKeySettingsClick(const MouseEvent& e) {
+    const Region* region = Pick(e.x, e.y);
+    if (region && region->kind == Hit::KeyRow) {
+        app_.keyEditor().SelectRow(region->index);
+        // The second click is the one that arms capture, so a single click can
+        // still just move the selection around.
+        if (e.button == 0 && e.clicks >= 2) app_.keyEditor().BeginCapture(false);
+        app_.host().Invalidate();
+        return true;
+    }
+    if (region && region->kind == Hit::KeyPanel) {
+        app_.host().Invalidate();
+        return true;
+    }
+    // Outside the panel: same as pressing Escape.
+    app_.Execute(Cmd::ShowKeySettings);
     return true;
 }
 
@@ -913,6 +1051,11 @@ bool AppUi::OnMouse(const MouseEvent& e) {
     }
 
     if (e.type == MouseEvent::Type::Wheel) {
+        if (app_.keyEditor().visible()) {
+            app_.keyEditor().Scroll(static_cast<int>(-e.wheel * 3.0f));
+            app_.host().Invalidate();
+            return true;
+        }
         if (region && sidebarRect_.contains(e.x, e.y)) {
             sidebarScroll_ = std::max(0.0f, sidebarScroll_ - e.wheel * 60.0f);
             app_.host().Invalidate();
@@ -926,6 +1069,8 @@ bool AppUi::OnMouse(const MouseEvent& e) {
     }
 
     if (e.type != MouseEvent::Type::Down) return false;
+
+    if (app_.keyEditor().visible()) return HandleKeySettingsClick(e);
 
     if (app_.keyHelpVisible()) {
         app_.Execute(Cmd::ShowKeyHelp);

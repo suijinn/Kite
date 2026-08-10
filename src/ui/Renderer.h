@@ -77,6 +77,13 @@ public:
     /// @param[in] color 塗る色
     virtual void FillTriangle(PointF a, PointF b, PointF c, const Color& color) = 0;
 
+    /// @brief 取得済みのアイコンを描く。
+    /// @param[in] iconId 描くアイコンの識別子。App::IconFor() が返した値
+    /// @param[in] box 収める矩形。縦横比を保って中央に収める
+    /// @note 未知の識別子では何も描かない。取得が間に合っていない場合に呼び出し側が
+    ///       分岐せずに済むよう、黙って無視する契約にしてある
+    virtual void DrawIcon(uint32_t iconId, const RectF& box) = 0;
+
     /// @brief 文字列を描く。
     /// @param[in] utf8 描く文字列
     /// @param[in] r 描画領域。この中で垂直中央に配置する

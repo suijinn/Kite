@@ -195,6 +195,11 @@ bool D2DRenderer::BindBackBuffer() {
 
 void D2DRenderer::ReleaseDeviceResources() {
     if (context_) context_->SetTarget(nullptr);
+    // Bitmaps belong to the device that is going away. The pixels still exist on
+    // the other side of the icon provider, so this is a flag rather than a loss.
+    for (auto& [id, bitmap] : icons_) SafeRelease(bitmap);
+    icons_.clear();
+    iconsLost_ = true;
     SafeRelease(brush_);
     SafeRelease(backBuffer_);
     SafeRelease(swapChain_);
@@ -318,6 +323,54 @@ void D2DRenderer::FillTriangle(PointF a, PointF b, PointF c, const Color& color)
         context_->FillGeometry(geometry, Brush(color));
     }
     geometry->Release();
+}
+
+bool D2DRenderer::UploadIcon(uint32_t iconId, uint32_t width, uint32_t height,
+                             const uint8_t* bgra) {
+    if (!context_ || iconId == 0 || width == 0 || height == 0 || !bgra) return false;
+
+    auto existing = icons_.find(iconId);
+    if (existing != icons_.end()) {
+        SafeRelease(existing->second);
+        icons_.erase(existing);
+    }
+
+    // The host hands over premultiplied BGRA, which is the one layout D2D takes
+    // without a conversion pass. The bitmap is created at 96 dpi so its size in
+    // DIPs equals its size in pixels; DrawBitmap then scales it to whatever the
+    // row height works out to.
+    const D2D1_BITMAP_PROPERTIES1 properties = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_NONE,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.0f, 96.0f);
+
+    ID2D1Bitmap1* bitmap = nullptr;
+    const HRESULT hr = context_->CreateBitmap(D2D1::SizeU(width, height), bgra, width * 4,
+                                              &properties, &bitmap);
+    if (FAILED(hr) || !bitmap) return false;
+
+    icons_.emplace(iconId, bitmap);
+    return true;
+}
+
+void D2DRenderer::DrawIcon(uint32_t iconId, const RectF& box) {
+    if (!drawing_ || iconId == 0 || box.empty()) return;
+    auto it = icons_.find(iconId);
+    if (it == icons_.end() || !it->second) return;
+
+    const D2D1_SIZE_F size = it->second->GetSize();
+    if (size.width <= 0.0f || size.height <= 0.0f) return;
+
+    // Square-fit, centred. Shell icons are square, but the cell rarely is.
+    const float scale = std::min(box.w() / size.width, box.h() / size.height);
+    const float w = size.width * scale;
+    const float h = size.height * scale;
+    const float x = std::round(box.center().x - w * 0.5f);
+    const float y = std::round(box.center().y - h * 0.5f);
+
+    // Linear filtering: the source is 16 or 32 px and the cell is whatever DPI
+    // and the row height make it, so the common case is a slight downscale.
+    context_->DrawBitmap(it->second, D2D1::RectF(x, y, x + w, y + h), 1.0f,
+                         D2D1_INTERPOLATION_MODE_LINEAR, nullptr);
 }
 
 IDWriteTextFormat* D2DRenderer::FormatFor(ui::FontRole role) const {

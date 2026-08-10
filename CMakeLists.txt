@@ -45,6 +45,7 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(kite_core STATIC
     src/core/app/App.cpp
+    src/core/app/IconProvider.cpp
     src/core/base/Format.cpp
     src/core/base/Ini.cpp
     src/core/base/PathUtil.cpp
@@ -52,6 +53,7 @@ add_library(kite_core STATIC
     src/core/fs/DirectoryLoader.cpp
     src/core/i18n/Strings.cpp
     src/core/input/Commands.cpp
+    src/core/input/KeyEditor.cpp
     src/core/input/KeyMap.cpp
     src/core/input/Keys.cpp
     src/core/model/Workspace.cpp
@@ -67,11 +69,14 @@ target_link_libraries(kite_core PUBLIC kite_options)
 add_executable(kite WIN32
     src/main_win.cpp
     src/platform/win/D2DRenderer.cpp
+    src/platform/win/IconHostClient.cpp
     src/platform/win/ShellHostClient.cpp
+    src/platform/win/ShellHostProcess.cpp
     src/platform/win/ShellPipe.cpp
     src/platform/win/WinDirectoryWatcher.cpp
     src/platform/win/WinDropTarget.cpp
     src/platform/win/WinFileSystem.cpp
+    src/platform/win/WinIconProvider.cpp
     src/platform/win/WinPlatform.cpp
     src/platform/win/WinShell.cpp
     src/platform/win/WinUtf.cpp
@@ -107,16 +112,18 @@ endif()
 #
 # Third-party shell extensions (Box, Google Drive, 7-Zip, TortoiseGit ...) are
 # instantiated here and nowhere else, so one of them faulting costs a context
-# menu instead of the file manager. ShellMenu.cpp is the IContextMenu code and
-# must stay out of the kite target: linking it there would put the extensions
-# back in Kite's address space, which is the whole thing this avoids.
+# menu or an icon instead of the file manager. ShellMenu.cpp is the IContextMenu
+# code and ShellIcons.cpp is what asks for icon overlays; both must stay out of
+# the kite target, since linking either one there would put the extensions back
+# in Kite's address space, which is the whole thing this avoids.
 #
 # It does not link kite_core. Nothing in core/ or ui/ is involved in showing a
-# menu, and keeping the host down to three translation units keeps its start-up
-# - which the first right-click waits on - short.
+# menu or reading an icon, and keeping the host small keeps its start-up - which
+# the first right-click waits on - short.
 # ---------------------------------------------------------------------------
 add_executable(kite_shellhost WIN32
     tools/shellhost/main.cpp
+    src/platform/win/ShellIcons.cpp
     src/platform/win/ShellMenu.cpp
     src/platform/win/ShellPipe.cpp
     src/platform/win/WinUtf.cpp
@@ -165,19 +172,22 @@ if(KITE_BUILD_TESTS)
         tests/test_format.cpp
         tests/test_strings.cpp
         tests/test_keymap.cpp
+        tests/test_keyeditor.cpp
+        tests/test_iconcache.cpp
         tests/test_theme.cpp
         tests/test_tab.cpp
         tests/test_workspace.cpp
         tests/test_session.cpp
         tests/test_app.cpp
         tests/test_dropcheck.cpp
-        tests/test_shellproto.cpp
+        tests/test_hostproto.cpp
     )
     target_link_libraries(kite_tests PRIVATE kite_core)
 
     # One CTest entry per suite so a failure names the area straight away.
     set(KITE_TEST_SUITES
-        utf8 path ini format strings keymap theme tab workspace session app drop shellproto)
+        utf8 path ini format strings keymap keyeditor theme tab workspace session app drop
+        iconcache hostproto)
 
     foreach(suite IN LISTS KITE_TEST_SUITES)
         add_test(NAME ${suite} COMMAND kite_tests --filter ${suite}.)

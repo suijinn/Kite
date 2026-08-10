@@ -106,10 +106,10 @@ std::vector<std::string> ExtractDroppedPaths(IDataObject* data) {
 }
 
 bool WinShell::ShowContextMenu(const std::vector<std::string>& paths, int screenX, int screenY,
-                               bool extended) {
+                               bool extended, bool dark) {
     // Everything about this call happens in kite_shellhost.exe. Nothing below
     // this line loads a shell extension, and nothing above it should either.
-    return menuHost_.ShowContextMenu(hwnd_, paths, screenX, screenY, extended);
+    return menuHost_.ShowContextMenu(hwnd_, paths, screenX, screenY, extended, dark);
 }
 
 bool WinShell::Open(const std::string& path) {

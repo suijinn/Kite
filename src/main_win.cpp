@@ -13,6 +13,7 @@
 #include "core/app/App.h"
 #include "platform/win/WinDirectoryWatcher.h"
 #include "platform/win/WinFileSystem.h"
+#include "platform/win/WinIconProvider.h"
 #include "platform/win/WinShell.h"
 #include "platform/win/WinUtf.h"
 #include "platform/win/WinWindow.h"
@@ -36,11 +37,15 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     // Declared after the window so it is destroyed first: its worker thread
     // calls back into the window's Wake().
     kite::win::WinDirectoryWatcher watcher(window);
+    // Same reason as the watcher: its worker thread calls the window's Wake().
+    kite::win::WinIconProvider icons(window);
 
     kite::App app(filesystem, shell, window, &watcher);
     kite::ui::AppUi appUi(app);
 
+    app.SetIconProvider(&icons);
     window.Attach(&app, &appUi);
+    window.SetIconProvider(&icons);
     app.Init(startPaths);
 
     if (!window.Create(app.placement())) return 1;

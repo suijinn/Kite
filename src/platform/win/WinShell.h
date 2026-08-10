@@ -33,7 +33,7 @@ public:
     /// @note メニューが閉じるまで戻らないが、待っている間もウィンドウの再描画は
     ///       続く。詳細は ShellHostClient::ShowContextMenu()
     bool ShowContextMenu(const std::vector<std::string>& paths, int screenX, int screenY,
-                         bool extended) override;
+                         bool extended, bool dark) override;
 
     /// @copydoc IShellIntegration::Open
     bool Open(const std::string& path) override;

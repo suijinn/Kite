@@ -80,6 +80,26 @@ public:
     /// @copydoc ui::Renderer::FillTriangle
     void FillTriangle(PointF a, PointF b, PointF c, const Color& color) override;
 
+    /// @copydoc ui::Renderer::DrawIcon
+    void DrawIcon(uint32_t iconId, const RectF& box) override;
+
+    /// @brief アイコンの画素を受け取り、描画に使えるようにする。
+    /// @param[in] iconId 識別子。同じ値で呼ぶと差し替わる
+    /// @param[in] width 幅（ピクセル）
+    /// @param[in] height 高さ（ピクセル）
+    /// @param[in] bgra 乗算済みアルファの BGRA。width * height * 4 バイト
+    /// @return 受け取れたら true
+    /// @note デバイスが失われるとビットマップも消える。呼び出し側は画素を保持し、
+    ///       iconsLost() が立ったら入れ直すこと
+    bool UploadIcon(uint32_t iconId, uint32_t width, uint32_t height, const uint8_t* bgra);
+
+    /// @brief アイコンを入れ直す必要があるかを返す。
+    /// @return デバイス消失でビットマップを失っていれば true
+    bool iconsLost() const { return iconsLost_; }
+
+    /// @brief アイコンを入れ直したことを記録する。
+    void ClearIconsLost() { iconsLost_ = false; }
+
     /// @copydoc ui::Renderer::DrawText
     void DrawText(std::string_view utf8, const RectF& r, const Color& c, ui::FontRole role,
                   ui::TextAlign align) override;
@@ -120,8 +140,10 @@ private:
     IDWriteTextFormat* formats_[4] = {};
     int clipDepth_ = 0;
     bool drawing_ = false;
+    bool iconsLost_ = false;
 
     std::unordered_map<std::string, float> measureCache_[4];
+    std::unordered_map<uint32_t, ID2D1Bitmap1*> icons_;
 };
 
 }  // namespace kite::win

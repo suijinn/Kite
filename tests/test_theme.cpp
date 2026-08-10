@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include "TestFramework.h"
 #include "core/theme/Theme.h"
 
@@ -26,6 +28,24 @@ KITE_TEST(theme, dark_theme_keeps_text_readable_against_its_background) {
     const float bg = (dark.listBg.r + dark.listBg.g + dark.listBg.b) / 3.0f;
     const float fg = (dark.text.r + dark.text.g + dark.text.b) / 3.0f;
     KITE_EXPECT(fg - bg > 0.4f);
+}
+
+KITE_TEST(theme, dark_theme_stays_neutral_grey) {
+    // The dark default is meant to have no colour cast at all. A tint creeps back
+    // in one channel at a time, so check every surface rather than eyeballing it.
+    const Theme dark = Theme::Dark();
+    const Color neutral[] = { dark.windowBg,   dark.panelBg,        dark.listBg,
+                              dark.listBgAlt,  dark.border,         dark.text,
+                              dark.textDim,    dark.textFolder,     dark.accent,
+                              dark.rowSelected, dark.rowSelectedText, dark.cursorBorder,
+                              dark.tabActiveBg, dark.tabInactiveBg,  dark.sessionActiveBg,
+                              dark.scrollThumb, dark.overlayBg };
+    for (const Color& c : neutral) {
+        const float high = std::max(c.r, std::max(c.g, c.b));
+        const float low = std::min(c.r, std::min(c.g, c.b));
+        // 2/255 of slack: enough for a hand-picked grey, far below a visible tint.
+        KITE_EXPECT(high - low < 0.008f);
+    }
 }
 
 KITE_TEST(theme, ini_overrides_colors_for_the_matching_variant) {

@@ -12,12 +12,14 @@
 #include <vector>
 
 #include "core/app/Host.h"
+#include "core/app/IconProvider.h"
 #include "core/base/Ini.h"
 #include "core/fs/DirectoryLoader.h"
 #include "core/fs/DirectoryWatcher.h"
 #include "core/fs/FileSystem.h"
 #include "core/i18n/Strings.h"
 #include "core/input/Commands.h"
+#include "core/input/KeyEditor.h"
 #include "core/input/KeyMap.h"
 #include "core/model/Workspace.h"
 #include "core/theme/Theme.h"
@@ -81,6 +83,19 @@ public:
 
     App(const App&) = delete;
     App& operator=(const App&) = delete;
+
+    /// @brief シェルアイコンの取得口を差し込む。
+    /// @param[in] icons 取得口。nullptr なら常にベクタ描画のアイコンを使う。
+    ///            App より長生きすること
+    /// @note Init() より前に呼ぶこと。設定で無効にされていればここで渡しても使わない
+    void SetIconProvider(IIconProvider* icons) { icons_ = icons; }
+
+    /// @brief パスに対応するシェルアイコンの識別子を返す。
+    /// @param[in] path 対象のパス
+    /// @return 描画に使える識別子。取得口が無い、設定で無効、まだ届いていない
+    ///         場合は 0
+    /// @note UI 層が描画のたびに呼ぶ
+    uint32_t IconFor(const std::string& path);
 
     /// @brief 設定とワークスペースを読み込み、最初の列挙を開始する。
     /// @param[in] startPaths コマンドラインで指定されたパス。追加タブとして開く
@@ -151,6 +166,17 @@ public:
     /// @brief ショートカット一覧が表示中かを返す。
     /// @return 表示中なら true
     bool keyHelpVisible() const { return keyHelp_; }
+
+    /// @brief ショートカットキー設定画面の状態を返す。
+    /// @return 設定画面への参照
+    const KeyEditor& keyEditor() const { return keyEditor_; }
+
+    /// @brief ショートカットキー設定画面の状態を返す（変更可能）。
+    /// @return 設定画面への参照
+    /// @note UI 層がマウス操作（行の選択、取り込みの開始）と 1 画面の行数の通知に
+    ///       使う。割り当てを変える操作は App::OnKey を通るので、keys.ini への
+    ///       保存はそちらが行う
+    KeyEditor& keyEditor() { return keyEditor_; }
 
     /// @brief サイドバーが表示中かを返す。
     /// @return 表示中なら true
@@ -259,7 +285,8 @@ private:
     void LoadWorkspace(const std::vector<std::string>& startPaths);
     void SaveWorkspaceFile();
     void SaveSettings();
-    void WriteDefaultKeysFile();
+    void WriteKeysFile();
+    void CloseKeyEditor();
     void RefreshRoots();
 
     void RequestLoad(Tab& tab, bool force = false);
@@ -283,10 +310,12 @@ private:
     IShellIntegration& shell_;
     IHost& host_;
     fs::IDirectoryWatcher* watcher_ = nullptr;
+    IIconProvider* icons_ = nullptr;
     std::unordered_map<uint64_t, std::string> watched_;
 
     Workspace workspace_;
     KeyMap keymap_;
+    KeyEditor keyEditor_;
     Strings strings_;
     Theme theme_;
     Ini settings_;
@@ -297,8 +326,10 @@ private:
 
     Prompt prompt_;
     bool keyHelp_ = false;
+    bool keysChanged_ = false;
     bool sidebarVisible_ = true;
     bool darkTheme_ = true;
+    bool shellIcons_ = true;
     std::string language_ = "auto";
     ViewState defaultView_;
 

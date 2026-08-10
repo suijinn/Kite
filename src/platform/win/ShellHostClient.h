@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+#include "platform/win/ShellHostProcess.h"
+
 namespace kite::win {
 
 /// @brief `kite_shellhost.exe` を起動し、パイプ越しにメニューを依頼する。
@@ -28,9 +30,6 @@ public:
     /// @brief 何も起動していない状態で作る。
     ShellHostClient() = default;
 
-    /// @brief ホストを終了させて後片付けする。
-    ~ShellHostClient();
-
     ShellHostClient(const ShellHostClient&) = delete;
     ShellHostClient& operator=(const ShellHostClient&) = delete;
 
@@ -40,34 +39,17 @@ public:
     /// @param[in] screenX 表示位置の X（スクリーン座標）。負ならカーソル位置
     /// @param[in] screenY 表示位置の Y（スクリーン座標）。負ならカーソル位置
     /// @param[in] extended true なら拡張メニューを最初から出す
+    /// @param[in] dark true ならホストにダークテーマでメニューを描かせる
     /// @return メニューを出せたら true。ホストを起動できなかった場合、メニューを
     ///         構築できなかった場合、メニュー表示中にホストが落ちた場合は false
     /// @note メニューが閉じるまで戻らないが、待っている間も `owner` の再描画と
     ///       タイマーは動き続ける。クライアント領域への入力だけは捨てる ─
     ///       同一プロセスで出していた頃のモーダルな挙動に合わせるため
     bool ShowContextMenu(HWND owner, const std::vector<std::string>& paths, int screenX,
-                         int screenY, bool extended);
+                         int screenY, bool extended, bool dark);
 
 private:
-    /// @brief ホストが動いていることを保証する。必要なら起動する。
-    /// @param[in] owner 接続を待つ間も再描画を続けるウィンドウ。nullptr でもよい
-    /// @return 使えるホストがあれば true
-    bool EnsureHost(HWND owner);
-
-    /// @brief パイプを閉じ、ホストの終了を待つ（必要なら強制終了する）。
-    void CloseHost();
-
-    /// @brief ホストの実行ファイルのパスを組み立てる。
-    /// @return `kite.exe` と同じフォルダの `kite_shellhost.exe` のパス。
-    ///         自分のパスが取れなければ空文字列
-    static std::wstring HostExecutablePath();
-
-    HANDLE pipe_ = INVALID_HANDLE_VALUE;  ///< 名前付きパイプのサーバー側
-    HANDLE process_ = nullptr;            ///< ホストのプロセスハンドル
-    HANDLE job_ = nullptr;                ///< ホストを道連れにするためのジョブ
-    DWORD processId_ = 0;                 ///< ホストのプロセス ID
-    unsigned generation_ = 0;             ///< パイプ名を毎回変えるための連番
-    bool unavailable_ = false;            ///< 実行ファイルが無いと分かった状態
+    ShellHostProcess host_;  ///< メニュー専用のホスト。アイコン用とは別インスタンス
 };
 
 }  // namespace kite::win

@@ -26,6 +26,7 @@ const DefaultBinding kDefaults[] = {
     { Cmd::OpenConfigFolder,    "Ctrl+Alt+Comma" },
     { Cmd::ToggleTheme,         "Ctrl+Shift+M" },
     { Cmd::ShowKeyHelp,         "F1" },
+    { Cmd::ShowKeySettings,     "Ctrl+F1" },
     { Cmd::CancelOverlay,       "Escape" },
 
     // Navigation
@@ -164,6 +165,16 @@ void KeyMap::LoadDefaults() {
         const Chord c = ParseChord(d.chord);
         if (c.valid()) Bind(c, d.cmd);
     }
+}
+
+std::vector<Chord> KeyMap::DefaultChordsFor(Cmd id) {
+    std::vector<Chord> out;
+    for (const DefaultBinding& d : kDefaults) {
+        if (d.cmd != id) continue;
+        const Chord c = ParseChord(d.chord);
+        if (c.valid()) out.push_back(c);
+    }
+    return out;
 }
 
 void KeyMap::Bind(const Chord& c, Cmd id) {

@@ -4,21 +4,28 @@
 // (Box, Google Drive, 7-Zip, TortoiseGit and whatever else the machine has
 // registered) is instantiated here instead, so a handler that corrupts the heap
 // or faults on a background thread costs the user a context menu rather than
-// their file manager.
+// their file manager. Two kinds of handler arrive that way: context menus
+// (IContextMenu) and icon overlays (IShellIconOverlayIdentifier).
 //
-// It is started by kite.exe on the first context menu, reads requests from the
-// named pipe given on the command line, and answers one response per request.
-// It quits when the pipe breaks - which is also how it learns that Kite is gone.
+// It is started by kite.exe on the first request, reads requests from the named
+// pipe given on the command line, and answers one response per request. It quits
+// when the pipe breaks - which is also how it learns that Kite is gone.
+//
+// kite.exe runs two of these. A menu host sits inside TrackPopupMenu for as long
+// as the menu is open, so icons get an instance of their own rather than waiting
+// behind it.
 #include <windows.h>
 
 #include <objbase.h>
 #include <shellapi.h>
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
+#include "platform/win/ShellHostProtocol.h"
+#include "platform/win/ShellIcons.h"
 #include "platform/win/ShellMenu.h"
-#include "platform/win/ShellMenuProtocol.h"
 #include "platform/win/ShellPipe.h"
 
 using namespace kite;
@@ -105,6 +112,10 @@ bool HasVisibleUi(HWND helper) {
 
 /// Shows one menu and reports what came of it.
 shellhost::Result HandleRequest(HWND window, const shellhost::Request& request) {
+    // Per request rather than once at start-up: Kite's theme can be toggled
+    // between two right-clicks, and this process outlives that.
+    kite::win::SetShellMenuDarkMode(window, request.dark);
+
     // Put the helper window under the menu so that dialogs which position
     // themselves relative to their owner land somewhere sensible.
     POINT anchor{ request.screenX, request.screenY };
@@ -120,6 +131,75 @@ shellhost::Result HandleRequest(HWND window, const shellhost::Request& request) 
     // window, and Kite's title bar stays greyed out for as long as that lasts.
     ::ShowWindow(window, SW_HIDE);
     return result;
+}
+
+/// Hands out one id per distinct bitmap, for the life of the connection.
+///
+/// Overlays make an icon depend on the path, not just the file type, so the
+/// caller has to ask per file. The pixels, though, repeat endlessly: a folder of
+/// a thousand unmodified .cpp files in a working copy yields two bitmaps. Keying
+/// by content means each one crosses the pipe once.
+class IconIdTable {
+public:
+    /// Returns the id for these pixels, and whether they are new to this table.
+    uint32_t Intern(const win::IconBitmap& bitmap, bool& isNew) {
+        const uint64_t key = Hash(bitmap);
+        auto it = ids_.find(key);
+        if (it != ids_.end()) {
+            isNew = false;
+            return it->second;
+        }
+        const uint32_t id = ++lastId_;
+        ids_.emplace(key, id);
+        isNew = true;
+        return id;
+    }
+
+private:
+    /// FNV-1a over the pixels. A collision would show the wrong icon, so the
+    /// dimensions go in too; 64 bits makes it a non-issue at these volumes.
+    static uint64_t Hash(const win::IconBitmap& bitmap) {
+        uint64_t hash = 1469598103934665603ull;
+        auto mix = [&hash](uint8_t byte) {
+            hash ^= byte;
+            hash *= 1099511628211ull;
+        };
+        mix(static_cast<uint8_t>(bitmap.width));
+        mix(static_cast<uint8_t>(bitmap.height));
+        for (uint8_t byte : bitmap.bgra) mix(byte);
+        return hash;
+    }
+
+    std::unordered_map<uint64_t, uint32_t> ids_;
+    uint32_t lastId_ = 0;
+};
+
+/// Fetches one batch of icons.
+shellhost::IconResponse HandleIconRequest(const shellhost::IconRequest& request,
+                                          IconIdTable& table) {
+    shellhost::IconResponse response;
+    response.ids.reserve(request.paths.size());
+
+    for (const std::string& path : request.paths) {
+        win::IconBitmap bitmap;
+        if (!win::LoadShellIcon(path, request.pixelSize, bitmap)) {
+            // 0 means "no icon"; the caller keeps drawing its own glyph there.
+            response.ids.push_back(0);
+            continue;
+        }
+        bool isNew = false;
+        const uint32_t id = table.Intern(bitmap, isNew);
+        response.ids.push_back(id);
+        if (isNew) {
+            shellhost::IconImage image;
+            image.id = id;
+            image.width = bitmap.width;
+            image.height = bitmap.height;
+            image.bgra = std::move(bitmap.bgra);
+            response.images.push_back(std::move(image));
+        }
+    }
+    return response;
 }
 
 }  // namespace
@@ -147,6 +227,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     HWND window = CreateHostWindow();
 
     if (SUCCEEDED(ole) && window) {
+        IconIdTable iconIds;
         for (;;) {
             std::vector<uint8_t> payload;
             const kite::win::PipeStatus status =
@@ -160,16 +241,28 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
             // not stay behind.
             if (status != kite::win::PipeStatus::Ok) break;
 
-            shellhost::Request request;
             // A frame we cannot parse means the stream is out of step with the
             // other side. There is no recovering from that, so hang up.
-            if (!shellhost::DecodeRequest(payload.data(), payload.size(), request)) break;
+            shellhost::MessageKind kind = shellhost::MessageKind::Menu;
+            if (!shellhost::DecodeKind(payload.data(), payload.size(), kind)) break;
 
-            shellhost::Response response;
-            response.result = HandleRequest(window, request);
+            std::vector<uint8_t> reply;
+            if (kind == shellhost::MessageKind::Menu) {
+                shellhost::Request request;
+                if (!shellhost::DecodeRequest(payload.data(), payload.size(), request)) break;
 
-            if (kite::win::WritePipeFrame(pipe, shellhost::EncodeResponse(response), &PumpMessages,
-                                          nullptr) != kite::win::PipeStatus::Ok) {
+                shellhost::Response response;
+                response.result = HandleRequest(window, request);
+                reply = shellhost::EncodeResponse(response);
+            } else {
+                shellhost::IconRequest request;
+                if (!shellhost::DecodeIconRequest(payload.data(), payload.size(), request)) break;
+                reply = shellhost::EncodeIconResponse(HandleIconRequest(request, iconIds));
+            }
+            if (reply.empty()) break;
+
+            if (kite::win::WritePipeFrame(pipe, reply, &PumpMessages, nullptr) !=
+                kite::win::PipeStatus::Ok) {
                 break;
             }
         }
