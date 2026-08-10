@@ -104,6 +104,17 @@ public:
     /// @param[in] shape 0=矢印、1=ハンド、2=左右リサイズ、3=上下リサイズ
     virtual void SetCursorShape(int shape) = 0;
 
+    /// @brief クライアント座標をスクリーン座標に変換する。
+    /// @param[in] x クライアント座標の X（DIP）
+    /// @param[in] y クライアント座標の Y（DIP）
+    /// @param[out] screenX スクリーン座標の X（ピクセル）。失敗時は書き換えない
+    /// @param[out] screenY スクリーン座標の Y（ピクセル）。失敗時は書き換えない
+    /// @return 変換できたら true。ウィンドウがまだ無ければ false
+    /// @note キーボードから出すコンテキストメニューを、マウスカーソルではなく
+    ///       カーソル行の位置に合わせるために要る。シェルに渡せるのはスクリーン
+    ///       座標だけで、DIP からピクセルへの倍率を知っているのはウィンドウ側
+    virtual bool ClientToScreen(float x, float y, int& screenX, int& screenY) = 0;
+
     /// @brief OS のドラッグ操作を開始する。
     /// @param[in] paths ドラッグするファイルのパス列
     /// @return どこかにドロップされたら true。取り消されたら false

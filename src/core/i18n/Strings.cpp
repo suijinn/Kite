@@ -120,6 +120,7 @@ const Row kEn[] = {
 
     { "cmd.context_menu", "Context menu" },
     { "cmd.context_menu_ext", "Extended context menu" },
+    { "cmd.context_menu_dir", "Context menu for current folder" },
     { "cmd.properties", "Properties" },
     { "cmd.open_with", "Open with..." },
     { "cmd.reveal", "Show in Explorer" },
@@ -294,6 +295,7 @@ const Row kJa[] = {
 
     { "cmd.context_menu", "コンテキストメニュー" },
     { "cmd.context_menu_ext", "拡張コンテキストメニュー" },
+    { "cmd.context_menu_dir", "現在のフォルダーのコンテキストメニュー" },
     { "cmd.properties", "プロパティ" },
     { "cmd.open_with", "プログラムから開く" },
     { "cmd.reveal", "エクスプローラーで表示" },

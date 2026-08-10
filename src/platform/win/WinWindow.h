@@ -64,6 +64,9 @@ public:
     /// @copydoc IHost::SetCursorShape
     void SetCursorShape(int shape) override;
 
+    /// @copydoc IHost::ClientToScreen
+    bool ClientToScreen(float x, float y, int& screenX, int& screenY) override;
+
     /// @copydoc IHost::BeginFileDrag
     bool BeginFileDrag(const std::vector<std::string>& paths) override;
 

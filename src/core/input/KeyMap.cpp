@@ -18,7 +18,8 @@ struct DefaultBinding {
 //  * Tab / Shift+Tab move between panes (the Total Commander muscle memory).
 //  * Alt+V / Alt+H split; both are reachable on a JIS keyboard, unlike Ctrl+\.
 //  * The Menu key opens the *extended* shell menu directly - that one-step
-//    access is a core reason this app exists.
+//    access is a core reason this app exists. Ctrl+Menu aims the same menu at
+//    the folder being viewed, which a selection would otherwise hide.
 const DefaultBinding kDefaults[] = {
     // Application
     { Cmd::Quit,                "Ctrl+Q" },
@@ -149,6 +150,8 @@ const DefaultBinding kDefaults[] = {
     // Shell
     { Cmd::ExtendedContextMenu, "Menu" },
     { Cmd::ContextMenu,         "Shift+F10" },
+    { Cmd::FolderContextMenu,   "Ctrl+Menu" },
+    { Cmd::FolderContextMenu,   "Ctrl+Shift+F10" },
     { Cmd::Properties,          "Alt+Enter" },
     { Cmd::OpenWith,            "Ctrl+Alt+Enter" },
     { Cmd::RevealInExplorer,    "Ctrl+Shift+E" },

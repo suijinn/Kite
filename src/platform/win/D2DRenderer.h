@@ -93,6 +93,11 @@ public:
     ///       iconsLost() が立ったら入れ直すこと
     bool UploadIcon(uint32_t iconId, uint32_t width, uint32_t height, const uint8_t* bgra);
 
+    /// @brief 受け取ったアイコンをすべて捨てる。
+    /// @note ホストが入れ替わり、識別子の意味が変わったときに呼ぶ。以降 DrawIcon()
+    ///       は入れ直されるまで何も描かない
+    void ClearIcons();
+
     /// @brief アイコンを入れ直す必要があるかを返す。
     /// @return デバイス消失でビットマップを失っていれば true
     bool iconsLost() const { return iconsLost_; }

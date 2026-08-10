@@ -175,13 +175,19 @@ public:
     int contextMenuCalls = 0;
     bool lastContextMenuExtended = false;
     bool lastContextMenuDark = false;
+    std::vector<std::string> lastContextMenuPaths;
+    int lastContextMenuX = 0;
+    int lastContextMenuY = 0;
     // Set to false to act like a shell host that could not be started, or one
     // that died with a faulting extension inside it.
     bool contextMenuShown = true;
 
-    bool ShowContextMenu(const std::vector<std::string>&, int, int, bool extended,
-                         bool dark) override {
+    bool ShowContextMenu(const std::vector<std::string>& paths, int screenX, int screenY,
+                         bool extended, bool dark) override {
         ++contextMenuCalls;
+        lastContextMenuPaths = paths;
+        lastContextMenuX = screenX;
+        lastContextMenuY = screenY;
         lastContextMenuExtended = extended;
         lastContextMenuDark = dark;
         return contextMenuShown;
@@ -222,12 +228,29 @@ public:
     int closeCount = 0;
     std::string title;
     std::vector<std::string> lastDrag;
+    // A window that has never been shown cannot map coordinates; set this to
+    // false to exercise the "no anchor available" path.
+    bool canMapCoordinates = true;
+    // The offset a client point picks up on the way to screen coordinates.
+    // Non-zero so a test cannot pass by leaving the client point untouched.
+    int screenOriginX = 100;
+    int screenOriginY = 200;
+    float lastClientX = 0.0f;
+    float lastClientY = 0.0f;
 
     void Invalidate() override { ++invalidateCount; }
     void SetTitle(const std::string& utf8) override { title = utf8; }
     void Close() override { ++closeCount; }
     void SetImePosition(float, float) override {}
     void SetCursorShape(int) override {}
+    bool ClientToScreen(float x, float y, int& screenX, int& screenY) override {
+        lastClientX = x;
+        lastClientY = y;
+        if (!canMapCoordinates) return false;
+        screenX = screenOriginX + static_cast<int>(x);
+        screenY = screenOriginY + static_cast<int>(y);
+        return true;
+    }
     bool BeginFileDrag(const std::vector<std::string>& paths) override {
         lastDrag = paths;
         return true;

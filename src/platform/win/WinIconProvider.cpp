@@ -24,6 +24,13 @@ WinIconProvider::~WinIconProvider() {
 
 uint32_t WinIconProvider::IconFor(const std::string& path) { return cache_.Lookup(path); }
 
+void WinIconProvider::Invalidate() {
+    // Only the path -> id table goes: the ids themselves are still valid for
+    // this connection, so the bitmaps already uploaded get reused and the
+    // re-fetch costs one round trip for the rows actually on screen.
+    cache_.Invalidate();
+}
+
 void WinIconProvider::SetPixelSize(uint32_t pixels) {
     // Only the two sizes the shell actually keeps are worth asking for; anything
     // between them would come back as one of these anyway.
@@ -32,11 +39,11 @@ void WinIconProvider::SetPixelSize(uint32_t pixels) {
     pixelSize_ = wanted;
     requestedSize_.store(wanted, std::memory_order_relaxed);
 
-    // Everything held is at the old size. Dropping the ids as well means the
-    // renderer's bitmaps go stale, which is fine: nothing draws an id the cache
-    // no longer hands out.
+    // Every id held names a bitmap at the old size, so the table goes. The
+    // bitmaps themselves stay: this is the same connection, so the host still
+    // has them in its dedup table and will not send them again - and it will
+    // hand out their ids again if the size ever comes back to this one.
     cache_.Clear();
-    pixels_.clear();
 
     std::lock_guard<std::mutex> lock(mutex_);
     queue_.clear();
@@ -49,14 +56,34 @@ void WinIconProvider::Pump(D2DRenderer& renderer) {
     std::vector<std::pair<std::string, uint32_t>> done;
     std::vector<shellhost::IconImage> images;
     std::vector<std::string> abandoned;
+    bool stale = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         done.swap(done_);
         images.swap(images_);
+        stale = stale_;
+        stale_ = false;
         if (failed_) {
             failed_ = false;
             abandoned.swap(inFlight_);
         }
+    }
+
+    // A host that exited (idle timeout, or a faulting overlay handler) is
+    // replaced silently, and the replacement numbers its bitmaps from 1 again.
+    // Everything remembered from the old connection now names a different
+    // picture, so it goes before this batch is applied - otherwise rows that
+    // were already resolved quietly swap to whichever icon inherited their id.
+    //
+    // The batch below is the new host's first, so its images are every bitmap it
+    // has handed out: dropping ours here and taking those leaves the two sides
+    // agreeing again. That agreement is why this cannot be done at any other
+    // moment - the host sends a bitmap only the first time it appears, so
+    // anything discarded out of step with it is never sent a second time.
+    if (stale) {
+        cache_.Forget();
+        pixels_.clear();
+        renderer.ClearIcons();
     }
 
     for (shellhost::IconImage& image : images) {
@@ -105,11 +132,25 @@ void WinIconProvider::WorkerMain() {
         }
 
         shellhost::IconResponse response;
+        unsigned generation = 0;
         const bool ok = client_.Fetch(batch, requestedSize_.load(std::memory_order_relaxed),
-                                      response);
+                                      response, generation);
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            // Noted even for a failed fetch: the host was replaced either way,
+            // so the ids the UI thread is holding are already meaningless. The
+            // first connection is not a replacement and has nothing to drop.
+            if (generation != 0 && generation != generation_) {
+                stale_ = stale_ || generation_ != 0;
+                generation_ = generation;
+                // Anything the UI thread has not collected yet was numbered by
+                // the connection that just went away. Mixing it into the batch
+                // below would put old ids back on new rows, which is the very
+                // thing the flush exists to prevent.
+                done_.clear();
+                images_.clear();
+            }
             // A reply of the wrong length is a broken host, not a partial answer.
             // Pairing those ids with these paths would put arbitrary icons on
             // arbitrary rows, so the whole batch is failed instead.

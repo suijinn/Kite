@@ -55,6 +55,12 @@ public:
     /// @return プロセス ID。未起動なら 0
     DWORD processId() const { return processId_; }
 
+    /// @brief 現在の接続の世代番号を返す。
+    /// @return 起動のたびに 1 ずつ増える番号。一度も起動していなければ 0
+    /// @note ホストが持つ状態（アイコンの識別子表など）は接続と一緒に消えるので、
+    ///       呼び出し側はこの値が変わったら自分が覚えている識別子を捨てること
+    unsigned generation() const { return generation_; }
+
 private:
     /// @brief ホストの実行ファイルのパスを組み立てる。
     /// @return `kite.exe` と同じフォルダの `kite_shellhost.exe` のパス。

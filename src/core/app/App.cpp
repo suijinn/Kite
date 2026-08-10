@@ -12,6 +12,11 @@ namespace {
 
 constexpr uint64_t kStatusDurationMs = 4000;
 
+// How far into the row the keyboard-invoked shell menu is anchored. The menu
+// opens down and to the right of this point, so a small indent puts its corner
+// under the item's icon rather than out on the pane border.
+constexpr float kMenuAnchorIndent = 8.0f;
+
 const char* SortKeyName(SortKey k) {
     switch (k) {
         case SortKey::Ext: return "ext";
@@ -418,6 +423,11 @@ void App::ActivateEntry(int visibleIndex, bool newTab) {
 void App::RefreshFocused() {
     if (Tab* t = workspace_.focusedTab()) {
         RequestLoad(*t, true);
+        // Overlays show a file's state (committed, synced, locked), and every
+        // caller here has just changed something - including the shell menu,
+        // which is where a commit or a sync is started from. Nothing tells us
+        // when a handler changes its mind, so a refresh asks again.
+        if (icons_ && shellIcons_) icons_->Invalidate();
         host_.Invalidate();
     }
 }
@@ -583,6 +593,23 @@ void App::ShowContextMenuAt(int screenX, int screenY, bool extended) {
     if (!t) return;
     std::vector<std::string> paths = t->SelectionPaths();
     if (paths.empty()) paths.push_back(t->path);
+    ShowShellMenu(paths, screenX, screenY, extended);
+}
+
+void App::ShowFolderContextMenu(bool extended) {
+    Tab* t = workspace_.focusedTab();
+    if (!t || t->path.empty()) return;
+    // Deliberately ignores the selection: this command exists precisely because
+    // a selected file otherwise hides the folder the user is looking at.
+    int x = -1;
+    int y = -1;
+    CursorRowAnchor(x, y);
+    ShowShellMenu({ t->path }, x, y, extended);
+}
+
+void App::ShowShellMenu(const std::vector<std::string>& paths, int screenX, int screenY,
+                        bool extended) {
+    if (paths.empty()) return;
     if (!shell_.ShowContextMenu(paths, screenX, screenY, extended, theme_.dark)) {
         // The menu runs in a separate process; losing it means that process
         // could not be started, or a shell extension took it down. Say so rather
@@ -592,6 +619,27 @@ void App::ShowContextMenuAt(int screenX, int screenY, bool extended) {
     }
     // The menu may have renamed, deleted or created something.
     RefreshFocused();
+}
+
+bool App::CursorRowAnchor(int& screenX, int& screenY) {
+    Pane* pane = workspace_.focusedPane();
+    if (!pane || pane->listArea.empty()) return false;
+    const Tab* t = pane->activeTab();
+    if (!t) return false;
+
+    const RectF& area = pane->listArea;
+    const float rowH = pane->rowHeight > 0.0f ? pane->rowHeight : theme_.rowHeight;
+
+    // Bottom-left of the cursor row, which is where Windows itself drops the
+    // menu for a focused list item. An off-screen or absent cursor falls back to
+    // the top of the list rather than to a point outside the pane.
+    float y = area.t;
+    if (t->cursor >= 0 && t->cursor < static_cast<int>(t->visible.size())) {
+        y = area.t + static_cast<float>(t->cursor + 1) * rowH - t->scroll;
+    }
+    y = std::clamp(y, area.t, area.b);
+
+    return host_.ClientToScreen(area.l + kMenuAnchorIndent, y, screenX, screenY);
 }
 
 // ---------------------------------------------------------------------------
@@ -1430,10 +1478,19 @@ void App::Execute(Cmd cmd) {
 
         // --- shell -------------------------------------------------------------
         case Cmd::ContextMenu:
-        case Cmd::ExtendedContextMenu:
+        case Cmd::ExtendedContextMenu: {
             // Position is supplied by the UI layer for mouse invocations; from
-            // the keyboard we let the platform place it on the focused row.
-            ShowContextMenuAt(-1, -1, cmd == Cmd::ExtendedContextMenu);
+            // the keyboard it belongs on the row the user is looking at, not
+            // wherever the pointer was left. A negative pair means "no anchor",
+            // and the shell falls back to the pointer.
+            int x = -1;
+            int y = -1;
+            CursorRowAnchor(x, y);
+            ShowContextMenuAt(x, y, cmd == Cmd::ExtendedContextMenu);
+            break;
+        }
+        case Cmd::FolderContextMenu:
+            ShowFolderContextMenu(true);
             break;
         case Cmd::Properties:
             if (tab) {

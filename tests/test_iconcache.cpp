@@ -145,6 +145,74 @@ KITE_TEST(iconcache, eviction_never_strands_a_request_that_is_still_out) {
     KITE_EXPECT_EQ(sent.size(), size_t{ 1 });
 }
 
+KITE_TEST(iconcache, invalidating_asks_again_without_blanking_the_row) {
+    // Overlays track a file's state, so a refresh has to ask again. Blanking the
+    // id while the answer travels would flick every row back to its fallback
+    // glyph, so the old icon keeps being drawn until the new one lands.
+    IconCache cache;
+    cache.Lookup("C:\\a");
+    Take(cache);
+    cache.Store("C:\\a", 3);
+
+    cache.Invalidate();
+    KITE_EXPECT_EQ(cache.Lookup("C:\\a"), 3u);
+    KITE_EXPECT_EQ(cache.pendingCount(), size_t{ 1 });
+
+    Take(cache);
+    cache.Store("C:\\a", 9);
+    KITE_EXPECT_EQ(cache.Lookup("C:\\a"), 9u);
+    KITE_EXPECT_EQ(cache.pendingCount(), size_t{ 0 });
+}
+
+KITE_TEST(iconcache, invalidating_does_not_ask_twice_for_a_request_already_out) {
+    IconCache cache;
+    cache.Lookup("C:\\a");
+    Take(cache);
+
+    cache.Invalidate();
+    KITE_EXPECT_EQ(cache.pendingCount(), size_t{ 0 });
+
+    // And the reply that was already on its way still lands.
+    cache.Store("C:\\a", 4);
+    KITE_EXPECT_EQ(cache.Lookup("C:\\a"), 4u);
+    KITE_EXPECT_EQ(cache.pendingCount(), size_t{ 0 });
+}
+
+KITE_TEST(iconcache, forgetting_drops_the_ids_as_well_and_asks_again) {
+    // Used when the ids themselves stopped meaning anything - the host that
+    // handed them out was replaced. Drawing them would put another file's icon
+    // on the row, so the fallback glyph is the honest answer until the new
+    // answer arrives.
+    IconCache cache;
+    cache.Lookup("C:\\a");
+    Take(cache);
+    cache.Store("C:\\a", 3);
+
+    cache.Forget();
+    KITE_EXPECT_EQ(cache.Lookup("C:\\a"), 0u);
+    KITE_EXPECT_EQ(cache.pendingCount(), size_t{ 1 });
+}
+
+KITE_TEST(iconcache, forgetting_still_takes_the_answer_a_request_is_waiting_for) {
+    // The reply on its way is the new host's first batch: it is the one thing
+    // that is not stale, and the bitmaps that go with it arrive alongside it.
+    IconCache cache;
+    cache.Lookup("C:\\a");
+    Take(cache);
+
+    cache.Forget();
+    cache.Store("C:\\a", 8);
+    KITE_EXPECT_EQ(cache.Lookup("C:\\a"), 8u);
+    KITE_EXPECT_EQ(cache.pendingCount(), size_t{ 0 });
+}
+
+KITE_TEST(iconcache, invalidating_an_empty_table_is_harmless) {
+    IconCache cache;
+    cache.Invalidate();
+    KITE_EXPECT_EQ(cache.size(), size_t{ 0 });
+    KITE_EXPECT_EQ(cache.pendingCount(), size_t{ 0 });
+}
+
 KITE_TEST(iconcache, an_empty_path_is_never_asked_about) {
     IconCache cache;
     KITE_EXPECT_EQ(cache.Lookup(""), 0u);

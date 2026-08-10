@@ -395,6 +395,72 @@ KITE_TEST(app, the_extended_context_menu_is_a_distinct_command) {
     KITE_EXPECT_EQ(h.shell.contextMenuCalls, 2);
 }
 
+KITE_TEST(app, the_folder_menu_targets_the_folder_even_with_a_selection) {
+    // The whole point of the command: a selected file otherwise hides the folder
+    // being viewed, and "New >" or "Open in Terminal" belong to the folder.
+    Harness h;
+    h.app.Execute(Cmd::SelectAll);
+    KITE_EXPECT(h.tab()->MarkedCount() > 1);
+
+    h.app.Execute(Cmd::FolderContextMenu);
+    KITE_EXPECT_EQ(h.shell.lastContextMenuPaths.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.shell.lastContextMenuPaths.front(), h.tab()->path);
+    KITE_EXPECT(h.shell.lastContextMenuExtended);
+}
+
+KITE_TEST(app, the_folder_menu_has_its_own_binding) {
+    Harness h;
+    KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+Menu")));
+    KITE_EXPECT_EQ(h.shell.contextMenuCalls, 1);
+    KITE_EXPECT_EQ(h.shell.lastContextMenuPaths.front(), h.tab()->path);
+}
+
+KITE_TEST(app, a_menu_opened_from_the_keyboard_lands_on_the_cursor_row) {
+    // Not on the pointer: the pointer is wherever it was left, which on a
+    // keyboard-driven move is nowhere near the row being acted on.
+    Harness h;
+    Pane* p = h.pane();
+    p->listArea = { 10.0f, 40.0f, 400.0f, 400.0f };
+    p->rowHeight = 20.0f;
+    h.tab()->cursor = 2;
+    h.tab()->scroll = 0.0f;
+
+    h.app.Execute(Cmd::ContextMenu);
+    // Bottom-left of row 2, indented, then offset by the fake client origin.
+    KITE_EXPECT_EQ(h.shell.lastContextMenuX, 118);
+    KITE_EXPECT_EQ(h.shell.lastContextMenuY, 300);
+}
+
+KITE_TEST(app, a_menu_anchor_stays_inside_the_list_when_the_cursor_is_scrolled_away) {
+    Harness h;
+    Pane* p = h.pane();
+    p->listArea = { 10.0f, 40.0f, 400.0f, 400.0f };
+    p->rowHeight = 20.0f;
+    h.tab()->cursor = 0;
+    h.tab()->scroll = 500.0f;
+
+    h.app.Execute(Cmd::ContextMenu);
+    // Clamped to the top of the list: 200 (fake origin) + 40 (list top).
+    KITE_EXPECT_EQ(h.shell.lastContextMenuY, 240);
+}
+
+KITE_TEST(app, a_menu_falls_back_to_the_pointer_when_there_is_no_anchor) {
+    // Before the first paint there is no layout to aim at, and a window that
+    // cannot map coordinates cannot produce one either. A negative pair tells
+    // the shell to use the pointer, which is what Windows does by default.
+    Harness h;
+    h.pane()->listArea = {};
+    h.app.Execute(Cmd::ContextMenu);
+    KITE_EXPECT_EQ(h.shell.lastContextMenuX, -1);
+    KITE_EXPECT_EQ(h.shell.lastContextMenuY, -1);
+
+    h.pane()->listArea = { 10.0f, 40.0f, 400.0f, 400.0f };
+    h.host.canMapCoordinates = false;
+    h.app.Execute(Cmd::ContextMenu);
+    KITE_EXPECT_EQ(h.shell.lastContextMenuX, -1);
+    KITE_EXPECT_EQ(h.shell.lastContextMenuY, -1);
+}
+
 KITE_TEST(app, the_shell_menu_is_asked_for_the_theme_kite_is_using) {
     // The menu is drawn by another process, which has no way of knowing that
     // Kite is dark while the desktop is light - so it is told, every time.
