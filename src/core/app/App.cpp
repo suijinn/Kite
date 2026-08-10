@@ -404,12 +404,28 @@ void App::OpenPath(const std::string& p, bool newTab) {
     }
 }
 
+void App::NavigateToParent(bool newTab) {
+    Tab* t = workspace_.focusedTab();
+    if (!t) return;
+    const std::string parent = path::Parent(t->path);
+    if (parent.empty()) return;
+    const std::string leaving = path::FileName(t->path);
+    OpenPath(parent, newTab);
+    // Land the cursor on the folder we just came out of.
+    if (Tab* now = workspace_.focusedTab()) now->pendingFocusName = leaving;
+}
+
 void App::ActivateEntry(int visibleIndex, bool newTab) {
     Tab* t = workspace_.focusedTab();
     if (!t) return;
-    if (visibleIndex < 0 || visibleIndex >= static_cast<int>(t->visible.size())) return;
+    if (t->IsParentRow(visibleIndex)) {
+        NavigateToParent(newTab);
+        return;
+    }
+    const fs::Entry* entry = t->EntryAt(visibleIndex);
+    if (!entry) return;
 
-    const fs::Entry& e = t->listing.entries[t->visible[visibleIndex]];
+    const fs::Entry& e = *entry;
     const std::string full = path::Join(t->path, e.name);
     if (e.isDir()) {
         OpenPath(full, newTab);
@@ -537,13 +553,14 @@ void App::MoveCursor(int delta, bool extend, bool absolute) {
     target = std::clamp(target, 0, static_cast<int>(t->visible.size()) - 1);
 
     if (extend) {
-        t->ClearMarks();
-        t->MarkRange(t->anchor, target, true);
+        t->ExtendTo(target);
     } else {
-        t->ClearMarks();
-        t->anchor = target;
+        // Marks deliberately survive a plain move. Space marks one row and steps
+        // on; if walking to the next row wiped that mark, only neighbours could
+        // ever be selected together. SelectNone (and any click on a row) clears.
+        t->cursor = target;
+        t->ResetAnchor();
     }
-    t->cursor = target;
     EnsureCursorVisible();
     host_.Invalidate();
 }
@@ -591,6 +608,8 @@ void App::ToggleBookmark(const std::string& p) {
 void App::ShowContextMenuAt(int screenX, int screenY, bool extended) {
     Tab* t = workspace_.focusedTab();
     if (!t) return;
+    // A cursor parked on ".." has no selection to offer, so this falls through to
+    // the folder being listed - the same menu an empty-space right-click gives.
     std::vector<std::string> paths = t->SelectionPaths();
     if (paths.empty()) paths.push_back(t->path);
     ShowShellMenu(paths, screenX, screenY, extended);
@@ -1005,16 +1024,9 @@ void App::Execute(Cmd cmd) {
             break;
 
         // --- navigation ------------------------------------------------------
-        case Cmd::GoUp: {
-            if (!tab) break;
-            const std::string parent = path::Parent(tab->path);
-            if (parent.empty()) break;
-            const std::string leaving = path::FileName(tab->path);
-            NavigateFocused(parent);
-            // Land the cursor on the folder we just came out of.
-            if (Tab* t = workspace_.focusedTab()) t->pendingFocusName = leaving;
+        case Cmd::GoUp:
+            NavigateToParent(false);
             break;
-        }
         case Cmd::GoBack: {
             if (!tab || tab->back.empty()) break;
             const std::string target = tab->back.back();
@@ -1090,9 +1102,9 @@ void App::Execute(Cmd cmd) {
             // Deliberately does not go through MoveCursor: toggling must
             // accumulate a multi-selection rather than reset it.
             const int index = tab->visible[tab->cursor];
-            tab->marked[index] = tab->marked[index] ? 0 : 1;
+            if (index >= 0) tab->marked[index] = tab->marked[index] ? 0 : 1;
             if (tab->cursor + 1 < static_cast<int>(tab->visible.size())) tab->cursor++;
-            tab->anchor = tab->cursor;
+            tab->ResetAnchor();
             EnsureCursorVisible();
             host_.Invalidate();
             break;
@@ -1100,6 +1112,9 @@ void App::Execute(Cmd cmd) {
         case Cmd::SelectAll:
             if (tab) {
                 tab->MarkRange(0, static_cast<int>(tab->visible.size()) - 1, true);
+                // Whatever range was being dragged out with Shift is over; the
+                // next extension has to build on what is on screen now.
+                tab->ResetAnchor();
                 host_.Invalidate();
             }
             break;
@@ -1111,7 +1126,11 @@ void App::Execute(Cmd cmd) {
             break;
         case Cmd::InvertSelection:
             if (tab) {
-                for (int index : tab->visible) tab->marked[index] = tab->marked[index] ? 0 : 1;
+                for (int index : tab->visible) {
+                    if (index < 0) continue;
+                    tab->marked[index] = tab->marked[index] ? 0 : 1;
+                }
+                tab->ResetAnchor();
                 host_.Invalidate();
             }
             break;

@@ -23,10 +23,14 @@ void Tab::Rebuild() {
     const std::vector<fs::Entry>& entries = listing.entries;
     marked.resize(entries.size(), 0);
 
+    // 「..」には名前で覚えられる実体が無いので、「先頭行に載っていた」ことを
+    // そのまま覚える。利用者が自分で置いたカーソルを再列挙で奪わないため。
+    const bool onParentRow = IsParentRow(cursor);
+
     std::string keepName = pendingFocusName;
     pendingFocusName.clear();
-    if (keepName.empty() && cursor >= 0 && cursor < static_cast<int>(visible.size())) {
-        keepName = entries[visible[cursor]].name;
+    if (keepName.empty()) {
+        if (const fs::Entry* e = EntryAt(cursor)) keepName = e->name;
     }
 
     const std::string needle = utf8::ToLowerAscii(filter);
@@ -70,8 +74,15 @@ void Tab::Rebuild() {
         return v.sortDesc ? cmp > 0 : cmp < 0;
     });
 
+    // 並べ替えの後に挿す。「..」は名前でも日付でも動かない。読めなかったフォルダに
+    // は出さない ─ 画面はエラーだけを出すので、触れない行が残るだけになる。
+    if (listing.status == fs::Status::Ok && !path::Parent(path).empty()) {
+        visible.insert(visible.begin(), kParentRow);
+    }
+
     if (!keepName.empty()) {
         for (int i = 0; i < static_cast<int>(visible.size()); ++i) {
+            if (visible[i] == kParentRow) continue;
             if (entries[visible[i]].name == keepName) {
                 cursor = i;
                 break;
@@ -83,7 +94,10 @@ void Tab::Rebuild() {
     } else {
         cursor = std::clamp(cursor, 0, static_cast<int>(visible.size()) - 1);
     }
-    anchor = cursor;
+    // 添字がずれて「..」に載っただけなら最初の項目へ送る。新しいフォルダを開いた
+    // 直後（cursor = 0）に、まず目に入るのが移動手段では困る。
+    if (!onParentRow && IsParentRow(cursor) && ItemCount() > 0) cursor = 1;
+    ResetAnchor();
 }
 
 void Tab::DropListing() {
@@ -96,12 +110,26 @@ void Tab::DropListing() {
     marked.clear();
     marked.shrink_to_fit();
     loaded = false;
+    ResetAnchor();
 }
 
-const fs::Entry* Tab::CursorEntry() const {
-    if (cursor < 0 || cursor >= static_cast<int>(visible.size())) return nullptr;
-    return &listing.entries[visible[cursor]];
+bool Tab::IsParentRow(int visibleIndex) const {
+    if (visibleIndex < 0 || visibleIndex >= static_cast<int>(visible.size())) return false;
+    return visible[visibleIndex] == kParentRow;
 }
+
+const fs::Entry* Tab::EntryAt(int visibleIndex) const {
+    if (visibleIndex < 0 || visibleIndex >= static_cast<int>(visible.size())) return nullptr;
+    const int index = visible[visibleIndex];
+    if (index < 0 || index >= static_cast<int>(listing.entries.size())) return nullptr;
+    return &listing.entries[index];
+}
+
+int Tab::ItemCount() const {
+    return static_cast<int>(visible.size()) - (hasParentRow() ? 1 : 0);
+}
+
+const fs::Entry* Tab::CursorEntry() const { return EntryAt(cursor); }
 
 std::string Tab::CursorPath() const {
     const fs::Entry* e = CursorEntry();
@@ -111,7 +139,7 @@ std::string Tab::CursorPath() const {
 std::vector<std::string> Tab::SelectionPaths() const {
     std::vector<std::string> out;
     for (int index : visible) {
-        if (index < static_cast<int>(marked.size()) && marked[index]) {
+        if (index >= 0 && index < static_cast<int>(marked.size()) && marked[index]) {
             out.push_back(path::Join(path, listing.entries[index].name));
         }
     }
@@ -125,7 +153,7 @@ std::vector<std::string> Tab::SelectionPaths() const {
 int Tab::MarkedCount() const {
     int n = 0;
     for (int index : visible) {
-        if (index < static_cast<int>(marked.size()) && marked[index]) ++n;
+        if (index >= 0 && index < static_cast<int>(marked.size()) && marked[index]) ++n;
     }
     return n;
 }
@@ -133,7 +161,7 @@ int Tab::MarkedCount() const {
 uint64_t Tab::MarkedBytes() const {
     uint64_t total = 0;
     for (int index : visible) {
-        if (index < static_cast<int>(marked.size()) && marked[index]) {
+        if (index >= 0 && index < static_cast<int>(marked.size()) && marked[index]) {
             total += listing.entries[index].size;
         }
     }
@@ -142,6 +170,11 @@ uint64_t Tab::MarkedBytes() const {
 
 void Tab::ClearMarks() {
     std::fill(marked.begin(), marked.end(), static_cast<uint8_t>(0));
+    // 選択を捨てた以上、伸縮の土台も捨てる。残しておくと次の ExtendTo が
+    // 消したはずの印を呼び戻す。
+    extending = false;
+    markBase.clear();
+    markBase.shrink_to_fit();
 }
 
 void Tab::MarkRange(int fromVisible, int toVisible, bool value) {
@@ -149,8 +182,27 @@ void Tab::MarkRange(int fromVisible, int toVisible, bool value) {
     int lo = std::clamp(std::min(fromVisible, toVisible), 0, static_cast<int>(visible.size()) - 1);
     int hi = std::clamp(std::max(fromVisible, toVisible), 0, static_cast<int>(visible.size()) - 1);
     for (int i = lo; i <= hi; ++i) {
+        if (visible[i] == kParentRow) continue;
         marked[visible[i]] = value ? 1 : 0;
     }
+}
+
+void Tab::ResetAnchor() {
+    anchor = cursor;
+    extending = false;
+    markBase.clear();
+    markBase.shrink_to_fit();
+}
+
+void Tab::ExtendTo(int toVisible) {
+    if (visible.empty()) return;
+    if (!extending) {
+        markBase = marked;
+        extending = true;
+    }
+    marked = markBase;
+    cursor = std::clamp(toVisible, 0, static_cast<int>(visible.size()) - 1);
+    MarkRange(anchor, cursor, true);
 }
 
 // ---------------------------------------------------------------------------

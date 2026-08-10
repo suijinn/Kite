@@ -459,11 +459,11 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
 
     r.PushClip(body);
     for (int i = first; i <= last; ++i) {
-        const fs::Entry& e = tab->listing.entries[tab->visible[i]];
         const float top = body.t + static_cast<float>(i) * rowH - tab->scroll;
         const RectF row = { body.l, top, body.r - kScrollbarWidth, top + rowH };
 
-        const bool marked = tab->marked[tab->visible[i]] != 0;
+        const fs::Entry* entry = tab->EntryAt(i);
+        const bool marked = entry && tab->marked[tab->visible[i]] != 0;
         const bool isCursor = (i == tab->cursor);
 
         if (i % 2 == 1) r.FillRect(row, th.listBgAlt);
@@ -475,12 +475,30 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
             r.FillRect(row, th.rowHover);
         }
 
+        const RectF icon = { row.l + 6.0f, row.t, row.l + 6.0f + kIconCell, row.b };
+        const RectF nameBox = { icon.r + 6.0f, row.t, colName.r, row.b };
+
+        if (!entry) {
+            // The ".." row. No shell icon is asked for: the arrow says "up" more
+            // plainly than the parent folder's own icon would, and the row is a
+            // move, not a thing that can be selected, renamed or dragged.
+            glyph::ChevronUp(r, icon, th.textFolder);
+            r.DrawText(str.Get("ui.parent_dir"), nameBox, th.textFolder, FontRole::Ui,
+                       TextAlign::Left);
+            if (medium && colSize.w() > 0.0f) {
+                r.DrawText(str.Get("ui.dir_marker"), { colSize.l, row.t, colSize.r - 6.0f, row.b },
+                           th.textDim, FontRole::UiSmall, TextAlign::Right);
+            }
+            Add(row, Hit::ListRow, i, pane);
+            continue;
+        }
+
+        const fs::Entry& e = *entry;
         Color nameColor = marked ? th.rowSelectedText : (e.isDir() ? th.textFolder : th.text);
         const bool ghost = fs::Has(e.attrs, fs::Attr::Placeholder) ||
                            fs::Has(e.attrs, fs::Attr::Offline);
         if (e.isHidden()) nameColor = nameColor.alpha(0.55f);
 
-        const RectF icon = { row.l + 6.0f, row.t, row.l + 6.0f + kIconCell, row.b };
         // The real icon arrives a frame or two later, and carries any overlay
         // (version control, cloud sync) with it. Until then the drawn glyph
         // holds the space, so rows never shift when it lands.
@@ -495,7 +513,6 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
             glyph::File(r, icon, nameColor.alpha(nameColor.a * 0.85f));
         }
 
-        RectF nameBox = { icon.r + 6.0f, row.t, colName.r, row.b };
         r.DrawText(e.name, nameBox, nameColor, FontRole::Ui, TextAlign::Left);
 
         if (wide && colExt.w() > 0.0f) {
@@ -519,6 +536,15 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
         Add(row, Hit::ListRow, i, pane);
     }
     r.PopClip();
+
+    // A folder holding nothing still lists ".."; say so under it rather than
+    // leaving the pane looking like it failed to load.
+    if (tab->ItemCount() == 0) {
+        const float top = body.t + rowH;
+        r.DrawText(str.Get(tab->filter.empty() ? "ui.empty" : "ui.no_match"),
+                   { body.l + kPad, top + 8.0f, body.r - kPad, body.b }, th.textDim, FontRole::Ui,
+                   TextAlign::Left);
+    }
 
     // --- scrollbar ---
     if (maxScroll > 0.0f) {
@@ -544,7 +570,7 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
     Tab* tab = app_.workspace().focusedTab();
     std::string left;
     if (tab) {
-        left = str.Format("ui.status_items", { std::to_string(tab->visible.size()) });
+        left = str.Format("ui.status_items", { std::to_string(tab->ItemCount()) });
         const int marked = tab->MarkedCount();
         if (marked > 0) {
             left += "   " + str.Format("ui.status_selected",
@@ -804,23 +830,31 @@ bool AppUi::HandleListClick(const Region& region, const MouseEvent& e) {
     }
 
     const int entry = tab->visible[index];
+    if (entry == Tab::kParentRow) {
+        // ".." cannot be marked, so no modifier adds anything here. An unmodified
+        // click still drops the selection the way clicking any other row does:
+        // otherwise the menu, or a drag started here, would act on files the
+        // pointer has long since left.
+        if ((e.mods & (kModCtrl | kModShift)) == 0) tab->ClearMarks();
+        tab->cursor = index;
+        tab->ResetAnchor();
+        app_.EnsureCursorVisible();
+        app_.host().Invalidate();
+        return true;
+    }
     if (e.mods & kModCtrl) {
         tab->marked[entry] = tab->marked[entry] ? 0 : 1;
         tab->cursor = index;
-        tab->anchor = index;
+        tab->ResetAnchor();
     } else if (e.mods & kModShift) {
-        tab->ClearMarks();
-        tab->MarkRange(tab->anchor, index, true);
-        tab->cursor = index;
+        tab->ExtendTo(index);
     } else {
         // A right-click on an unmarked row selects it first, so the shell menu
         // acts on what the user is pointing at.
         const bool keep = (e.button == 1) && tab->marked[entry];
-        if (!keep) {
-            tab->ClearMarks();
-            tab->anchor = index;
-        }
+        if (!keep) tab->ClearMarks();
         tab->cursor = index;
+        tab->ResetAnchor();
     }
     app_.EnsureCursorVisible();
     app_.host().Invalidate();
@@ -916,12 +950,15 @@ std::string AppUi::DropTargetAt(float x, float y) const {
     const Tab* tab = region->pane->activeTab();
     if (!tab) return {};
 
-    if (region->kind == Hit::ListRow && region->index >= 0 &&
-        region->index < static_cast<int>(tab->visible.size())) {
-        const fs::Entry& entry = tab->listing.entries[tab->visible[region->index]];
+    if (region->kind == Hit::ListRow) {
+        // Dropping onto ".." moves things up a level - the one direction the
+        // list itself cannot offer as a target.
+        if (tab->IsParentRow(region->index)) return path::Parent(tab->path);
         // Only a folder swallows the drop; over a file it goes to the folder
         // being listed, which is what every file manager does.
-        if (entry.isDir()) return path::Join(tab->path, entry.name);
+        if (const fs::Entry* entry = tab->EntryAt(region->index)) {
+            if (entry->isDir()) return path::Join(tab->path, entry->name);
+        }
     }
     return tab->path;
 }
@@ -1179,13 +1216,15 @@ bool AppUi::OnMouse(const MouseEvent& e) {
 
         case Hit::ListBackground:
             app_.FocusPane(region->pane);
+            if (Tab* t = region->pane->activeTab()) t->ClearMarks();
             if (e.button == 1) {
-                if (Tab* t = region->pane->activeTab()) t->ClearMarks();
                 app_.ShowContextMenuAt(e.screenX, e.screenY, (e.mods & kModShift) == 0);
-            } else if (Tab* t = region->pane->activeTab()) {
-                t->ClearMarks();
-                app_.host().Invalidate();
+            } else if (e.button == 0 && e.clicks >= 2) {
+                // Double-clicking past the last row goes up, the way it does in
+                // every file manager that has ever offered it.
+                app_.Execute(Cmd::GoUp);
             }
+            app_.host().Invalidate();
             return true;
 
         default:

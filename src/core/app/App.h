@@ -223,6 +223,7 @@ public:
     /// @brief 一覧の項目を開く。フォルダなら移動、ファイルならシェルに委ねる。
     /// @param[in] visibleIndex 開く項目。Tab::visible への添字
     /// @param[in] newTab true なら新しいタブで開く（フォルダのみ）
+    /// @note 「..」行なら親フォルダへ移動する
     void ActivateEntry(int visibleIndex, bool newTab);
 
     /// @brief カーソルが画面内に入るようスクロール量を調整する。
@@ -300,6 +301,7 @@ private:
     void EnsureVisibleTabsLoaded();
     void RefreshTabsShowing(const std::string& dir);
 
+    void NavigateToParent(bool newTab);
     void MoveCursor(int delta, bool extend, bool absolute = false);
     void ApplyPrompt();
     void CancelPrompt();
