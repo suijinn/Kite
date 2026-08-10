@@ -164,6 +164,15 @@ void WinWindow::SetCursorShape(int shape) {
                                                                : IDC_ARROW));
 }
 
+bool WinWindow::ClientToScreen(float x, float y, int& screenX, int& screenY) {
+    if (!hwnd_) return false;
+    POINT pt{ std::lround(x * dpiScale_), std::lround(y * dpiScale_) };
+    if (!::ClientToScreen(hwnd_, &pt)) return false;
+    screenX = pt.x;
+    screenY = pt.y;
+    return true;
+}
+
 void WinWindow::Wake() {
     // Called from DirectoryLoader worker threads.
     if (hwnd_) ::PostMessageW(hwnd_, WM_KITE_WAKE, 0, 0);
@@ -196,6 +205,12 @@ void WinWindow::Paint() {
         ::InvalidateRect(hwnd_, nullptr, FALSE);
         return;
     }
+
+    // The paint just decided which rows are on screen, and that is what queues
+    // icon requests; they go out on the next Pump. Without asking for that frame
+    // here, a folder opened from the keyboard keeps its fallback glyphs until
+    // the user happens to move the mouse.
+    if (icons_ && icons_->hasPendingRequests()) ::InvalidateRect(hwnd_, nullptr, FALSE);
 
     const PointF caret = ui_->caretPosition();
     imeCaret_ = caret;

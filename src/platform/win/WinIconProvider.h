@@ -44,10 +44,22 @@ public:
     /// @copydoc IIconProvider::IconFor
     uint32_t IconFor(const std::string& path) override;
 
+    /// @copydoc IIconProvider::Invalidate
+    void Invalidate() override;
+
     /// @brief 要求の送出と結果の取り込みを行う。
     /// @param[in,out] renderer ビットマップの渡し先
     /// @note 描画の直前に UI スレッドから呼ぶこと
     void Pump(D2DRenderer& renderer);
+
+    /// @brief まだ送っていない要求が残っているかを返す。
+    /// @return 送信待ちのパスがあれば true
+    /// @note 要求が積まれるのは描画中（行ごとの IconFor()）、送られるのは次の
+    ///       Pump()。呼び出し側は描画の後にこれを見て、もう 1 フレーム要求する
+    ///       こと。さもないと最初の 1 回が送られず、利用者が何か操作して再描画が
+    ///       起きるまでアイコンが出ない
+    /// @note UI スレッドからのみ呼ぶこと
+    bool hasPendingRequests() const { return cache_.pendingCount() > 0; }
 
     /// @brief アイコンの 1 辺のピクセル数を設定する。
     /// @param[in] pixels 希望する寸法。行の高さと DPI から決める
@@ -69,6 +81,15 @@ private:
     std::vector<shellhost::IconImage> images_;          ///< 未アップロードの画素
     bool stop_ = false;
     bool failed_ = false;                               ///< 直前のバッチが失敗した
+
+    /// 応答したホストの世代番号。0 はまだ一度も応答が無い状態。
+    ///
+    /// ホストは識別子を接続ごとに 1 から振り直すので、これが変わった時点で
+    /// 手元の対応表は全部別の絵を指している。放っておくと、待っている間に
+    /// アイドルで終了したホストの後始末として、画面に出ている行のアイコンが
+    /// 静かに入れ替わる。
+    unsigned generation_ = 0;
+    bool stale_ = false;                                ///< 世代が変わり、破棄が要る
 
     std::unordered_map<uint32_t, shellhost::IconImage> pixels_;  ///< 再アップロード用
     uint32_t pixelSize_ = 16;

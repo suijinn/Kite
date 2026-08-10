@@ -235,11 +235,18 @@ public:
     /// @brief フォーカス中のタブを再列挙する。
     void RefreshFocused();
 
-    /// @brief シェルのコンテキストメニューを表示する。
+    /// @brief 選択中の項目に対してシェルのコンテキストメニューを表示する。
     /// @param[in] screenX 表示位置の X（スクリーン座標）。負ならカーソル位置
     /// @param[in] screenY 表示位置の Y（スクリーン座標）。負ならカーソル位置
     /// @param[in] extended true なら拡張メニューを最初から出す
+    /// @note 選択が空なら、代わりに表示中のフォルダ自身を対象にする
     void ShowContextMenuAt(int screenX, int screenY, bool extended);
+
+    /// @brief 表示中のフォルダに対してシェルのコンテキストメニューを表示する。
+    /// @param[in] extended true なら拡張メニューを最初から出す
+    /// @note 選択の有無にかかわらずフォルダ自身が対象。表示位置はカーソル行に
+    ///       合わせる（CursorRowAnchor()）
+    void ShowFolderContextMenu(bool extended);
 
     /// @brief ブックマークの登録と解除を切り替える。
     /// @param[in] path 対象のパス
@@ -298,6 +305,10 @@ private:
     void CancelPrompt();
     void BeginPrompt(PromptKind kind, const char* labelKey, const std::string& initial);
     bool HandlePromptKey(const Chord& chord);
+
+    void ShowShellMenu(const std::vector<std::string>& paths, int screenX, int screenY,
+                       bool extended);
+    bool CursorRowAnchor(int& screenX, int& screenY);
 
     void GotoTab(int index);
     void GotoSession(int index);

@@ -352,6 +352,11 @@ bool D2DRenderer::UploadIcon(uint32_t iconId, uint32_t width, uint32_t height,
     return true;
 }
 
+void D2DRenderer::ClearIcons() {
+    for (auto& [id, bitmap] : icons_) SafeRelease(bitmap);
+    icons_.clear();
+}
+
 void D2DRenderer::DrawIcon(uint32_t iconId, const RectF& box) {
     if (!drawing_ || iconId == 0 || box.empty()) return;
     auto it = icons_.find(iconId);

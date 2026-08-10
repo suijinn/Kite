@@ -155,6 +155,7 @@ enum class CmdGroup : uint8_t {
     /* --- shell ------------------------------------------------------------- */               \
     X(ContextMenu,        "shell.context_menu",      "cmd.context_menu",       Shell)            \
     X(ExtendedContextMenu,"shell.context_menu_ext",  "cmd.context_menu_ext",   Shell)            \
+    X(FolderContextMenu,  "shell.context_menu_dir",  "cmd.context_menu_dir",   Shell)            \
     X(Properties,         "shell.properties",        "cmd.properties",         Shell)            \
     X(OpenWith,           "shell.open_with",         "cmd.open_with",          Shell)            \
     X(RevealInExplorer,   "shell.reveal",            "cmd.reveal",             Shell)            \

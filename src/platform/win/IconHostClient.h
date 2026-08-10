@@ -36,13 +36,16 @@ public:
     /// @param[in] paths 取得したいパス列。応答は同じ順に並ぶ
     /// @param[in] pixelSize 希望する 1 辺のピクセル数
     /// @param[out] response 取得結果
+    /// @param[out] generation 応答したホストの世代番号
     /// @return 取得できたら true。ホストを起動できない、応答が時間内に来ない、
     ///         表示中にホストが落ちた場合は false
     /// @note 応答待ちには時間制限がある。**これが別プロセスにしている最大の理由**で、
     ///       `SHGetFileInfo` 自体は中断もタイムアウトもできない。オーバーレイ
     ///       ハンドラが返ってこない場合、失うのはそのバッチとホスト 1 つで済む
+    /// @note 識別子はホストが接続ごとに 1 から振り直す。`generation` が前回と
+    ///       違っていたら、覚えている識別子はすべて別の絵を指している
     bool Fetch(const std::vector<std::string>& paths, uint32_t pixelSize,
-               shellhost::IconResponse& response);
+               shellhost::IconResponse& response, unsigned& generation);
 
     /// @brief ホストを終了させる。
     /// @note 次の Fetch() で黙って起動し直す

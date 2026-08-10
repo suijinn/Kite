@@ -9,14 +9,17 @@ uint32_t IconCache::Lookup(const std::string& path) {
 
     Entry& entry = entries_[path];
     entry.used = ++tick_;
-    if (entry.resolved) return entry.iconId;
-
-    if (!entry.inFlight) {
+    if (!entry.resolved && !entry.inFlight) {
         entry.inFlight = true;
         pending_.push_back(path);
+        // Only an unresolved entry can have been inserted just now, so this is
+        // the one place the table can have grown.
+        EvictIfNeeded();
     }
-    EvictIfNeeded();
-    return 0;
+    // An invalidated entry keeps handing back its previous id while the new
+    // answer is on its way. One refresh out of date reads better than every row
+    // flicking back to the fallback glyph and in again.
+    return entry.iconId;
 }
 
 void IconCache::TakePending(std::vector<std::string>& out, size_t max) {
@@ -51,6 +54,23 @@ void IconCache::Reset(const std::vector<std::string>& paths) {
 void IconCache::Clear() {
     entries_.clear();
     pending_.clear();
+}
+
+void IconCache::Invalidate() {
+    for (auto& [path, entry] : entries_) {
+        // A request already with the host keeps its place in the queue. Asking
+        // again would only put the same path in twice, and the answer it is
+        // waiting for is at most a few hundred milliseconds old.
+        if (!entry.inFlight) entry.resolved = false;
+    }
+}
+
+void IconCache::Forget() {
+    for (auto& [path, entry] : entries_) {
+        if (entry.inFlight) continue;
+        entry.resolved = false;
+        entry.iconId = 0;
+    }
 }
 
 void IconCache::SetCapacity(size_t capacity) {

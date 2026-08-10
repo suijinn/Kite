@@ -422,6 +422,7 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
     pane->listHeight = body.h();
     pane->rowHeight = th.rowHeight;
     pane->rowsPerPage = std::max(1, static_cast<int>(body.h() / th.rowHeight) - 1);
+    pane->listArea = body;
 
     if (tab->loadToken != 0 && !tab->loaded) {
         r.DrawText(str.Get("ui.loading"), body.inset(kPad, 8.0f), th.textDim, FontRole::Ui,

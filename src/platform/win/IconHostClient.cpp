@@ -14,11 +14,14 @@ constexpr DWORD kFetchTimeoutMs = 8000;
 }  // namespace
 
 bool IconHostClient::Fetch(const std::vector<std::string>& paths, uint32_t pixelSize,
-                           shellhost::IconResponse& response) {
+                           shellhost::IconResponse& response, unsigned& generation) {
     if (paths.empty()) return false;
     // No pump: this runs on a worker thread that owns no windows, so there is
     // nothing to keep painting while it waits.
     if (!host_.Ensure(nullptr, nullptr)) return false;
+    // Read after Ensure: a host that had exited on its idle timer is replaced
+    // there, and the replacement hands out ids starting from 1 again.
+    generation = host_.generation();
 
     shellhost::IconRequest request;
     request.paths = paths;
