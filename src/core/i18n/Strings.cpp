@@ -166,6 +166,7 @@ const Row kEn[] = {
     { "ui.drop_copy", "Copy to {0}" },
     { "ui.drop_move", "Move to {0}" },
     { "ui.watching_off", "Auto-refresh unavailable for this location" },
+    { "ui.shell_menu_failed", "The shell menu could not be shown" },
 };
 
 const Row kJa[] = {
@@ -321,6 +322,7 @@ const Row kJa[] = {
     { "ui.drop_copy", "{0} にコピー" },
     { "ui.drop_move", "{0} に移動" },
     { "ui.watching_off", "この場所は自動更新できません" },
+    { "ui.shell_menu_failed", "シェルメニューを表示できませんでした" },
 };
 
 }  // namespace

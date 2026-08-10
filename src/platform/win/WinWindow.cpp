@@ -305,12 +305,9 @@ LRESULT CALLBACK WinWindow::WindowProc(HWND hwnd, UINT message, WPARAM wparam, L
         self = reinterpret_cast<WinWindow*>(::GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     }
 
-    // Owner-drawn shell extension menus need these relayed before anything else.
-    LRESULT shellResult = 0;
-    if (ForwardContextMenuMessage(hwnd, message, wparam, lparam, &shellResult)) {
-        return shellResult;
-    }
-
+    // No shell-menu relay here on purpose. Owner-drawn menu items are drawn by
+    // the extension that owns them, inside kite_shellhost.exe, against that
+    // process's own window. This one never talks to an IContextMenu.
     if (!self) return ::DefWindowProcW(hwnd, message, wparam, lparam);
     return self->Handle(message, wparam, lparam);
 }

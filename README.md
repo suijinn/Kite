@@ -113,9 +113,12 @@ src/
   platform/win/  Windows ヘッダが現れる唯一の場所
     D2DRenderer   Direct2D 1.1 + DXGI スワップチェーン
     WinFileSystem Win32 API による列挙とファイル操作
-    WinShell      IContextMenu / クリップボード / ShellExecute
+    WinShell      クリップボード / ShellExecute
     WinWindow     HWND・メッセージループ・入力変換（IHost 実装）
     WinPlatform   ファイル入出力・時刻・UI 言語
+    ShellHostClient  コンテキストメニューを別プロセスへ依頼する側
+    ShellMenu     IContextMenu 本体。kite_shellhost.exe だけがリンクする
+tools/shellhost/ kite_shellhost.exe。他人のコードが動く唯一のプロセス
 ```
 
 **別 OS へ移すときに書くもの**は `platform/` 配下だけ。具体的には
@@ -144,6 +147,14 @@ src/
 **アイコンはシェルに問い合わせずベクタ描画。** `SHGetFileInfo` は 1 行ごとにシェル
 （つまりクラウドプロバイダ）を叩き、まさに Kite が避けたい起動コストとストールを生む。
 将来、非同期でのシェルアイコン取得を同じ呼び出し位置に足せる。
+
+**シェル拡張は別プロセスで動かす。** コンテキストメニューの構築・表示・実行は
+`kite_shellhost.exe` が担う。Kite 本体は「パス群と画面座標」をパイプで送り、
+「実行したか」だけを受け取る。Box / Google Drive / 7-Zip / TortoiseGit などの
+`IContextMenu` ハンドラが確保したメモリを壊しても、裏でスレッドを立てて落ちても、
+失われるのはメニュー 1 回分とホストプロセスだけ。次の右クリックで黙って起動し直す。
+ホストは最初のメニュー要求で初めて起動し（起動パスに COM を置かないため）、
+しばらく使われなければ自分で終了して拡張 DLL の分のメモリを返す。
 
 **描画は Direct2D 1.1 + DXGI フリップスワップチェーン。** 最初は素朴に
 `ID2D1HwndRenderTarget` を使ったが、開発機（Intel Iris Xe）では `EndDraw` が S_OK を
@@ -194,10 +205,6 @@ Windows 8 以降の推奨経路である D3D11 → `ID2D1Device` → `ID2D1Devic
 
 直近の最重要項目だけ挙げると:
 
-- **シェル拡張の別プロセス隔離**。現在 `IContextMenu` は自プロセスで動く。SEH で
-  ガードしてあるが、Box / Google Drive 等の拡張が落ちれば道連れになりうる。
-  `IShellIntegration` の境界はパスと座標しか渡さない形にしてあるので、
-  `kite_shellhost.exe` 化してもインターフェースは変わらない。
 - 単一インスタンス化（既存ウィンドウの新規タブで開く）
 - 「PC」「ごみ箱」「ネットワーク」等の仮想フォルダ
 - 検索、サムネイル、コマンドパレット

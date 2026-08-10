@@ -14,12 +14,9 @@ namespace kite {
 ///
 /// 実装は platform/win/WinShell.cpp。
 ///
-/// @note ShowContextMenu() は現状サードパーティのシェル拡張 DLL を自プロセスに
-///       読み込む。Box / Google Drive / Dropbox の拡張はクラッシュ源として
-///       知られているため、別プロセス（kite_shellhost.exe）へ追い出す計画がある。
-///       この境界がパスと画面座標しか渡さないのはそのため。移行してもインター
-///       フェースは変わらない
-/// @todo コンテキストメニューの実行を別プロセスへ隔離する（docs/ROADMAP.md の P1-1）
+/// @note ShowContextMenu() はサードパーティのシェル拡張 DLL を動かすが、それは
+///       別プロセス（kite_shellhost.exe）の中で起きる。この境界がパスと画面座標
+///       しか渡さないのはそのためで、隔離の前後でインターフェースは変わっていない
 class IShellIntegration {
 public:
     virtual ~IShellIntegration() = default;
@@ -30,7 +27,11 @@ public:
     /// @param[in] screenY 表示位置の Y 座標（スクリーン座標）。負ならカーソル位置
     /// @param[in] extended true なら Windows 11 の「その他のオプション」に相当する
     ///            拡張メニューを最初から表示する
-    virtual void ShowContextMenu(const std::vector<std::string>& paths, int screenX, int screenY,
+    /// @return メニューを表示できたら true。何も選ばれずに閉じた場合も true。
+    ///         メニューを出せなかった場合（別プロセスのホストを起動できない、
+    ///         表示中にホストが落ちた、など）は false
+    /// @note メニューが閉じるまで戻らない
+    virtual bool ShowContextMenu(const std::vector<std::string>& paths, int screenX, int screenY,
                                  bool extended) = 0;
 
     /// @brief 既定の関連付けでパスを開く。
