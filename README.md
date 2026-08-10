@@ -1,5 +1,7 @@
 # Kite
 
+[![ci](https://github.com/suijinn/Kite/actions/workflows/ci.yml/badge.svg)](https://github.com/suijinn/Kite/actions/workflows/ci.yml)
+
 Windows エクスプローラーの代替を目指す、C++ 製の軽量ファイラー。
 
 名前は「凧」から。軽く、速く、風向きが変わればすぐ向きを変える。菱形のシルエットは
@@ -10,6 +12,19 @@ Windows エクスプローラーの代替を目指す、C++ 製の軽量ファ�
 メニュー）は実際に動作する。
 
 ---
+
+## ダウンロード
+
+[Releases](https://github.com/suijinn/Kite/releases/latest) の
+`kite-vx.y.z-win-x64.zip`。展開して、中の 2 つを**同じフォルダのまま**置く。
+
+| ファイル | 役割 |
+| --- | --- |
+| `kite.exe` | 本体。インストール不要、CRT は静的リンク |
+| `kite_shellhost.exe` | サードパーティのシェル拡張（コンテキストメニューとアイコンオーバーレイ）を動かす別プロセス |
+
+`kite.exe` はホストを**自分と同じフォルダから**起動する。片方だけを移すと右クリックで
+「シェルメニューを表示できませんでした」になる。
 
 ## ビルド
 
@@ -30,7 +45,9 @@ cmake --build --preset release
 ctest --preset release
 ```
 
-出力は `build\release\kite.exe`。CRT を静的リンクしているので、この 1 ファイルだけで動く。
+出力は `build\release\` に `kite.exe`・`kite_shellhost.exe`・`kite_tests.exe`。CRT は
+静的リンクなので再頒布パッケージは要らないが、`kite.exe` は同じフォルダの
+`kite_shellhost.exe` を探すので、この 2 つは離さないこと。
 `debug` プリセットも同じ 3 コマンドで使える。
 
 開発者プロンプトでない普通の PowerShell からは、MSVC 環境を自前で読み込む

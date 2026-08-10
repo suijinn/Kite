@@ -7,6 +7,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(KITE_BUILD_TESTS "Build the unit tests" ON)
 
+# CI-only switch, off by default. The rule is zero warnings under /W4, but a
+# warning cannot fail a build by itself, so ci.yml configures with
+# -DKITE_WERROR=ON to make them errors. Locally it stays off: a new warning
+# should be readable in the log, not a wall across whatever you were building.
+option(KITE_WERROR "Treat compiler warnings as errors (used by CI)" OFF)
+
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
@@ -32,6 +38,9 @@ if(MSVC)
     target_compile_options(kite_options INTERFACE
         /W4 /permissive- /utf-8 /Zc:__cplusplus /EHsc
     )
+    if(KITE_WERROR)
+        target_compile_options(kite_options INTERFACE /WX)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
