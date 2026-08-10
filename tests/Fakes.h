@@ -174,10 +174,14 @@ public:
     bool clipboardCut = false;
     int contextMenuCalls = 0;
     bool lastContextMenuExtended = false;
+    // Set to false to act like a shell host that could not be started, or one
+    // that died with a faulting extension inside it.
+    bool contextMenuShown = true;
 
-    void ShowContextMenu(const std::vector<std::string>&, int, int, bool extended) override {
+    bool ShowContextMenu(const std::vector<std::string>&, int, int, bool extended) override {
         ++contextMenuCalls;
         lastContextMenuExtended = extended;
+        return contextMenuShown;
     }
     bool Open(const std::string& path) override {
         opened.push_back(path);

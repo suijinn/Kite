@@ -67,6 +67,8 @@ target_link_libraries(kite_core PUBLIC kite_options)
 add_executable(kite WIN32
     src/main_win.cpp
     src/platform/win/D2DRenderer.cpp
+    src/platform/win/ShellHostClient.cpp
+    src/platform/win/ShellPipe.cpp
     src/platform/win/WinDirectoryWatcher.cpp
     src/platform/win/WinDropTarget.cpp
     src/platform/win/WinFileSystem.cpp
@@ -100,10 +102,53 @@ if(MSVC)
     )
 endif()
 
+# ---------------------------------------------------------------------------
+# kite_shellhost - the process that runs other people's code
+#
+# Third-party shell extensions (Box, Google Drive, 7-Zip, TortoiseGit ...) are
+# instantiated here and nowhere else, so one of them faulting costs a context
+# menu instead of the file manager. ShellMenu.cpp is the IContextMenu code and
+# must stay out of the kite target: linking it there would put the extensions
+# back in Kite's address space, which is the whole thing this avoids.
+#
+# It does not link kite_core. Nothing in core/ or ui/ is involved in showing a
+# menu, and keeping the host down to three translation units keeps its start-up
+# - which the first right-click waits on - short.
+# ---------------------------------------------------------------------------
+add_executable(kite_shellhost WIN32
+    tools/shellhost/main.cpp
+    src/platform/win/ShellMenu.cpp
+    src/platform/win/ShellPipe.cpp
+    src/platform/win/WinUtf.cpp
+)
+
+target_link_libraries(kite_shellhost PRIVATE
+    kite_options
+    shlwapi
+    shell32
+    ole32
+    oleaut32
+    user32
+    gdi32
+)
+
+if(MSVC)
+    target_link_options(kite_shellhost PRIVATE
+        $<$<CONFIG:Release>:/OPT:REF>
+        $<$<CONFIG:Release>:/OPT:ICF>
+    )
+endif()
+
+# kite.exe looks for the host next to itself, so they have to land in the same
+# directory whatever the generator would have done by default.
+set_target_properties(kite kite_shellhost PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+
 get_target_property(KITE_CORE_SOURCES kite_core SOURCES)
 get_target_property(KITE_APP_SOURCES kite SOURCES)
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/src FILES
-    ${KITE_CORE_SOURCES} ${KITE_APP_SOURCES})
+get_target_property(KITE_HOST_SOURCES kite_shellhost SOURCES)
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES
+    ${KITE_CORE_SOURCES} ${KITE_APP_SOURCES} ${KITE_HOST_SOURCES})
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -126,12 +171,13 @@ if(KITE_BUILD_TESTS)
         tests/test_session.cpp
         tests/test_app.cpp
         tests/test_dropcheck.cpp
+        tests/test_shellproto.cpp
     )
     target_link_libraries(kite_tests PRIVATE kite_core)
 
     # One CTest entry per suite so a failure names the area straight away.
     set(KITE_TEST_SUITES
-        utf8 path ini format strings keymap theme tab workspace session app drop)
+        utf8 path ini format strings keymap theme tab workspace session app drop shellproto)
 
     foreach(suite IN LISTS KITE_TEST_SUITES)
         add_test(NAME ${suite} COMMAND kite_tests --filter ${suite}.)

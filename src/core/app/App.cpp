@@ -561,7 +561,13 @@ void App::ShowContextMenuAt(int screenX, int screenY, bool extended) {
     if (!t) return;
     std::vector<std::string> paths = t->SelectionPaths();
     if (paths.empty()) paths.push_back(t->path);
-    shell_.ShowContextMenu(paths, screenX, screenY, extended);
+    if (!shell_.ShowContextMenu(paths, screenX, screenY, extended)) {
+        // The menu runs in a separate process; losing it means that process
+        // could not be started, or a shell extension took it down. Say so rather
+        // than letting a right-click look like it did nothing.
+        SetStatus(strings_.Get("ui.shell_menu_failed"));
+        return;
+    }
     // The menu may have renamed, deleted or created something.
     RefreshFocused();
 }

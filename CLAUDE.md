@@ -16,8 +16,12 @@ cmake --build --preset release
 ctest --preset release
 ```
 
-生成物は `build/release/kite.exe` と `build/release/kite_tests.exe`。
+生成物は `build/release/` に `kite.exe`、`kite_shellhost.exe`、`kite_tests.exe`。
 同じ 3 コマンドで使える `debug` プリセットもある。
+
+`kite.exe` は `kite_shellhost.exe` を**自分と同じフォルダから**起動する。片方だけを
+別の場所へコピーするとコンテキストメニューが出なくなる（「シェルメニューを表示
+できませんでした」と出る）。
 
 開発者プロンプトでない普通の PowerShell からは、MSVC 環境を自前で読み込む
 `build.ps1` を使う。
@@ -44,11 +48,17 @@ src/core/       OS 呼び出しを一切行わない。例外は core/base/Platf
 src/ui/         レイアウト・描画・ヒットテスト・ドラッグ処理。描画は抽象 ui::Renderer
                 経由のみ。
 src/platform/   Windows ヘッダが現れる唯一の場所。
+tools/shellhost/ kite_shellhost.exe。サードパーティのシェル拡張が動く唯一のプロセス。
 tests/          kite_core だけをリンクする。OS 非依存であるべき core/ ui/ に Windows
                 ヘッダが紛れ込めばテストのビルドが壊れる。これが分離の防波堤。
 ```
 
-CMake ターゲットとしては `kite_core` = `core/` + `ui/`、`kite` = `kite_core` + `platform/`。
+CMake ターゲットは 3 つ。`kite_core` = `core/` + `ui/`、`kite` = `kite_core` +
+`platform/`（`ShellMenu.cpp` を除く）、`kite_shellhost` = `tools/shellhost/` +
+`ShellMenu.cpp` + `ShellPipe.cpp` + `WinUtf.cpp`。
+
+**`ShellMenu.cpp` を `kite` ターゲットに足してはならない。** これが `IContextMenu` を
+触る唯一のファイルであり、`kite.exe` にリンクした時点で隔離の意味が消える。
 
 他 OS へ移植する際に実装するのは以下だけで、それ以外は書き換えない:
 
@@ -83,6 +93,43 @@ Tab       -> パス + 一覧 + 表示状態 + 履歴
 ディレクトリ列挙は UI スレッドで絶対に動かさない。冷えたネットワーク共有は 1 回の
 `FindFirstFile` で数秒ブロックする。リクエストは `DirectoryLoader` を通り、結果は
 `IHost::Wake()` の後に `App::PumpLoader` が回収する。
+
+### シェル拡張の隔離
+
+コンテキストメニューだけは自プロセスで処理しない。
+
+```
+kite.exe                                  kite_shellhost.exe
+  App::ShowContextMenuAt
+  → WinShell::ShowContextMenu
+    → ShellHostClient  ── 名前付きパイプ ──→  ReadPipeFrame
+                                              ShowShellContextMenu
+                                                QueryContextMenu
+                                                TrackPopupMenu
+                                                InvokeCommand
+       応答（出せた／実行した／失敗） ←───────  WritePipeFrame
+```
+
+送るのはパスと画面座標だけ、受け取るのは結果の種別だけ。書式は
+`platform/win/ShellMenuProtocol.h`（Windows 非依存。`tests/test_shellproto.cpp` が
+直接検証している）。
+
+知っておくべき点:
+
+- **メニューが閉じるまで `ShowContextMenu` は戻らない。** ただし待っている間も
+  `ShellPipe` が呼び出し側のメッセージを回すので、ウィンドウは再描画され続ける。
+  クライアント領域への入力だけは捨てる（同一プロセスの `TrackPopupMenu` と同じ挙動）。
+  `WM_APP` 以降は**あえて捨てずキューに残す** ─ 列挙完了通知をここで処理すると
+  `App::ShowContextMenuAt` の内側から `App` に再入する。
+- **ホストは最初のメニュー要求で起動する。** 起動パスに COM を置かない方針のため。
+  一定時間使われなければ自分で終了し、拡張 DLL の分のメモリを返す。落ちた場合と
+  区別せず、次の要求で黙って起動し直す。
+- **ダイアログの親は Kite 本体のウィンドウ。** `TrackPopupMenu` はホストの隠し
+  ウィンドウ（呼び出しスレッド所有が必須）だが、`InvokeCommand` に渡す `hwnd` は
+  Kite 側にしている。隠しウィンドウを親にすると削除の確認や進捗が背後に回る。
+- **ホストはジョブオブジェクトに入れる。** Kite が強制終了されても道連れにするため。
+  ただし `SILENT_BREAKAWAY_OK` 付き ─ メニューが起動したプロセス（7-Zip の展開など）
+  までジョブに入れてしまうと、Kite 終了時に一緒に殺してしまう。
 
 ## 追加のしかた
 
@@ -206,16 +253,28 @@ build/release/kite_tests.exe --filter app.   # 1 スイートだけ回す
 - **シェルアイコンは意図的に使っていない**。`SHGetFileInfo` は 1 行ごとにシェル（つまり
   クラウドプロバイダ）を呼ぶ。アイコンは `ui/Glyphs.cpp` でベクタ描画している。
 - **`OleInitialize` は 100 ms 以上かかる**。ドラッグ＆ドロップの登録は初回描画から
-  200 ms 後のタイマーに逃がしてある。起動パスに戻さないこと。
+  200 ms 後のタイマーに逃がしてある。起動パスに戻さないこと。同じ理由で
+  `kite_shellhost.exe` も最初のメニュー要求まで起動しない。
+- **`CMIC_MASK_UNICODE` は `<shellapi.h>` が必要**。実体は `SEE_MASK_UNICODE` で、
+  `<shlobj.h>` だけでは「定義されていない識別子」になる。
+- **`MsgWaitForMultipleObjects` に `MWMO_INPUTAVAILABLE` を足すと暴走しうる**。
+  キューに残したままのメッセージがあると毎回即座に返るため、意図的に処理しない
+  メッセージがある待機ループでは 100 % CPU になる。`ShellPipe.cpp` はこのフラグを
+  使わず、代わりに 100 ms ごとに自力で起きる。
+- **ジョブオブジェクトは子孫まで巻き込む**。`KILL_ON_JOB_CLOSE` だけを付けると、
+  シェルメニューが起動したプロセス（7-Zip の展開など）も Kite 終了時に殺される。
+  `SILENT_BREAKAWAY_OK` を必ず併せて指定する。
 - **テストマクロはオペランドをコピーする**。`KITE_EXPECT_EQ` は `auto&&` ではなく
   `const auto` を使う。生存期間延長はメンバ呼び出しを貫通しないため、
   `container().front()` を参照で束縛するとダングリングし、比較が静かに壊れる。
 
 ## 現時点の弱点
 
-- `IContextMenu` のハンドラは**まだ自プロセス内で動く**。SEH でガードしてあるが、
-  Box や Google Drive の拡張がフォールトすればアプリごと落ちうる。対策は
-  `kite_shellhost.exe` への切り出し。`IShellIntegration` の境界はパスと画面座標しか
-  渡さない形にしてあるので、インターフェースは変わらない。
+- メニューを開いている間、Kite のタイトルバーは非アクティブ表示になる。前景を
+  取るのはホストの隠しウィンドウなので避けられない。メニューが閉じれば戻る。
+- ホストが応答しなくなった場合（拡張がフォールトではなくデッドロックした場合）、
+  待機は終わらない。ウィンドウは再描画され続け、タイトルバーの × で閉じられるが、
+  クライアント領域は反応しない。タイムアウトを入れていないのは、開いたままの
+  メニューを勝手に消す方が実害が大きいと判断したため。
 - サムネイル・検索・仮想フォルダ（ZIP、「PC」、ごみ箱）は未実装。
 - キーシーケンスは 1 打鍵のみ。`Chord` は 2 打鍵に拡張できる形にしてある。

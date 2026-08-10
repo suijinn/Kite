@@ -395,6 +395,23 @@ KITE_TEST(app, the_extended_context_menu_is_a_distinct_command) {
     KITE_EXPECT_EQ(h.shell.contextMenuCalls, 2);
 }
 
+KITE_TEST(app, a_shell_menu_that_cannot_be_shown_is_reported) {
+    // The menu lives in another process now, so "it did not open" is a state the
+    // user has to be told about instead of a right-click that does nothing.
+    Harness h;
+    h.shell.contextMenuShown = false;
+    h.app.Execute(Cmd::ContextMenu);
+
+    KITE_EXPECT_EQ(h.shell.contextMenuCalls, 1);
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.shell_menu_failed"));
+}
+
+KITE_TEST(app, a_shell_menu_that_was_shown_leaves_no_error_behind) {
+    Harness h;
+    h.app.Execute(Cmd::ContextMenu);
+    KITE_EXPECT_NE(h.app.statusMessage(), h.app.strings().Get("ui.shell_menu_failed"));
+}
+
 KITE_TEST(app, theme_and_language_can_be_toggled_at_runtime) {
     Harness h;
     KITE_EXPECT(h.app.theme().dark);
