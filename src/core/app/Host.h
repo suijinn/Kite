@@ -27,6 +27,10 @@ public:
     /// @param[in] screenY 表示位置の Y 座標（スクリーン座標）。負ならカーソル位置
     /// @param[in] extended true なら Windows 11 の「その他のオプション」に相当する
     ///            拡張メニューを最初から表示する
+    /// @param[in] background true なら `paths` の先頭をフォルダとみなし、その中の余白を
+    ///            右クリックしたときのメニューを出す。false なら項目のメニュー。
+    ///            **同じフォルダでも中身は別物**で、項目側にはそのフォルダを対象に
+    ///            する動詞（「ここにクローン」など）が並ぶ
     /// @param[in] dark true ならダークテーマでメニューを描く。OS の設定ではなく
     ///            Kite 自身のテーマを渡すこと
     /// @return メニューを表示できたら true。何も選ばれずに閉じた場合も true。
@@ -34,7 +38,7 @@ public:
     ///         表示中にホストが落ちた、など）は false
     /// @note メニューが閉じるまで戻らない
     virtual bool ShowContextMenu(const std::vector<std::string>& paths, int screenX, int screenY,
-                                 bool extended, bool dark) = 0;
+                                 bool extended, bool background, bool dark) = 0;
 
     /// @brief 既定の関連付けでパスを開く。
     /// @param[in] path 開くファイルまたはフォルダのパス

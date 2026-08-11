@@ -1,0 +1,41 @@
+// ビルドのたびに cmake/GitVersion.cmake が生成する（手編集しないこと）。
+//
+// kite.exe と kite_shellhost.exe の両方がこの 1 枚から作られる。違うのは名前と
+// 説明、そしてアイコンを持つかどうかだけ。
+//
+// 版とコミットの出どころは Version.h と同じ ─ 別々に組み立てると、プロパティ画面と
+// 画面上の表示が食い違う日が必ず来る。
+#include <windows.h>
+
+#include "platform/win/Resources.h"
+
+@KITE_RC_ICON@
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @KITE_VERSION_MAJOR@,@KITE_VERSION_MINOR@,@KITE_VERSION_PATCH@,0
+ PRODUCTVERSION @KITE_VERSION_MAJOR@,@KITE_VERSION_MINOR@,@KITE_VERSION_PATCH@,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        // 040904B0 = 英語 (米国) / Unicode。値そのものが英語なので、日本語環境でも
+        // この 1 ブロックだけを置く（言語ごとに違う文字列を持たせる予定は無い）。
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "@KITE_RC_DESCRIPTION@"
+            VALUE "FileVersion", "@KITE_VERSION@ (@KITE_GIT_COMMIT@)"
+            VALUE "InternalName", "@KITE_RC_NAME@"
+            VALUE "OriginalFilename", "@KITE_RC_NAME@.exe"
+            VALUE "ProductName", "Kite"
+            VALUE "ProductVersion", "@KITE_VERSION@ (@KITE_GIT_COMMIT@)"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

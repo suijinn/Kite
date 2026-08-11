@@ -34,6 +34,7 @@ KITE_TEST(hostproto, a_request_survives_the_round_trip) {
     sent.screenX = 1234;
     sent.screenY = 56;
     sent.extended = true;
+    sent.background = true;
     sent.dark = true;
     sent.ownerWindow = 0x00000001DEADBEEFull;
 
@@ -52,8 +53,27 @@ KITE_TEST(hostproto, a_request_survives_the_round_trip) {
     KITE_EXPECT_EQ(got.screenX, 1234);
     KITE_EXPECT_EQ(got.screenY, 56);
     KITE_EXPECT(got.extended);
+    KITE_EXPECT(got.background);
     KITE_EXPECT(got.dark);
     KITE_EXPECT_EQ(got.ownerWindow, 0x00000001DEADBEEFull);
+}
+
+KITE_TEST(hostproto, the_background_flag_travels_on_its_own) {
+    // Three single bits share this frame. A decoder that reads them in the wrong
+    // order still round-trips whichever one is tested alone, and getting this one
+    // wrong means the host builds a menu from the other shell object entirely.
+    Request sent;
+    sent.paths = { "C:\\home" };
+    sent.extended = false;
+    sent.background = true;
+    sent.dark = false;
+
+    const std::vector<uint8_t> frame = EncodeRequest(sent);
+    Request got;
+    KITE_EXPECT(DecodeRequest(Body(frame), BodySize(frame), got));
+    KITE_EXPECT_FALSE(got.extended);
+    KITE_EXPECT(got.background);
+    KITE_EXPECT_FALSE(got.dark);
 }
 
 KITE_TEST(hostproto, the_theme_flag_travels_independently_of_the_extended_flag) {
@@ -162,6 +182,7 @@ KITE_TEST(hostproto, an_absurd_path_count_is_refused_without_reserving_for_it) {
     detail::PutU32(body, 0);            // screenX
     detail::PutU32(body, 0);            // screenY
     detail::PutU32(body, 0);            // extended
+    detail::PutU32(body, 0);            // background
     detail::PutU32(body, 0);            // dark
     detail::PutU64(body, 0);            // ownerWindow
     detail::PutU32(body, 0xFFFFFFFFu);  // pathCount
@@ -173,6 +194,7 @@ KITE_TEST(hostproto, an_absurd_path_count_is_refused_without_reserving_for_it) {
 KITE_TEST(hostproto, a_path_length_running_past_the_end_is_refused) {
     std::vector<uint8_t> body;
     detail::PutU32(body, static_cast<uint32_t>(MessageKind::Menu));
+    detail::PutU32(body, 0);
     detail::PutU32(body, 0);
     detail::PutU32(body, 0);
     detail::PutU32(body, 0);

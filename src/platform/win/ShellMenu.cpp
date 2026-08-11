@@ -29,6 +29,14 @@ HRESULT GuardedGetUIObjectOf(IShellFolder* parent, HWND owner, UINT count,
     }
 }
 
+HRESULT GuardedCreateViewObject(IShellFolder* folder, HWND owner, void** out) {
+    __try {
+        return folder->CreateViewObject(owner, IID_IContextMenu, out);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return E_FAIL;
+    }
+}
+
 HRESULT GuardedQueryContextMenu(IContextMenu* menu, HMENU hmenu, UINT flags) {
     __try {
         return menu->QueryContextMenu(hmenu, 0, kMenuFirstId, kMenuLastId, flags);
@@ -191,7 +199,7 @@ bool ForwardContextMenuMessage(UINT message, WPARAM wparam, LPARAM lparam, LRESU
 
 shellhost::Result ShowShellContextMenu(HWND menuOwner, HWND dialogOwner,
                                        const std::vector<std::string>& paths, int screenX,
-                                       int screenY, bool extended) {
+                                       int screenY, bool extended, bool background) {
     if (paths.empty() || !menuOwner) return shellhost::Result::Failed;
     if (!dialogOwner || !::IsWindow(dialogOwner)) dialogOwner = menuOwner;
 
@@ -211,33 +219,56 @@ shellhost::Result ShowShellContextMenu(HWND menuOwner, HWND dialogOwner,
     }
     if (absolute.empty()) return shellhost::Result::Failed;
 
-    IShellFolder* parent = nullptr;
-    PCUITEMID_CHILD firstChild = nullptr;
-    if (FAILED(::SHBindToParent(absolute[0], IID_IShellFolder, reinterpret_cast<void**>(&parent),
-                                &firstChild))) {
-        for (PIDLIST_ABSOLUTE pidl : absolute) ::CoTaskMemFree(pidl);
-        return shellhost::Result::Failed;
-    }
-
-    // All selected items share a folder, so their last IDs are valid children
-    // of the parent we just bound.
-    std::vector<PCUITEMID_CHILD> children;
-    children.reserve(absolute.size());
-    for (PIDLIST_ABSOLUTE pidl : absolute) children.push_back(::ILFindLastID(pidl));
-
+    // Two different shell objects answer to "the menu for this folder", and the
+    // choice is what the user ends up reading:
+    //
+    //  - the item menu (GetUIObjectOf on the parent) is what right-clicking the
+    //    folder in its parent's listing gives. Its verbs act *on* the folder, so
+    //    handlers offer things like TortoiseGit's "Git clone" - a folder as a
+    //    destination to clone into, which is wrong for the folder being viewed.
+    //  - the background menu (CreateViewObject on the folder itself) is what
+    //    Explorer shows on empty space inside the folder: New, Paste, and the
+    //    verbs that act *inside* it.
     shellhost::Result result = shellhost::Result::Failed;
+    IShellFolder* parent = nullptr;
     IContextMenu* menu = nullptr;
-    // Handlers are instantiated here, not in QueryContextMenu, so this call is
-    // already third-party code and needs the guard.
-    const HRESULT hr = GuardedGetUIObjectOf(
-        parent, dialogOwner, static_cast<UINT>(children.size()),
-        reinterpret_cast<PCUITEMID_CHILD_ARRAY>(children.data()), reinterpret_cast<void**>(&menu));
+    HRESULT hr = E_FAIL;
+
+    if (background) {
+        IShellFolder* folder = nullptr;
+        hr = ::SHBindToObject(nullptr, absolute[0], nullptr, IID_IShellFolder,
+                              reinterpret_cast<void**>(&folder));
+        if (SUCCEEDED(hr) && folder) {
+            hr = GuardedCreateViewObject(folder, dialogOwner, reinterpret_cast<void**>(&menu));
+            folder->Release();
+        }
+    } else {
+        PCUITEMID_CHILD firstChild = nullptr;
+        if (SUCCEEDED(::SHBindToParent(absolute[0], IID_IShellFolder,
+                                       reinterpret_cast<void**>(&parent), &firstChild)) &&
+            parent) {
+            // All selected items share a folder, so their last IDs are valid
+            // children of the parent we just bound.
+            std::vector<PCUITEMID_CHILD> children;
+            children.reserve(absolute.size());
+            for (PIDLIST_ABSOLUTE pidl : absolute) children.push_back(::ILFindLastID(pidl));
+
+            // Handlers are instantiated here, not in QueryContextMenu, so this
+            // call is already third-party code and needs the guard.
+            hr = GuardedGetUIObjectOf(parent, dialogOwner, static_cast<UINT>(children.size()),
+                                      reinterpret_cast<PCUITEMID_CHILD_ARRAY>(children.data()),
+                                      reinterpret_cast<void**>(&menu));
+        }
+    }
 
     if (SUCCEEDED(hr) && menu) {
         HMENU hmenu = ::CreatePopupMenu();
         UINT flags = CMF_NORMAL;
-        // CMF_EXTENDEDVERBS is what "Show more options" toggles in Explorer.
-        // Kite defaults to it so the full menu is one action away.
+        // CMF_EXTENDEDVERBS is the set Explorer reveals when Shift is held, and
+        // handlers stock it on that understanding - TortoiseGit files
+        // "Git Clone..." there, which reads as an offer to clone into the folder
+        // you are standing in. Kite once passed this by default and that is
+        // exactly what people saw, so it now follows Shift, like the shell does.
         if (extended) flags |= CMF_EXTENDEDVERBS;
         // CMF_CANRENAME is deliberately absent: the shell's rename needs an
         // IShellView to edit in, which no host window can supply. Kite renames
@@ -262,9 +293,21 @@ shellhost::Result ShowShellContextMenu(HWND menuOwner, HWND dialogOwner,
             result = shellhost::Result::None;
             if (chosen >= static_cast<int>(kMenuFirstId)) {
                 const UINT offset = static_cast<UINT>(chosen) - kMenuFirstId;
+                // A background verb has no item to work from, only the folder it
+                // was raised in: "New > Text Document" creates its file in the
+                // working directory, and several third-party verbs read it too.
+                const std::string directory = background ? paths[0] : std::string();
+                const std::wstring directoryW = ToWide(directory);
                 CMINVOKECOMMANDINFOEX info{};
                 info.cbSize = sizeof(info);
                 info.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
+                if (background) {
+                    // CMIC_MASK_UNICODE means the shell reads the wide member;
+                    // the narrow one is left as UTF-8 for handlers that ignore
+                    // the flag, where it is exact for every ASCII path.
+                    info.lpDirectory = directory.c_str();
+                    info.lpDirectoryW = directoryW.c_str();
+                }
                 // The caller's own window, so progress and confirmation dialogs
                 // are owned by something visible rather than by our 1x1 helper.
                 info.hwnd = dialogOwner;
@@ -279,7 +322,7 @@ shellhost::Result ShowShellContextMenu(HWND menuOwner, HWND dialogOwner,
         menu->Release();
     }
 
-    parent->Release();
+    if (parent) parent->Release();
     for (PIDLIST_ABSOLUTE pidl : absolute) ::CoTaskMemFree(pidl);
     return result;
 }

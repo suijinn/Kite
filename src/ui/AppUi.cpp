@@ -4,6 +4,7 @@
 
 #include "core/base/Format.h"
 #include "core/base/PathUtil.h"
+#include "core/base/Version.h"
 #include "core/input/Commands.h"
 #include "ui/Glyphs.h"
 
@@ -33,6 +34,26 @@ const AppUi::Region* AppUi::Pick(float x, float y) const {
         if (it->rect.contains(x, y)) return &*it;
     }
     return nullptr;
+}
+
+// Is the pointer on this thing, as far as highlighting goes?
+//
+// Nothing is lit while something is being dragged: during a splitter or tab
+// drag the pointer sweeps across rows it is not pointing at, and during a file
+// drag from outside, the drop feedback is the answer to "where would this land"
+// - a second highlight next to it only muddles it. Note the pending states are
+// deliberately not included, so pressing on a row does not blink it.
+bool AppUi::PointerOver(const RectF& box) const {
+    if (!mouseInside_ || dropActive_) return false;
+    if (drag_ == Drag::Splitter || drag_ == Drag::Tab) return false;
+    return box.contains(mouseX_, mouseY_);
+}
+
+// As above, for everything that an overlay covers. The shortcut sheet and the
+// key editor take every click, so nothing behind them may look pointable.
+bool AppUi::Hovered(const RectF& box) const {
+    if (app_.keyHelpVisible() || app_.keyEditor().visible()) return false;
+    return PointerOver(box);
 }
 
 // ---------------------------------------------------------------------------
@@ -115,6 +136,7 @@ void AppUi::PaintSessionBar(Renderer& r, const RectF& area) {
         if (chip.r > area.r - 30.0f) break;
 
         if (active) r.FillRoundRect(chip, 4.0f, th.sessionActiveBg);
+        if (Hovered(chip)) r.FillRoundRect(chip, 4.0f, th.rowHover);
         r.DrawText(label, chip, active ? th.text : th.textDim, FontRole::UiSmall,
                    TextAlign::Center);
         Add(chip, Hit::SessionChip, static_cast<int>(i));
@@ -123,13 +145,24 @@ void AppUi::PaintSessionBar(Renderer& r, const RectF& area) {
 
     const RectF add = { x, area.t + 3.0f, x + 22.0f, area.b - 3.0f };
     if (add.r < area.r - 8.0f) {
-        glyph::Plus(r, add, th.textDim, 1.5f);
+        glyph::Plus(r, add, Hovered(add) ? th.text : th.textDim, 1.5f);
         Add(add, Hit::SessionAdd);
     }
 
-    const std::string brand = app_.keyHelpVisible() ? "" : "Kite";
-    r.DrawText(brand, { area.r - 60.0f, area.t, area.r - kPad, area.b }, th.textDim.alpha(0.5f),
-               FontRole::UiSmall, TextAlign::Right);
+    // The build stamp sits here rather than only in the caption: the caption is
+    // the first thing a taskbar truncates, and this is the line someone gets
+    // asked to read out when they report something. Dropped when the shortcut
+    // overlay is up - it repeats the stamp in its own heading.
+    if (!app_.keyHelpVisible()) {
+        const std::string brand = std::string("Kite ") + version::kDisplay;
+        const float w = r.MeasureText(brand, FontRole::UiSmall) + kPad;
+        // Sessions win the space: this is the one thing on the bar nobody needs
+        // to read twice.
+        if (x + kPad < area.r - w) {
+            r.DrawText(brand, { area.r - w, area.t, area.r - kPad, area.b },
+                       th.textDim.alpha(0.5f), FontRole::UiSmall, TextAlign::Right);
+        }
+    }
 }
 
 // --- sidebar ----------------------------------------------------------------
@@ -158,6 +191,7 @@ void AppUi::PaintSidebar(Renderer& r, const RectF& area) {
         if (row.b > area.t && row.t < area.b) {
             const bool selected = !currentPath.empty() && currentPath == fullPath;
             if (selected) r.FillRoundRect(row, 4.0f, th.rowSelected);
+            if (Hovered(row)) r.FillRoundRect(row, 4.0f, th.rowHover);
 
             const RectF icon = { row.l + 6.0f, row.t, row.l + 6.0f + kIconCell, row.b };
             const Color iconColor = selected ? th.rowSelectedText : th.textFolder;
@@ -252,6 +286,16 @@ void AppUi::PaintNode(Renderer& r, SplitNode* node, const RectF& area) {
     }
 }
 
+// Where the keyboard is, in one colour. Two separate questions get answered by
+// it: which pane the keys go to, and whether they go to Kite at all - a ring
+// that keeps its accent while another window is in front says the first and lies
+// about the second.
+Color AppUi::FocusColor(bool focused) const {
+    const Theme& th = app_.theme();
+    if (!focused) return th.border;
+    return app_.windowActive() ? th.paneFocusBorder : th.paneFocusIdle;
+}
+
 void AppUi::PaintPane(Renderer& r, Pane* pane, const RectF& area) {
     if (!pane) return;
     const Theme& th = app_.theme();
@@ -262,7 +306,7 @@ void AppUi::PaintPane(Renderer& r, Pane* pane, const RectF& area) {
 
     RectF rest = area;
     const RectF tabBar = { rest.l, rest.t, rest.r, rest.t + th.tabBarHeight };
-    PaintTabBar(r, pane, tabBar);
+    PaintTabBar(r, pane, tabBar, focused);
     rest.t = tabBar.b;
 
     Tab* tab = pane->activeTab();
@@ -273,12 +317,17 @@ void AppUi::PaintPane(Renderer& r, Pane* pane, const RectF& area) {
     PaintList(r, pane, tab, rest, focused);
 
     if (focused) {
-        r.StrokeRect(area.inset(1.0f), th.paneFocusBorder.alpha(0.9f), 1.5f);
+        r.StrokeRect(area.inset(1.0f), FocusColor(true), 2.0f);
+    } else {
+        // The ring alone stops being findable once a session is split three or
+        // four ways; laying the unfocused panes back a shade means the live one
+        // is the bright one, which reads without looking for anything.
+        r.FillRect(area, th.paneInactiveScrim);
     }
     r.PopClip();
 }
 
-void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area) {
+void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused) {
     const Theme& th = app_.theme();
     r.FillRect(area, th.tabInactiveBg);
     // Registered first so the individual tabs, added below, win the hit test.
@@ -299,8 +348,12 @@ void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area) {
         if (tabRect.l > area.r - 20.0f) break;
 
         r.FillRect(tabRect, active ? th.tabActiveBg : th.tabInactiveBg);
+        if (Hovered(tabRect)) r.FillRect(tabRect, th.rowHover);
         if (active) {
-            r.FillRect({ tabRect.l, tabRect.t, tabRect.r, tabRect.t + 2.0f }, th.accent);
+            // Lit only in the pane holding the keyboard: with every pane's active
+            // tab wearing the accent, the accent stopped meaning anything.
+            r.FillRect({ tabRect.l, tabRect.t, tabRect.r, tabRect.t + 2.0f },
+                       FocusColor(focused));
         }
         r.FillRect({ tabRect.r - 1.0f, tabRect.t + 5.0f, tabRect.r, tabRect.b - 5.0f }, th.border);
 
@@ -309,7 +362,15 @@ void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area) {
         const RectF label = { tabRect.l + 10.0f, tabRect.t, close.l - 4.0f, tabRect.b };
         r.DrawText(pane->tabs[i]->title(), label,
                    active ? th.tabActiveText : th.tabInactiveText, FontRole::Ui, TextAlign::Left);
-        glyph::Cross(r, close, active ? th.tabActiveText.alpha(0.7f) : th.tabInactiveText.alpha(0.5f),
+        // The cross is drawn faint so a row of tabs does not read as a row of
+        // buttons; under the pointer it has to be unambiguous, since this is
+        // the one control here that destroys something.
+        const bool overClose = Hovered(close);
+        if (overClose) r.FillRoundRect(close.inset(-2.0f), 3.0f, th.rowHover);
+        glyph::Cross(r, close,
+                     overClose ? th.text
+                     : active  ? th.tabActiveText.alpha(0.7f)
+                               : th.tabInactiveText.alpha(0.5f),
                      1.2f);
 
         Add(tabRect, Hit::TabItem, static_cast<int>(i), pane);
@@ -319,7 +380,7 @@ void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area) {
 
     const RectF add = { x + 2.0f, area.t + 4.0f, x + 24.0f, area.b - 4.0f };
     if (add.r < area.r) {
-        glyph::Plus(r, add, th.textDim, 1.4f);
+        glyph::Plus(r, add, Hovered(add) ? th.text : th.textDim, 1.4f);
         Add(add, Hit::TabAdd, 0, pane);
     }
     r.FillRect({ area.l, area.b - 1.0f, area.r, area.b }, th.border);
@@ -353,6 +414,8 @@ void AppUi::PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area) {
             break;
         }
         const bool last = (i + 1 == crumbs.size());
+        // Nothing else says a breadcrumb can be clicked.
+        if (Hovered(box)) r.FillRoundRect(box.inset(0.0f, 1.0f), 3.0f, th.rowHover);
         r.DrawText(crumbs[i].first, box, last ? th.text : th.textDim, FontRole::Ui,
                    TextAlign::Center);
         Add(box, Hit::Crumb, 0, pane, nullptr, crumbs[i].second);
@@ -457,6 +520,10 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
     const int last = std::min(static_cast<int>(tab->visible.size()) - 1,
                               first + static_cast<int>(body.h() / rowH) + 1);
 
+    // Asked once for the whole list: the last row's rectangle can hang below the
+    // list, and the pointer being down there is not the pointer being on it.
+    const bool pointerInList = Hovered(body);
+
     r.PushClip(body);
     for (int i = first; i <= last; ++i) {
         const float top = body.t + static_cast<float>(i) * rowH - tab->scroll;
@@ -468,11 +535,27 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
 
         if (i % 2 == 1) r.FillRect(row, th.listBgAlt);
         if (marked) r.FillRect(row, th.rowSelected);
+        // Over the selection rather than under it: a marked row still has to
+        // answer "is this the one I am about to click".
+        if (pointerInList && row.contains(mouseX_, mouseY_)) r.FillRect(row, th.rowHover);
         if (isCursor && focused) {
-            r.StrokeRect({ row.l + 1.0f, row.t + 1.0f, row.r - 1.0f, row.b - 1.0f },
-                         th.cursorBorder, 1.0f);
+            // A wash under the outline, because a 1px line is easy to lose
+            // against a striped row - but only while the window has the
+            // keyboard, so a Kite sitting in the background never looks live.
+            if (app_.windowActive()) {
+                r.FillRect(row, th.accent.alpha(0.16f));
+                r.StrokeRect({ row.l + 1.0f, row.t + 1.0f, row.r - 1.0f, row.b - 1.0f },
+                             th.cursorBorder, 1.0f);
+            } else {
+                r.StrokeRect({ row.l + 1.0f, row.t + 1.0f, row.r - 1.0f, row.b - 1.0f },
+                             th.paneFocusIdle, 1.0f);
+            }
         } else if (isCursor) {
-            r.FillRect(row, th.rowHover);
+            // Same treatment as an inactive window, and for the same reason:
+            // the cursor is here, the keys are not. It used to be a faint wash,
+            // which now says something else - that the pointer is on this row.
+            r.StrokeRect({ row.l + 1.0f, row.t + 1.0f, row.r - 1.0f, row.b - 1.0f },
+                         th.paneFocusIdle, 1.0f);
         }
 
         const RectF icon = { row.l + 6.0f, row.t, row.l + 6.0f + kIconCell, row.b };
@@ -629,7 +712,14 @@ void AppUi::PaintKeyHelp(Renderer& r, const RectF& area) {
     r.StrokeRect(panel, th.border, 1.0f);
 
     const RectF titleBox = { panel.l + 20.0f, panel.t + 8.0f, panel.r - 20.0f, panel.t + 40.0f };
-    r.DrawText(str.Get("ui.key_help_title"), titleBox, th.text, FontRole::UiBold, TextAlign::Left);
+    const std::string title = str.Get("ui.key_help_title");
+    r.DrawText(title, titleBox, th.text, FontRole::UiBold, TextAlign::Left);
+    // This panel covers the session bar, and with it the build stamp. It comes
+    // along here because the overlay is the closest thing Kite has to an about box.
+    const float titleW = r.MeasureText(title, FontRole::UiBold) + kPad * 2.0f;
+    r.DrawText(std::string("Kite ") + version::kDisplay,
+               { titleBox.l + titleW, titleBox.t, titleBox.r, titleBox.b },
+               th.textDim.alpha(0.7f), FontRole::UiSmall, TextAlign::Left);
     r.DrawText(str.Get("ui.key_help_hint"), titleBox, th.textDim, FontRole::UiSmall,
                TextAlign::Right);
 
@@ -767,6 +857,8 @@ void AppUi::PaintKeySettings(Renderer& r, const RectF& area) {
 
         const bool selected = (i == editor.cursor());
         if (selected) r.FillRoundRect(box, 4.0f, th.rowSelected);
+        // PointerOver, not Hovered: this panel is the overlay Hovered() blocks.
+        else if (PointerOver(box)) r.FillRoundRect(box, 4.0f, th.rowHover);
 
         const float chordW = std::min(190.0f, box.w() * 0.5f);
         r.DrawText(row.label, { box.l + 10.0f, box.t, box.r - chordW - 8.0f, box.b },
@@ -1001,6 +1093,22 @@ void AppUi::ClearDropFeedback() {
 }
 
 bool AppUi::OnMouse(const MouseEvent& e) {
+    if (e.type == MouseEvent::Type::Leave) {
+        // The pointer went to another window: whatever was lit under it is not
+        // under anything any more.
+        if (mouseInside_) {
+            mouseInside_ = false;
+            hoverKind_ = Hit::None;
+            hoverRect_ = {};
+            app_.host().Invalidate();
+        }
+        return false;
+    }
+
+    mouseX_ = e.x;
+    mouseY_ = e.y;
+    mouseInside_ = true;
+
     // Splitter dragging owns the mouse while active.
     if (drag_ == Drag::Splitter && dragSplitter_) {
         if (e.type == MouseEvent::Type::Move) {
@@ -1075,6 +1183,19 @@ bool AppUi::OnMouse(const MouseEvent& e) {
         if (shape != cursorShape_) {
             cursorShape_ = shape;
             app_.host().SetCursorShape(shape);
+        }
+
+        // Repaint only when the pointer crossed into a different thing. Every
+        // pixel of movement inside one row would otherwise redraw the window.
+        // The rectangle is the identity here: two items never share one, and it
+        // needs no ownership of whatever the region pointed at.
+        const Hit kind = region ? region->kind : Hit::None;
+        const RectF rect = region ? region->rect : RectF{};
+        if (kind != hoverKind_ || rect.l != hoverRect_.l || rect.t != hoverRect_.t ||
+            rect.r != hoverRect_.r || rect.b != hoverRect_.b) {
+            hoverKind_ = kind;
+            hoverRect_ = rect;
+            app_.host().Invalidate();
         }
         return false;
     }
@@ -1207,9 +1328,10 @@ bool AppUi::OnMouse(const MouseEvent& e) {
                 dragStartY_ = e.y;
             }
             if (e.button == 1) {
-                // Right-click opens the extended menu directly; hold Shift for
-                // the short Windows 11 one.
-                app_.ShowContextMenuAt(e.screenX, e.screenY, (e.mods & kModShift) == 0);
+                // Shift adds the extended verbs, as it does in Explorer. Those
+                // are the entries the shell hides on purpose, and handlers fill
+                // them with things that do not belong on a plain right-click.
+                app_.ShowContextMenuAt(e.screenX, e.screenY, (e.mods & kModShift) != 0);
             }
             return true;
         }

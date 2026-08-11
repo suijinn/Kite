@@ -125,7 +125,7 @@ shellhost::Result HandleRequest(HWND window, const shellhost::Request& request) 
 
     const shellhost::Result result = kite::win::ShowShellContextMenu(
         window, reinterpret_cast<HWND>(request.ownerWindow), request.paths, request.screenX,
-        request.screenY, request.extended);
+        request.screenY, request.extended, request.background);
 
     // Hidden again straight away: while it is visible it is the foreground
     // window, and Kite's title bar stays greyed out for as long as that lasts.

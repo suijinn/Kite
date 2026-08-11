@@ -33,11 +33,14 @@ KITE_TEST(theme, dark_theme_keeps_text_readable_against_its_background) {
 KITE_TEST(theme, dark_theme_stays_neutral_grey) {
     // The dark default is meant to have no colour cast at all. A tint creeps back
     // in one channel at a time, so check every surface rather than eyeballing it.
+    // The focus colours are the deliberate exception and are checked below; the
+    // selection is not one of them and has to stay grey, or "selected" and
+    // "focused" become the same colour.
     const Theme dark = Theme::Dark();
-    const Color neutral[] = { dark.windowBg,   dark.panelBg,        dark.listBg,
-                              dark.listBgAlt,  dark.border,         dark.text,
-                              dark.textDim,    dark.textFolder,     dark.accent,
-                              dark.rowSelected, dark.rowSelectedText, dark.cursorBorder,
+    const Color neutral[] = { dark.windowBg,    dark.panelBg,        dark.listBg,
+                              dark.listBgAlt,   dark.border,         dark.text,
+                              dark.textDim,     dark.textFolder,     dark.accentText,
+                              dark.rowSelected, dark.rowSelectedText, dark.paneFocusIdle,
                               dark.tabActiveBg, dark.tabInactiveBg,  dark.sessionActiveBg,
                               dark.scrollThumb, dark.overlayBg };
     for (const Color& c : neutral) {
@@ -45,6 +48,35 @@ KITE_TEST(theme, dark_theme_stays_neutral_grey) {
         const float low = std::min(c.r, std::min(c.g, c.b));
         // 2/255 of slack: enough for a hand-picked grey, far below a visible tint.
         KITE_EXPECT(high - low < 0.008f);
+    }
+}
+
+KITE_TEST(theme, the_focus_colours_are_blue_and_stay_muted) {
+    // The one hue either theme carries on purpose. It has to be blue, because
+    // that is what the rest of the desktop means by "this has the keyboard", and
+    // it has to stay unsaturated, because a grey screen makes any strong colour
+    // the loudest thing on it.
+    for (const Theme& t : { Theme::Dark(), Theme::Light() }) {
+        const Color focus[] = { t.accent, t.paneFocusBorder, t.cursorBorder };
+        for (const Color& c : focus) {
+            KITE_EXPECT(c.b > c.r);
+            KITE_EXPECT(c.b > c.g);
+            const float high = std::max(c.r, std::max(c.g, c.b));
+            const float low = std::min(c.r, std::min(c.g, c.b));
+            KITE_EXPECT(high - low < 0.45f);
+        }
+    }
+}
+
+KITE_TEST(theme, an_inactive_window_drops_the_hue) {
+    // Whether Kite has the keyboard at all is read off this colour, so it must
+    // not be the accent wearing a different alpha.
+    for (const Theme& t : { Theme::Dark(), Theme::Light() }) {
+        const float high = std::max(t.paneFocusIdle.r,
+                                    std::max(t.paneFocusIdle.g, t.paneFocusIdle.b));
+        const float low = std::min(t.paneFocusIdle.r,
+                                   std::min(t.paneFocusIdle.g, t.paneFocusIdle.b));
+        KITE_EXPECT(high - low < 0.02f);
     }
 }
 
@@ -61,6 +93,22 @@ KITE_TEST(theme, ini_overrides_colors_for_the_matching_variant) {
     Theme light = Theme::Light();
     light.ApplyIni(ini);
     KITE_EXPECT_NEAR(light.accent.g, 1.0f, 0.001);
+}
+
+KITE_TEST(theme, the_focus_colours_are_overridable_like_every_other_colour) {
+    // A new field is easy to add to Theme and forget in ApplyIni, and the effect
+    // - a colour the ini silently refuses to change - is invisible until someone
+    // tries it.
+    Ini ini;
+    ini.Set("theme.dark", "pane_focus_border", "112233");
+    ini.Set("theme.dark", "pane_focus_idle", "445566");
+    ini.Set("theme.dark", "pane_inactive_scrim", "00000040");
+
+    Theme dark = Theme::Dark();
+    dark.ApplyIni(ini);
+    KITE_EXPECT_NEAR(dark.paneFocusBorder.b, 0x33 / 255.0f, 0.001);
+    KITE_EXPECT_NEAR(dark.paneFocusIdle.g, 0x55 / 255.0f, 0.001);
+    KITE_EXPECT_NEAR(dark.paneInactiveScrim.a, 0x40 / 255.0f, 0.01);
 }
 
 KITE_TEST(theme, ini_accepts_a_leading_hash_and_an_alpha_channel) {

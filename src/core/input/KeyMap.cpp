@@ -148,10 +148,15 @@ const DefaultBinding kDefaults[] = {
     { Cmd::CopyName,            "Ctrl+Alt+Shift+C" },
 
     // Shell
-    { Cmd::ExtendedContextMenu, "Menu" },
-    { Cmd::ContextMenu,         "Shift+F10" },
-    { Cmd::FolderContextMenu,   "Ctrl+Menu" },
-    { Cmd::FolderContextMenu,   "Ctrl+Shift+F10" },
+    // Shift adds the extended verbs, the way it does in Explorer. Kite used to
+    // put them on the plain menu instead - "everything one action away" - but
+    // those verbs are exactly the ones the shell hides on purpose, and handlers
+    // stock them accordingly: TortoiseGit files "Git Clone..." there, which then
+    // showed up while standing inside a working copy.
+    { Cmd::ContextMenu,               "Menu" },
+    { Cmd::ExtendedContextMenu,       "Shift+F10" },
+    { Cmd::FolderContextMenu,         "Ctrl+Menu" },
+    { Cmd::ExtendedFolderContextMenu, "Ctrl+Shift+F10" },
     { Cmd::Properties,          "Alt+Enter" },
     { Cmd::OpenWith,            "Ctrl+Alt+Enter" },
     { Cmd::RevealInExplorer,    "Ctrl+Shift+E" },

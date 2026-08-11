@@ -13,6 +13,7 @@
 #include "core/base/PathUtil.h"
 #include "core/fs/DirectoryWatcher.h"
 #include "core/fs/FileSystem.h"
+#include "ui/Renderer.h"
 
 namespace kite::test {
 
@@ -174,6 +175,7 @@ public:
     bool clipboardCut = false;
     int contextMenuCalls = 0;
     bool lastContextMenuExtended = false;
+    bool lastContextMenuBackground = false;
     bool lastContextMenuDark = false;
     std::vector<std::string> lastContextMenuPaths;
     int lastContextMenuX = 0;
@@ -183,12 +185,13 @@ public:
     bool contextMenuShown = true;
 
     bool ShowContextMenu(const std::vector<std::string>& paths, int screenX, int screenY,
-                         bool extended, bool dark) override {
+                         bool extended, bool background, bool dark) override {
         ++contextMenuCalls;
         lastContextMenuPaths = paths;
         lastContextMenuX = screenX;
         lastContextMenuY = screenY;
         lastContextMenuExtended = extended;
+        lastContextMenuBackground = background;
         lastContextMenuDark = dark;
         return contextMenuShown;
     }
@@ -256,6 +259,66 @@ public:
         return true;
     }
     void Wake() override {}
+};
+
+// ---------------------------------------------------------------------------
+// Renderer
+//
+// Keeps the filled rectangles and throws the rest away. What a UI test can ask
+// about a frame is "was this painted, where, in what colour" - text and glyph
+// shapes are the renderer's business, not the layout's.
+// ---------------------------------------------------------------------------
+
+class FakeRenderer final : public ui::Renderer {
+public:
+    struct Fill {
+        RectF rect;
+        Color color;
+    };
+
+    std::vector<Fill> fills;
+    SizeF size{ 1200.0f, 800.0f };
+
+    void PushClip(const RectF&) override {}
+    void PopClip() override {}
+    void FillRect(const RectF& r, const Color& c) override { fills.push_back({ r, c }); }
+    void FillRoundRect(const RectF& r, float, const Color& c) override { fills.push_back({ r, c }); }
+    void StrokeRect(const RectF&, const Color&, float) override {}
+    void DrawLine(float, float, float, float, const Color&, float) override {}
+    void FillTriangle(PointF, PointF, PointF, const Color&) override {}
+    void DrawIcon(uint32_t, const RectF&) override {}
+    void DrawText(std::string_view, const RectF&, const Color&, ui::FontRole,
+                  ui::TextAlign) override {}
+    // Proportional enough for layout code to behave as it would on screen; the
+    // exact number only has to be stable.
+    float MeasureText(std::string_view utf8, ui::FontRole) override {
+        return static_cast<float>(utf8.size()) * 7.0f;
+    }
+    float LineHeight(ui::FontRole) override { return 16.0f; }
+    SizeF surfaceSize() const override { return size; }
+
+    void Clear() { fills.clear(); }
+
+    // Every fill of this colour that covers the given point.
+    std::vector<Fill> FillsAt(const Color& c, float x, float y) const {
+        std::vector<Fill> out;
+        for (const Fill& f : fills) {
+            if (SameColor(f.color, c) && f.rect.contains(x, y)) out.push_back(f);
+        }
+        return out;
+    }
+
+    int CountFills(const Color& c) const {
+        int n = 0;
+        for (const Fill& f : fills) {
+            if (SameColor(f.color, c)) ++n;
+        }
+        return n;
+    }
+
+    static bool SameColor(const Color& a, const Color& b) {
+        return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+    }
 };
 
 // ---------------------------------------------------------------------------

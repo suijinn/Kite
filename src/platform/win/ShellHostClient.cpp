@@ -106,7 +106,8 @@ void RestoreOwner(HWND owner, DWORD hostProcessId) {
 }  // namespace
 
 bool ShellHostClient::ShowContextMenu(HWND owner, const std::vector<std::string>& paths,
-                                      int screenX, int screenY, bool extended, bool dark) {
+                                      int screenX, int screenY, bool extended, bool background,
+                                      bool dark) {
     if (paths.empty()) return false;
 
     PumpState connectState{ owner, false };
@@ -121,6 +122,7 @@ bool ShellHostClient::ShowContextMenu(HWND owner, const std::vector<std::string>
     request.screenX = screenX;
     request.screenY = screenY;
     request.extended = extended;
+    request.background = background;
     request.dark = dark;
     request.ownerWindow = reinterpret_cast<uint64_t>(owner);
 

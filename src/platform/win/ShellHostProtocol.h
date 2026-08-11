@@ -25,7 +25,7 @@ namespace kite::shellhost {
 ///
 /// 書式を変えたら必ずこの値も変えること。版の食い違う kite_shellhost.exe が
 /// 残っていた場合に、誤って解釈するのではなく握手の時点で失敗させるためにある。
-inline constexpr uint32_t kMagic = 0x33485348u;  // 'H','S','H','3'
+inline constexpr uint32_t kMagic = 0x34485348u;  // 'H','S','H','4'
 
 /// @brief フレーム本体の上限バイト数。
 ///
@@ -66,6 +66,15 @@ struct Request {
     int32_t screenX = -1;            ///< 表示位置の X。負ならホストがカーソル位置を使う
     int32_t screenY = -1;            ///< 表示位置の Y。負ならホストがカーソル位置を使う
     bool extended = false;           ///< 拡張メニュー（CMF_EXTENDEDVERBS）を出すか
+
+    /// @brief フォルダ自身の「背景」メニューを出すか。
+    ///
+    /// false なら項目のメニュー（親フォルダから見た `paths` のメニュー）、true なら
+    /// エクスプローラーで一覧の余白を右クリックしたときのメニュー。**同じフォルダを
+    /// 指していても中身は別物**で、項目側には「そのフォルダを対象に何かする」動詞
+    /// （TortoiseGit の「Git クローン」など）が並ぶ。true のとき対象は `paths` の
+    /// 先頭 1 件だけで、残りは無視される。
+    bool background = false;
 
     /// @brief ダークテーマでメニューを描くか。
     ///
@@ -301,6 +310,7 @@ inline std::vector<uint8_t> EncodeRequest(const Request& request) {
     detail::PutU32(payload, static_cast<uint32_t>(request.screenX));
     detail::PutU32(payload, static_cast<uint32_t>(request.screenY));
     detail::PutU32(payload, request.extended ? 1u : 0u);
+    detail::PutU32(payload, request.background ? 1u : 0u);
     detail::PutU32(payload, request.dark ? 1u : 0u);
     detail::PutU64(payload, request.ownerWindow);
     detail::PutU32(payload, static_cast<uint32_t>(request.paths.size()));
@@ -320,15 +330,18 @@ inline bool DecodeRequest(const uint8_t* payload, size_t size, Request& request)
     uint32_t x = 0;
     uint32_t y = 0;
     uint32_t extended = 0;
+    uint32_t background = 0;
     uint32_t dark = 0;
     uint32_t count = 0;
-    if (!reader.U32(x) || !reader.U32(y) || !reader.U32(extended) || !reader.U32(dark)) return false;
+    if (!reader.U32(x) || !reader.U32(y) || !reader.U32(extended)) return false;
+    if (!reader.U32(background) || !reader.U32(dark)) return false;
     if (!reader.U64(request.ownerWindow) || !reader.U32(count)) return false;
     if (count > kMaxPaths) return false;
 
     request.screenX = static_cast<int32_t>(x);
     request.screenY = static_cast<int32_t>(y);
     request.extended = extended != 0;
+    request.background = background != 0;
     request.dark = dark != 0;
     request.paths.clear();
     // reserve は count を信じた確保になる。kMaxPaths で上限を掛けた後に行うこと。

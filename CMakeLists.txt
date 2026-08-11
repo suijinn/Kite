@@ -44,6 +44,44 @@ if(MSVC)
 endif()
 
 # ---------------------------------------------------------------------------
+# Version stamp
+#
+# One script writes all three: the header a running Kite reads to name itself,
+# and the two resource scripts that put the same version on the exe files. They
+# are regenerated on every build rather than at configure time, because the
+# commit moves independently of anything CMake would reconfigure for.
+# ---------------------------------------------------------------------------
+set(KITE_GENERATED_DIR ${CMAKE_BINARY_DIR}/generated)
+set(KITE_VERSION_HEADER ${KITE_GENERATED_DIR}/core/base/Version.h)
+set(KITE_APP_RC ${KITE_GENERATED_DIR}/win/kite.rc)
+set(KITE_HOST_RC ${KITE_GENERATED_DIR}/win/kite_shellhost.rc)
+set(KITE_ICON ${CMAKE_CURRENT_SOURCE_DIR}/assets/kite.ico)
+
+add_custom_target(kite_version
+    BYPRODUCTS ${KITE_VERSION_HEADER} ${KITE_APP_RC} ${KITE_HOST_RC}
+    COMMAND ${CMAKE_COMMAND}
+        -DKITE_VERSION=${PROJECT_VERSION}
+        -DKITE_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+        -DKITE_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+        -DKITE_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+        -DKITE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DKITE_HEADER_IN=${CMAKE_CURRENT_SOURCE_DIR}/src/core/base/Version.h.in
+        -DKITE_HEADER_OUT=${KITE_VERSION_HEADER}
+        -DKITE_RC_IN=${CMAKE_CURRENT_SOURCE_DIR}/src/platform/win/Version.rc.in
+        -DKITE_APP_RC_OUT=${KITE_APP_RC}
+        -DKITE_HOST_RC_OUT=${KITE_HOST_RC}
+        -DKITE_ICON=${KITE_ICON}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/GitVersion.cmake
+    COMMENT "Stamping version and commit"
+    VERBATIM)
+
+# The .rc files do not exist until the first build, and a .rc only names the
+# .ico - without OBJECT_DEPENDS, redrawing the icon would leave the old one
+# linked in.
+set_source_files_properties(${KITE_APP_RC} ${KITE_HOST_RC} PROPERTIES GENERATED TRUE)
+set_source_files_properties(${KITE_APP_RC} PROPERTIES OBJECT_DEPENDS "${KITE_ICON}")
+
+# ---------------------------------------------------------------------------
 # kite_core - everything that does not touch the OS.
 #
 #   core/  no OS calls beyond the five functions in core/base/Platform.h
@@ -72,6 +110,11 @@ add_library(kite_core STATIC
 )
 target_link_libraries(kite_core PUBLIC kite_options)
 
+# PUBLIC: the tests link kite_core and paint through the same UI code, so they
+# need the stamped header too.
+target_include_directories(kite_core PUBLIC ${KITE_GENERATED_DIR})
+add_dependencies(kite_core kite_version)
+
 # ---------------------------------------------------------------------------
 # kite - the Windows application
 # ---------------------------------------------------------------------------
@@ -90,7 +133,9 @@ add_executable(kite WIN32
     src/platform/win/WinShell.cpp
     src/platform/win/WinUtf.cpp
     src/platform/win/WinWindow.cpp
+    ${KITE_APP_RC}
 )
+add_dependencies(kite kite_version)
 
 target_link_libraries(kite PRIVATE
     kite_core
@@ -136,7 +181,10 @@ add_executable(kite_shellhost WIN32
     src/platform/win/ShellMenu.cpp
     src/platform/win/ShellPipe.cpp
     src/platform/win/WinUtf.cpp
+    ${KITE_HOST_RC}
 )
+# It does not link kite_core, so the stamping step is not already in its chain.
+add_dependencies(kite_shellhost kite_version)
 
 target_link_libraries(kite_shellhost PRIVATE
     kite_options
@@ -163,6 +211,11 @@ set_target_properties(kite kite_shellhost PROPERTIES
 get_target_property(KITE_CORE_SOURCES kite_core SOURCES)
 get_target_property(KITE_APP_SOURCES kite SOURCES)
 get_target_property(KITE_HOST_SOURCES kite_shellhost SOURCES)
+# The generated .rc files live in the build tree, which need not be under the
+# source tree at all - source_group(TREE ...) fails outright on anything outside
+# it, so they are left out of the folder layout instead.
+list(REMOVE_ITEM KITE_APP_SOURCES ${KITE_APP_RC})
+list(REMOVE_ITEM KITE_HOST_SOURCES ${KITE_HOST_RC})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES
     ${KITE_CORE_SOURCES} ${KITE_APP_SOURCES} ${KITE_HOST_SOURCES})
 
@@ -188,6 +241,7 @@ if(KITE_BUILD_TESTS)
         tests/test_workspace.cpp
         tests/test_session.cpp
         tests/test_app.cpp
+        tests/test_appui.cpp
         tests/test_dropcheck.cpp
         tests/test_hostproto.cpp
     )
@@ -195,7 +249,7 @@ if(KITE_BUILD_TESTS)
 
     # One CTest entry per suite so a failure names the area straight away.
     set(KITE_TEST_SUITES
-        utf8 path ini format strings keymap keyeditor theme tab workspace session app drop
+        utf8 path ini format strings keymap keyeditor theme tab workspace session app appui drop
         iconcache hostproto)
 
     foreach(suite IN LISTS KITE_TEST_SUITES)

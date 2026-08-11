@@ -210,6 +210,16 @@ public:
     /// @param[in] pane フォーカスするペイン。nullptr なら何もしない
     void FocusPane(Pane* pane);
 
+    /// @brief ウィンドウが OS のフォーカスを持っているかを記録する。
+    /// @param[in] active 持っていれば true
+    /// @note UI がフォーカス表示の色を切り替えるためだけに使う。状態が変わったときだけ
+    ///       再描画を要求する。プラットフォーム層がウィンドウのアクティブ化通知で呼ぶ
+    void SetWindowActive(bool active);
+
+    /// @brief ウィンドウが OS のフォーカスを持っているかを返す。
+    /// @return 持っていれば true。既定は true
+    bool windowActive() const { return windowActive_; }
+
     /// @brief パスを開く。
     /// @param[in] path 開くパス
     /// @param[in] newTab true なら新しいタブで開く
@@ -240,13 +250,15 @@ public:
     /// @param[in] screenX 表示位置の X（スクリーン座標）。負ならカーソル位置
     /// @param[in] screenY 表示位置の Y（スクリーン座標）。負ならカーソル位置
     /// @param[in] extended true なら拡張メニューを最初から出す
-    /// @note 選択が空なら、代わりに表示中のフォルダ自身を対象にする
+    /// @note 選択が空なら、代わりに表示中のフォルダの「背景」メニュー（一覧の余白を
+    ///       右クリックしたときのもの）を出す
     void ShowContextMenuAt(int screenX, int screenY, bool extended);
 
     /// @brief 表示中のフォルダに対してシェルのコンテキストメニューを表示する。
     /// @param[in] extended true なら拡張メニューを最初から出す
-    /// @note 選択の有無にかかわらずフォルダ自身が対象。表示位置はカーソル行に
-    ///       合わせる（CursorRowAnchor()）
+    /// @note 選択の有無にかかわらずフォルダ自身が対象。出すのは「背景」メニューで、
+    ///       フォルダを項目として右クリックしたときのメニューではない。表示位置は
+    ///       カーソル行に合わせる（CursorRowAnchor()）
     void ShowFolderContextMenu(bool extended);
 
     /// @brief ブックマークの登録と解除を切り替える。
@@ -309,8 +321,10 @@ private:
     bool HandlePromptKey(const Chord& chord);
 
     void ShowShellMenu(const std::vector<std::string>& paths, int screenX, int screenY,
-                       bool extended);
+                       bool extended, bool background);
     bool CursorRowAnchor(int& screenX, int& screenY);
+
+    void UpdateTitle();
 
     void GotoTab(int index);
     void GotoSession(int index);
@@ -341,6 +355,7 @@ private:
     bool keyHelp_ = false;
     bool keysChanged_ = false;
     bool sidebarVisible_ = true;
+    bool windowActive_ = true;
     bool darkTheme_ = true;
     bool shellIcons_ = true;
     std::string language_ = "auto";

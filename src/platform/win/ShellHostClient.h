@@ -39,6 +39,8 @@ public:
     /// @param[in] screenX 表示位置の X（スクリーン座標）。負ならカーソル位置
     /// @param[in] screenY 表示位置の Y（スクリーン座標）。負ならカーソル位置
     /// @param[in] extended true なら拡張メニューを最初から出す
+    /// @param[in] background true なら `paths` の先頭をフォルダとみなし、一覧の余白を
+    ///            右クリックしたときのメニューを出す
     /// @param[in] dark true ならホストにダークテーマでメニューを描かせる
     /// @return メニューを出せたら true。ホストを起動できなかった場合、メニューを
     ///         構築できなかった場合、メニュー表示中にホストが落ちた場合は false
@@ -46,7 +48,7 @@ public:
     ///       タイマーは動き続ける。クライアント領域への入力だけは捨てる ─
     ///       同一プロセスで出していた頃のモーダルな挙動に合わせるため
     bool ShowContextMenu(HWND owner, const std::vector<std::string>& paths, int screenX,
-                         int screenY, bool extended, bool dark);
+                         int screenY, bool extended, bool background, bool dark);
 
 private:
     ShellHostProcess host_;  ///< メニュー専用のホスト。アイコン用とは別インスタンス

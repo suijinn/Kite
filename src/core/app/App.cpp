@@ -6,6 +6,7 @@
 #include "core/base/PathUtil.h"
 #include "core/base/Platform.h"
 #include "core/base/Utf8.h"
+#include "core/base/Version.h"
 
 namespace kite {
 namespace {
@@ -53,6 +54,9 @@ bool App::Init(const std::vector<std::string>& startPaths) {
     RefreshRoots();
     LoadWorkspace(startPaths);
     EnsureVisibleTabsLoaded();
+    // Before any command has run, so the window does not sit there captioned
+    // with the bare class name until the user touches something.
+    UpdateTitle();
     return true;
 }
 
@@ -349,7 +353,23 @@ void App::PumpLoader() {
         }
     }
     EnsureCursorVisible();
+    UpdateTitle();
     host_.Invalidate();
+}
+
+void App::UpdateTitle() {
+    Tab* t = workspace_.focusedTab();
+    if (!t) return;
+    Session* s = workspace_.activeSession();
+    // The build ends the caption rather than starting it: it is what someone
+    // filing a report needs, and the folder is what everyone else reads.
+    std::string title = t->path + "  \xE2\x80\x94  " + (s ? s->name : std::string("Kite")) +
+                        "  \xE2\x80\x94  Kite " + version::kDisplay;
+    // Only touch the caption when it actually changed: SetWindowText on every
+    // cursor keystroke makes the taskbar entry flicker.
+    if (title == lastTitle_) return;
+    lastTitle_ = std::move(title);
+    host_.SetTitle(lastTitle_);
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +382,15 @@ void App::FocusPane(Pane* pane) {
     s->focus = pane;
     if (Tab* t = pane->activeTab()) RequestLoad(*t);
     SyncWatches();
+    host_.Invalidate();
+}
+
+void App::SetWindowActive(bool active) {
+    if (windowActive_ == active) return;
+    windowActive_ = active;
+    // The focus ring and the cursor row are drawn from this, so what is on
+    // screen is now wrong. Guarded above because the platform layer gets told
+    // about activation far more often than it actually changes.
     host_.Invalidate();
 }
 
@@ -609,10 +638,14 @@ void App::ShowContextMenuAt(int screenX, int screenY, bool extended) {
     Tab* t = workspace_.focusedTab();
     if (!t) return;
     // A cursor parked on ".." has no selection to offer, so this falls through to
-    // the folder being listed - the same menu an empty-space right-click gives.
+    // the folder being listed - and to the menu an empty-space right-click gives,
+    // which is a different menu from the one the folder gets as an item.
     std::vector<std::string> paths = t->SelectionPaths();
-    if (paths.empty()) paths.push_back(t->path);
-    ShowShellMenu(paths, screenX, screenY, extended);
+    if (paths.empty()) {
+        ShowShellMenu({ t->path }, screenX, screenY, extended, true);
+        return;
+    }
+    ShowShellMenu(paths, screenX, screenY, extended, false);
 }
 
 void App::ShowFolderContextMenu(bool extended) {
@@ -623,13 +656,16 @@ void App::ShowFolderContextMenu(bool extended) {
     int x = -1;
     int y = -1;
     CursorRowAnchor(x, y);
-    ShowShellMenu({ t->path }, x, y, extended);
+    // The background menu, not the folder's own item menu. Asking for the item
+    // menu here is what put "clone into this folder" in front of someone who was
+    // standing inside a working copy.
+    ShowShellMenu({ t->path }, x, y, extended, true);
 }
 
 void App::ShowShellMenu(const std::vector<std::string>& paths, int screenX, int screenY,
-                        bool extended) {
+                        bool extended, bool background) {
     if (paths.empty()) return;
-    if (!shell_.ShowContextMenu(paths, screenX, screenY, extended, theme_.dark)) {
+    if (!shell_.ShowContextMenu(paths, screenX, screenY, extended, background, theme_.dark)) {
         // The menu runs in a separate process; losing it means that process
         // could not be started, or a shell extension took it down. Say so rather
         // than letting a right-click look like it did nothing.
@@ -1509,7 +1545,8 @@ void App::Execute(Cmd cmd) {
             break;
         }
         case Cmd::FolderContextMenu:
-            ShowFolderContextMenu(true);
+        case Cmd::ExtendedFolderContextMenu:
+            ShowFolderContextMenu(cmd == Cmd::ExtendedFolderContextMenu);
             break;
         case Cmd::Properties:
             if (tab) {
@@ -1542,17 +1579,7 @@ void App::Execute(Cmd cmd) {
     // that adds, closes or retargets a pane or tab.
     SyncWatches();
 
-    // Only touch the caption when it actually changed: SetWindowText on every
-    // cursor keystroke makes the taskbar entry flicker.
-    if (Tab* t = workspace_.focusedTab()) {
-        Session* s = workspace_.activeSession();
-        std::string title = t->path + "  \xE2\x80\x94  " +
-                            (s ? s->name : std::string("Kite")) + "  \xE2\x80\x94  Kite";
-        if (title != lastTitle_) {
-            lastTitle_ = std::move(title);
-            host_.SetTitle(lastTitle_);
-        }
-    }
+    UpdateTitle();
 }
 
 }  // namespace kite
