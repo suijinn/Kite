@@ -131,6 +131,9 @@ enum class CmdGroup : uint8_t {
     X(SortByDate,         "view.sort_date",          "cmd.sort_date",          View)             \
     X(ToggleSortOrder,    "view.toggle_sort_order",  "cmd.toggle_sort_order",  View)             \
     X(ToggleDirsFirst,    "view.toggle_dirs_first",  "cmd.toggle_dirs_first",  View)             \
+    X(FontLarger,         "view.font_larger",        "cmd.font_larger",        View)             \
+    X(FontSmaller,        "view.font_smaller",       "cmd.font_smaller",       View)             \
+    X(FontReset,          "view.font_reset",         "cmd.font_reset",         View)             \
     /* --- bookmarks --------------------------------------------------------- */               \
     X(AddBookmark,        "bookmark.add",            "cmd.add_bookmark",       Bookmark)         \
     X(RemoveBookmark,     "bookmark.remove",         "cmd.remove_bookmark",    Bookmark)         \

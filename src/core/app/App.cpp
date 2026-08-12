@@ -34,6 +34,95 @@ SortKey SortKeyFromName(const std::string& s) {
     return SortKey::Name;
 }
 
+// Text-size limits. The floor is where the row height stops leaving room for an
+// icon, the ceiling where a pane stops holding enough rows to be a listing.
+constexpr float kFontScaleMin = 0.7f;
+constexpr float kFontScaleMax = 2.0f;
+constexpr float kFontScaleStep = 0.1f;
+
+// Move one element, taking `to` as the index it should end up at once the
+// element has been lifted out - the same convention Pane::ReorderTab uses.
+template <typename T>
+bool MoveInVector(std::vector<T>& items, int from, int to) {
+    const int count = static_cast<int>(items.size());
+    if (from < 0 || from >= count) return false;
+    to = std::clamp(to, 0, count - 1);
+    if (from == to) return false;
+
+    T moved = std::move(items[static_cast<size_t>(from)]);
+    items.erase(items.begin() + from);
+    items.insert(items.begin() + to, std::move(moved));
+    return true;
+}
+
+std::vector<std::string> PathsOf(const std::vector<fs::Root>& roots) {
+    std::vector<std::string> out;
+    out.reserve(roots.size());
+    for (const fs::Root& r : roots) out.push_back(r.path);
+    return out;
+}
+
+// Put `roots` back into the order the user dragged them into. Anything the
+// saved order does not name - a drive plugged in since, a cloud folder that
+// appeared - keeps its enumeration order and follows behind, rather than
+// landing in an arbitrary spot in the middle.
+void ApplySavedOrder(std::vector<fs::Root>& roots, const std::vector<std::string>& order) {
+    if (order.empty() || roots.empty()) return;
+
+    std::vector<fs::Root> sorted;
+    sorted.reserve(roots.size());
+    for (const std::string& path : order) {
+        auto it = std::find_if(roots.begin(), roots.end(), [&](const fs::Root& r) {
+            return utf8::EqualsIgnoreCaseAscii(r.path, path);
+        });
+        if (it == roots.end()) continue;  // no longer present; its slot just closes up
+        sorted.push_back(std::move(*it));
+        roots.erase(it);
+    }
+    for (fs::Root& r : roots) sorted.push_back(std::move(r));
+    roots = std::move(sorted);
+}
+
+// Section in settings.ini holding one such order, or nullptr for a section
+// whose order is its own data (bookmarks.ini is the bookmark order).
+const char* SidebarOrderSection(SidebarSection section) {
+    switch (section) {
+        case SidebarSection::QuickAccess: return "sidebar.quick_access";
+        case SidebarSection::Drives: return "sidebar.drives";
+        default: return nullptr;
+    }
+}
+
+void ReadOrder(const Ini& ini, const char* section, std::vector<std::string>& out) {
+    out.clear();
+    const Ini::Section* sec = ini.Find(section);
+    if (!sec) return;
+    for (const Ini::Entry& e : sec->entries) out.push_back(e.value);
+}
+
+// The name a section goes by in settings.ini. Stable across releases: it is
+// what both the collapse flag and the section order are written in terms of.
+const char* SidebarSectionName(SidebarSection section) {
+    switch (section) {
+        case SidebarSection::QuickAccess: return "quick_access";
+        case SidebarSection::Bookmarks: return "bookmarks";
+        case SidebarSection::Drives: return "drives";
+        default: return "";
+    }
+}
+
+SidebarSection SidebarSectionFromName(const std::string& name) {
+    for (size_t i = 0; i < static_cast<size_t>(SidebarSection::Count); ++i) {
+        const SidebarSection section = static_cast<SidebarSection>(i);
+        if (name == SidebarSectionName(section)) return section;
+    }
+    return SidebarSection::Count;
+}
+
+std::string SidebarCollapseKey(SidebarSection section) {
+    return std::string("sidebar_collapse_") + SidebarSectionName(section);
+}
+
 }  // namespace
 
 App::App(fs::IFileSystem& filesystem, IShellIntegration& shell, IHost& host,
@@ -77,6 +166,77 @@ uint32_t App::IconFor(const std::string& path) {
 void App::RefreshRoots() {
     roots_ = fs_.Roots();
     quickAccess_ = fs_.QuickAccess();
+    // Both lists come straight from the OS, in the OS's order. Any dragging the
+    // user did lives in the saved order and has to be laid back over them here -
+    // this runs again whenever the drive list changes, not just at start-up.
+    ApplySavedOrder(quickAccess_, quickAccessOrder_);
+    ApplySavedOrder(roots_, driveOrder_);
+}
+
+// The order the three sections stand in. Anything the file does not name is
+// appended in the built-in order: a name that was mistyped, or a section added
+// in a later version, must not make the section disappear from the sidebar.
+void App::LoadSidebarSections() {
+    sidebarSections_.clear();
+    if (const Ini::Section* sec = settings_.Find("sidebar")) {
+        for (const Ini::Entry& e : sec->entries) {
+            const SidebarSection section = SidebarSectionFromName(e.value);
+            if (section == SidebarSection::Count) continue;
+            if (std::find(sidebarSections_.begin(), sidebarSections_.end(), section) !=
+                sidebarSections_.end()) {
+                continue;  // named twice; the first mention wins
+            }
+            sidebarSections_.push_back(section);
+        }
+    }
+    for (size_t i = 0; i < static_cast<size_t>(SidebarSection::Count); ++i) {
+        const SidebarSection section = static_cast<SidebarSection>(i);
+        if (std::find(sidebarSections_.begin(), sidebarSections_.end(), section) ==
+            sidebarSections_.end()) {
+            sidebarSections_.push_back(section);
+        }
+    }
+}
+
+bool App::MoveSidebarSection(int from, int to) {
+    if (!MoveInVector(sidebarSections_, from, to)) return false;
+    dirty_ = true;
+    host_.Invalidate();
+    return true;
+}
+
+int App::SidebarItemCount(SidebarSection section) const {
+    switch (section) {
+        case SidebarSection::QuickAccess: return static_cast<int>(quickAccess_.size());
+        case SidebarSection::Bookmarks: return static_cast<int>(workspace_.bookmarks.size());
+        case SidebarSection::Drives: return static_cast<int>(roots_.size());
+        default: return 0;
+    }
+}
+
+bool App::MoveSidebarItem(SidebarSection section, int from, int to) {
+    bool moved = false;
+    switch (section) {
+        case SidebarSection::QuickAccess:
+            moved = MoveInVector(quickAccess_, from, to);
+            if (moved) quickAccessOrder_ = PathsOf(quickAccess_);
+            break;
+        case SidebarSection::Bookmarks:
+            // No separate order to record: bookmarks.ini is written in this
+            // order, and Alt+Shift+1..8 counts through the same list.
+            moved = MoveInVector(workspace_.bookmarks, from, to);
+            break;
+        case SidebarSection::Drives:
+            moved = MoveInVector(roots_, from, to);
+            if (moved) driveOrder_ = PathsOf(roots_);
+            break;
+        default:
+            return false;
+    }
+    if (!moved) return false;
+    dirty_ = true;
+    host_.Invalidate();
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,8 +251,9 @@ void App::LoadConfig() {
     if (plat::ReadTextFile(ConfigPath("settings.ini"), text)) settings_.Parse(text);
 
     darkTheme_ = settings_.GetStr("ui", "theme", "dark") != "light";
-    theme_ = darkTheme_ ? Theme::Dark() : Theme::Light();
-    theme_.ApplyIni(settings_);
+    fontScale_ = std::clamp(settings_.GetFloat("ui", "font_scale", 1.0f), kFontScaleMin,
+                            kFontScaleMax);
+    ApplyTheme();
 
     language_ = settings_.GetStr("ui", "language", "auto");
     std::string code = language_;
@@ -109,6 +270,13 @@ void App::LoadConfig() {
     }
 
     sidebarVisible_ = settings_.GetBool("ui", "sidebar", true);
+    ReadOrder(settings_, SidebarOrderSection(SidebarSection::QuickAccess), quickAccessOrder_);
+    ReadOrder(settings_, SidebarOrderSection(SidebarSection::Drives), driveOrder_);
+    for (size_t i = 0; i < static_cast<size_t>(SidebarSection::Count); ++i) {
+        sidebarCollapsed_[i] =
+            settings_.GetBool("ui", SidebarCollapseKey(static_cast<SidebarSection>(i)), false);
+    }
+    LoadSidebarSections();
     // The escape hatch for the one thing shell icons cost: they are what pulls
     // third-party overlay handlers into the picture at all. Off, Kite draws its
     // own vector glyphs and never asks the shell about a file.
@@ -155,6 +323,45 @@ void App::LoadConfig() {
     }
 }
 
+// The theme is always rebuilt from the same three steps, in this order: the
+// built-in defaults, what settings.ini says about them, then the text size the
+// user asked for on top. Anything that skips a step - the theme toggle used to -
+// silently drops whichever of the three came later.
+void App::ApplyTheme() {
+    theme_ = darkTheme_ ? Theme::Dark() : Theme::Light();
+    theme_.ApplyIni(settings_);
+    theme_.Scale(fontScale_);
+}
+
+void App::SetFontScale(float scale) {
+    const float wanted = std::clamp(scale, kFontScaleMin, kFontScaleMax);
+    if (wanted == fontScale_) {
+        // Already at the limit. Say the size rather than letting the key look dead.
+        SetStatus(strings_.Format("ui.font_scale",
+                                  { std::to_string(static_cast<int>(fontScale_ * 100.0f + 0.5f)) }));
+        return;
+    }
+    fontScale_ = wanted;
+    ApplyTheme();
+    SetStatus(strings_.Format("ui.font_scale",
+                              { std::to_string(static_cast<int>(fontScale_ * 100.0f + 0.5f)) }));
+    dirty_ = true;
+    host_.Invalidate();
+}
+
+bool App::sidebarCollapsed(SidebarSection section) const {
+    if (section == SidebarSection::Count) return false;
+    return sidebarCollapsed_[static_cast<size_t>(section)];
+}
+
+void App::ToggleSidebarSection(SidebarSection section) {
+    if (section == SidebarSection::Count) return;
+    bool& collapsed = sidebarCollapsed_[static_cast<size_t>(section)];
+    collapsed = !collapsed;
+    dirty_ = true;
+    host_.Invalidate();
+}
+
 void App::WriteKeysFile() {
     std::string out =
         "# Kite key bindings.\n"
@@ -185,7 +392,29 @@ void App::SaveSettings() {
     settings_.Set("ui", "theme", darkTheme_ ? "dark" : "light");
     settings_.Set("ui", "language", language_);
     settings_.SetBool("ui", "sidebar", sidebarVisible_);
+    for (size_t i = 0; i < static_cast<size_t>(SidebarSection::Count); ++i) {
+        settings_.SetBool("ui", SidebarCollapseKey(static_cast<SidebarSection>(i)),
+                          sidebarCollapsed_[i]);
+    }
+    settings_.ClearSection("sidebar");
+    for (SidebarSection section : sidebarSections_) {
+        settings_.Append("sidebar", "section", SidebarSectionName(section));
+    }
+    settings_.SetFloat("ui", "font_scale", fontScale_);
     settings_.SetBool("ui", "shell_icons", shellIcons_);
+
+    // Rewritten whole rather than merged: a folder that has since disappeared
+    // would otherwise sit in the file forever, holding a slot nothing fills.
+    // Left alone entirely until something has actually been dragged, so the
+    // file does not grow an empty section for everyone else.
+    auto saveOrder = [&](SidebarSection section, const std::vector<std::string>& order) {
+        const char* name = SidebarOrderSection(section);
+        if (order.empty() && !settings_.Find(name)) return;
+        settings_.ClearSection(name);
+        for (const std::string& path : order) settings_.Append(name, "item", path);
+    };
+    saveOrder(SidebarSection::QuickAccess, quickAccessOrder_);
+    saveOrder(SidebarSection::Drives, driveOrder_);
 
     settings_.SetBool("view", "show_hidden", defaultView_.showHidden);
     settings_.SetBool("view", "dirs_first", defaultView_.dirsFirst);
@@ -1039,8 +1268,7 @@ void App::Execute(Cmd cmd) {
             break;
         case Cmd::ToggleTheme:
             darkTheme_ = !darkTheme_;
-            theme_ = darkTheme_ ? Theme::Dark() : Theme::Light();
-            theme_.ApplyIni(settings_);
+            ApplyTheme();
             dirty_ = true;
             host_.Invalidate();
             break;
@@ -1473,6 +1701,15 @@ void App::Execute(Cmd cmd) {
                 RebuildFocused();
                 dirty_ = true;
             }
+            break;
+        case Cmd::FontLarger:
+            SetFontScale(fontScale_ + kFontScaleStep);
+            break;
+        case Cmd::FontSmaller:
+            SetFontScale(fontScale_ - kFontScaleStep);
+            break;
+        case Cmd::FontReset:
+            SetFontScale(1.0f);
             break;
 
         // --- bookmarks ---------------------------------------------------------

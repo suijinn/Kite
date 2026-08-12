@@ -72,6 +72,13 @@ struct Fixture {
         ui.OnMouse(e);
     }
 
+    // Press and let go without moving. Sidebar items act on the release, so a
+    // bare Press is a grab, not a click.
+    void Click(float x, float y, uint8_t mods = 0, int button = 0) {
+        Press(x, y, mods, button);
+        Release(x, y);
+    }
+
     Tab* tab() { return app.workspace().focusedTab(); }
 
     // Well below the last row: the empty part of the list, where a band starts.
@@ -196,6 +203,219 @@ KITE_TEST(appui, the_sidebar_lights_under_the_pointer_too) {
     f.Paint();
 
     KITE_EXPECT_EQ(f.renderer.FillsAt(th.rowHover, x, y).size(), size_t{ 1 });
+}
+
+// --- sidebar sections -------------------------------------------------------
+//
+// The fake sidebar holds one quick-access entry (C:\home, which is also the
+// folder on screen, so it is drawn selected), no bookmarks and one drive.
+
+KITE_TEST(appui, clicking_a_sidebar_heading_folds_the_section_and_clicking_it_again_unfolds) {
+    Fixture f;
+    f.Paint();
+
+    // Folding happens on the release: the press cannot tell a fold from the
+    // start of a drag that moves the whole section somewhere else.
+    const Theme& th = f.app.theme();
+    const float heading = th.sessionBarHeight + 4.0f + th.rowHeight * 0.5f;
+    f.Press(60.0f, heading);
+    KITE_EXPECT_FALSE(f.app.sidebarCollapsed(SidebarSection::QuickAccess));
+
+    f.Release(60.0f, heading);
+    KITE_EXPECT(f.app.sidebarCollapsed(SidebarSection::QuickAccess));
+
+    f.Paint();
+    f.Click(60.0f, heading);
+    KITE_EXPECT_FALSE(f.app.sidebarCollapsed(SidebarSection::QuickAccess));
+}
+
+KITE_TEST(appui, a_folded_section_stops_drawing_its_items) {
+    // The quick-access entry is the folder being viewed, so it is the one thing
+    // in the sidebar painted with the selection colour.
+    Fixture f;
+    f.Paint();
+    KITE_EXPECT_EQ(f.renderer.CountFills(f.app.theme().rowSelected), 1);
+
+    f.app.ToggleSidebarSection(SidebarSection::QuickAccess);
+    f.Paint();
+    KITE_EXPECT_EQ(f.renderer.CountFills(f.app.theme().rowSelected), 0);
+}
+
+// Folding a section shortens the sidebar, and the item below it moves up into
+// the space. The hit test has to follow, or clicks land on what used to be there.
+KITE_TEST(appui, folding_a_section_moves_the_ones_below_it_up) {
+    Fixture f;
+    f.app.ToggleSidebarSection(SidebarSection::QuickAccess);
+    f.Paint();
+
+    // With quick access folded, the row after the two remaining gaps and the
+    // three headings is the drive - and opening it navigates there.
+    const Theme& th = f.app.theme();
+    const float y = th.sessionBarHeight + 4.0f + th.rowHeight * 3.5f + 12.0f;
+    f.Click(60.0f, y);
+    test::PumpUntilSettled(f.app);
+    KITE_EXPECT_EQ(f.tab()->path, std::string("C:\\"));
+}
+
+// --- reordering by drag -----------------------------------------------------
+
+namespace {
+
+// Three bookmarks, in a known order, with the sidebar's other two sections
+// folded away so the rows sit at predictable heights.
+struct SidebarFixture : Fixture {
+    SidebarFixture() {
+        app.ToggleSidebarSection(SidebarSection::QuickAccess);
+        app.ToggleSidebarSection(SidebarSection::Drives);
+        app.ToggleBookmark("C:\\home\\alpha");
+        app.ToggleBookmark("C:\\home\\beta");
+        app.ToggleBookmark("C:\\home\\alpha\\nested");
+        Paint();
+    }
+
+    // Middle of bookmark row `index`: the quick-access heading, a gap, and the
+    // bookmarks heading come first.
+    float BookmarkY(int index) const {
+        const Theme& th = app.theme();
+        return th.sessionBarHeight + 4.0f + 6.0f + th.rowHeight * (2.0f + index + 0.5f);
+    }
+
+    std::string BookmarkAt(int index) const { return app.workspace().bookmarks[index].path; }
+};
+
+}  // namespace
+
+KITE_TEST(appui, dragging_a_bookmark_down_past_another_swaps_them) {
+    SidebarFixture f;
+    KITE_EXPECT_EQ(f.BookmarkAt(0), std::string("C:\\home\\alpha"));
+
+    f.Press(60.0f, f.BookmarkY(0));
+    f.Drag(60.0f, f.BookmarkY(1) + 4.0f);  // past the midpoint of the row below
+    f.Release(60.0f, f.BookmarkY(1) + 4.0f);
+
+    KITE_EXPECT_EQ(f.BookmarkAt(0), std::string("C:\\home\\beta"));
+    KITE_EXPECT_EQ(f.BookmarkAt(1), std::string("C:\\home\\alpha"));
+    KITE_EXPECT_EQ(f.BookmarkAt(2), std::string("C:\\home\\alpha\\nested"));
+}
+
+KITE_TEST(appui, dragging_a_bookmark_to_the_top_puts_it_first) {
+    SidebarFixture f;
+    f.Press(60.0f, f.BookmarkY(2));
+    f.Drag(60.0f, f.BookmarkY(0) - 4.0f);
+    f.Release(60.0f, f.BookmarkY(0) - 4.0f);
+
+    KITE_EXPECT_EQ(f.BookmarkAt(0), std::string("C:\\home\\alpha\\nested"));
+    KITE_EXPECT_EQ(f.BookmarkAt(1), std::string("C:\\home\\alpha"));
+}
+
+// The press cannot open the folder, or every reorder would also walk away from
+// the folder on screen. A press that never becomes a drag still opens it.
+KITE_TEST(appui, a_sidebar_item_opens_on_the_release_not_on_the_press) {
+    SidebarFixture f;
+    const std::string before = f.tab()->path;
+
+    f.Press(60.0f, f.BookmarkY(1));
+    KITE_EXPECT_EQ(f.tab()->path, before);
+
+    f.Release(60.0f, f.BookmarkY(1));
+    test::PumpUntilSettled(f.app);
+    KITE_EXPECT_EQ(f.tab()->path, std::string("C:\\home\\beta"));
+}
+
+KITE_TEST(appui, a_drag_that_ends_on_the_item_it_started_on_neither_moves_nor_opens_it) {
+    SidebarFixture f;
+    const std::string before = f.tab()->path;
+
+    f.Press(60.0f, f.BookmarkY(1));
+    f.Drag(60.0f, f.BookmarkY(1) + 8.0f);
+    f.Release(60.0f, f.BookmarkY(1) + 8.0f);
+    test::PumpUntilSettled(f.app);
+
+    KITE_EXPECT_EQ(f.BookmarkAt(1), std::string("C:\\home\\beta"));
+    KITE_EXPECT_EQ(f.tab()->path, before);
+}
+
+// --- reordering the sections themselves --------------------------------------
+
+KITE_TEST(appui, dragging_a_heading_past_another_section_moves_the_whole_block) {
+    SidebarFixture f;
+    const std::vector<SidebarSection>& order = f.app.sidebarSections();
+    KITE_EXPECT_EQ(static_cast<int>(order[0]), static_cast<int>(SidebarSection::QuickAccess));
+
+    // Quick access and drives are folded here, so each is one heading row and
+    // the bookmarks block is the heading plus its three rows.
+    const Theme& th = f.app.theme();
+    const float quickHeading = th.sessionBarHeight + 4.0f + th.rowHeight * 0.5f;
+    const float bookmarksHeading = th.sessionBarHeight + 4.0f + 6.0f + th.rowHeight * 1.5f;
+
+    f.Press(60.0f, bookmarksHeading);
+    f.Drag(60.0f, quickHeading - 4.0f);  // above the middle of the quick access block
+    f.Release(60.0f, quickHeading - 4.0f);
+
+    KITE_EXPECT_EQ(static_cast<int>(order[0]), static_cast<int>(SidebarSection::Bookmarks));
+    KITE_EXPECT_EQ(static_cast<int>(order[1]), static_cast<int>(SidebarSection::QuickAccess));
+    KITE_EXPECT_EQ(static_cast<int>(order[2]), static_cast<int>(SidebarSection::Drives));
+}
+
+// The block is what the drop is measured against, not the heading row: with a
+// section open, its heading is nowhere near the middle of the space it takes.
+KITE_TEST(appui, a_section_dropped_over_an_open_neighbour_lands_by_that_blocks_middle) {
+    SidebarFixture f;
+    f.app.ToggleSidebarSection(SidebarSection::QuickAccess);  // unfold it again
+    f.Paint();
+
+    // Quick access is a heading and one entry, bookmarks a heading and three,
+    // so the drives heading is the seventh row down, past both gaps.
+    const Theme& th = f.app.theme();
+    const float drivesHeading = th.sessionBarHeight + 4.0f + 12.0f + th.rowHeight * 6.5f;
+    // Bookmarks sit second, four rows deep. Its first entry is above the middle
+    // of that block, so the drives land in front of the whole thing.
+    const float insideBookmarks = th.sessionBarHeight + 4.0f + 6.0f + th.rowHeight * 3.5f;
+
+    f.Press(60.0f, drivesHeading);
+    f.Drag(60.0f, insideBookmarks);
+    f.Release(60.0f, insideBookmarks);
+
+    const std::vector<SidebarSection>& order = f.app.sidebarSections();
+    KITE_EXPECT_EQ(static_cast<int>(order[0]), static_cast<int>(SidebarSection::QuickAccess));
+    KITE_EXPECT_EQ(static_cast<int>(order[1]), static_cast<int>(SidebarSection::Drives));
+    KITE_EXPECT_EQ(static_cast<int>(order[2]), static_cast<int>(SidebarSection::Bookmarks));
+}
+
+KITE_TEST(appui, a_heading_dragged_and_put_back_neither_moves_nor_folds) {
+    SidebarFixture f;
+    const Theme& th = f.app.theme();
+    const float bookmarksHeading = th.sessionBarHeight + 4.0f + 6.0f + th.rowHeight * 1.5f;
+
+    f.Press(60.0f, bookmarksHeading);
+    f.Drag(60.0f, bookmarksHeading + 10.0f);
+    f.Release(60.0f, bookmarksHeading + 10.0f);
+
+    KITE_EXPECT_EQ(static_cast<int>(f.app.sidebarSections()[1]),
+                   static_cast<int>(SidebarSection::Bookmarks));
+    // A drag is not a click, so the fold must not have happened on the way.
+    KITE_EXPECT_FALSE(f.app.sidebarCollapsed(SidebarSection::Bookmarks));
+}
+
+// A bookmark has no place among the drives, so a drag that wanders out of its
+// own section proposes nothing rather than dropping into the neighbour.
+KITE_TEST(appui, dragging_out_of_the_section_drops_nowhere) {
+    Fixture f;
+    f.app.ToggleBookmark("C:\\home\\alpha");
+    f.app.ToggleBookmark("C:\\home\\beta");
+    f.Paint();
+
+    const Theme& th = f.app.theme();
+    // Quick access is open here, so the bookmark rows sit below its one entry.
+    const float firstBookmark =
+        th.sessionBarHeight + 4.0f + 6.0f + th.rowHeight * 3.5f;
+    f.Press(60.0f, firstBookmark);
+    // Down into the drive rows, well past the bookmarks.
+    f.Drag(60.0f, firstBookmark + th.rowHeight * 6.0f);
+    f.Release(60.0f, firstBookmark + th.rowHeight * 6.0f);
+
+    KITE_EXPECT_EQ(f.app.workspace().bookmarks[0].path, std::string("C:\\home\\alpha"));
+    KITE_EXPECT_EQ(f.app.workspace().bookmarks[1].path, std::string("C:\\home\\beta"));
 }
 
 // --- selection band ---------------------------------------------------------

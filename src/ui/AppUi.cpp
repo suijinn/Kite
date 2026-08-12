@@ -13,7 +13,6 @@ namespace kite::ui {
 namespace {
 
 constexpr float kPad = 8.0f;
-constexpr float kIconCell = 20.0f;
 constexpr float kColExt = 58.0f;
 constexpr float kColSize = 84.0f;
 constexpr float kColDate = 124.0f;
@@ -21,13 +20,24 @@ constexpr float kScrollbarWidth = 10.0f;
 
 std::string SortArrow(bool desc) { return desc ? "\xE2\x96\xBC" : "\xE2\x96\xB2"; }  // ▼ ▲
 
+// Width of the cell an icon is drawn in. Tied to the row height rather than
+// fixed, because that is what the shell icon is requested at (rowHeight * 0.8):
+// a constant here would leave a 16 px icon marooned in a row twice that tall
+// once the text size is turned up.
+float IconCell(const Theme& theme) { return theme.rowHeight * 0.9f; }
+
 }  // namespace
 
 AppUi::AppUi(App& app) : app_(app) {}
 
 void AppUi::Add(const RectF& r, Hit kind, int index, Pane* pane, SplitNode* node,
                 std::string path) {
-    regions_.push_back({ r, kind, pane, node, index, std::move(path) });
+    regions_.push_back({ r, kind, pane, node, index, SidebarSection::Count, std::move(path) });
+}
+
+void AppUi::AddSidebar(const RectF& r, Hit kind, SidebarSection section, int index,
+                       std::string path) {
+    regions_.push_back({ r, kind, nullptr, nullptr, index, section, std::move(path) });
 }
 
 const AppUi::Region* AppUi::Pick(float x, float y) const {
@@ -48,7 +58,10 @@ const AppUi::Region* AppUi::Pick(float x, float y) const {
 // states are deliberately not included, so pressing on a row does not blink it.
 bool AppUi::PointerOver(const RectF& box) const {
     if (!mouseInside_ || dropActive_) return false;
-    if (drag_ == Drag::Splitter || drag_ == Drag::Tab || drag_ == Drag::Marquee) return false;
+    if (drag_ == Drag::Splitter || drag_ == Drag::Tab || drag_ == Drag::Marquee ||
+        drag_ == Drag::Sidebar || drag_ == Drag::Section) {
+        return false;
+    }
     return box.contains(mouseX_, mouseY_);
 }
 
@@ -118,6 +131,15 @@ void AppUi::PaintDragOverlay(Renderer& r) {
     // Where the dragged tab would be inserted.
     if (drag_ == Drag::Tab && !dropTabMarker_.empty()) {
         r.FillRect(dropTabMarker_, th.accent);
+    }
+
+    // The same caret for a sidebar item, laid across the row boundary rather
+    // than down the side of a tab, and for a whole section on its block edge.
+    if (drag_ == Drag::Sidebar && !dropSidebarMarker_.empty()) {
+        r.FillRect(dropSidebarMarker_, th.accent);
+    }
+    if (drag_ == Drag::Section && !dropSectionMarker_.empty()) {
+        r.FillRect(dropSectionMarker_, th.accent);
     }
 
     // The selection band. Drawn last and clipped to its own list, so sweeping
@@ -194,27 +216,56 @@ void AppUi::PaintSidebar(Renderer& r, const RectF& area) {
 
     r.FillRect(area, th.panelBg);
     sidebarRect_ = area;
+    // Clamped against the previous frame's height: a section folded away shrinks
+    // the content under a scroll offset that was valid a moment ago.
+    sidebarScroll_ = std::clamp(sidebarScroll_, 0.0f, std::max(0.0f, sidebarContent_ - area.h()));
     r.PushClip(area);
 
     const float rowH = th.rowHeight;
-    float y = area.t + 4.0f - sidebarScroll_;
+    const float iconCell = IconCell(th);
+    const float top = area.t + 4.0f;
+    float y = top - sidebarScroll_;
     const Tab* current = const_cast<App&>(app_).workspace().focusedTab();
     const std::string currentPath = current ? current->path : std::string();
 
-    auto section = [&](const char* key) {
-        const RectF box = { area.l + kPad, y, area.r - kPad, y + rowH };
-        r.DrawText(str.Get(key), box, th.textDim.alpha(0.75f), FontRole::UiSmall, TextAlign::Left);
-        y += rowH;
+    // A section is greyed out while it is the one being carried, heading and
+    // rows alike: it is the whole block that moves, not the heading on its own.
+    auto carrying = [&](SidebarSection id) {
+        return drag_ == Drag::Section && dragSection_ == id;
     };
 
-    auto item = [&](const std::string& label, const std::string& fullPath, int glyphKind) {
+    // Returns whether the items under this heading are to be laid out at all.
+    auto section = [&](const char* key, SidebarSection id) {
+        const bool collapsed = app_.sidebarCollapsed(id);
+        const RectF row = { area.l + 2.0f, y, area.r - 2.0f, y + rowH };
+        if (row.b > area.t && row.t < area.b) {
+            // A heading is a control here, so it lights like one. Without that,
+            // the only hint that it folds is that the arrow moved after a click.
+            if (Hovered(row)) r.FillRoundRect(row, 4.0f, th.rowHover);
+            const Color headingColor = th.textDim.alpha(carrying(id) ? 0.35f : 0.75f);
+            const RectF mark = { row.l + 4.0f, row.t, row.l + 4.0f + 12.0f, row.b };
+            if (collapsed) {
+                glyph::ChevronRight(r, mark, headingColor);
+            } else {
+                glyph::ChevronDown(r, mark, headingColor);
+            }
+            r.DrawText(str.Get(key), { mark.r + 4.0f, row.t, row.r - kPad, row.b }, headingColor,
+                       FontRole::UiSmall, TextAlign::Left);
+            AddSidebar(row, Hit::SidebarSectionHeader, id, 0);
+        }
+        y += rowH;
+        return !collapsed;
+    };
+
+    auto item = [&](SidebarSection id, int index, const std::string& label,
+                    const std::string& fullPath, int glyphKind) {
         const RectF row = { area.l + 2.0f, y, area.r - 2.0f, y + rowH };
         if (row.b > area.t && row.t < area.b) {
             const bool selected = !currentPath.empty() && currentPath == fullPath;
             if (selected) r.FillRoundRect(row, 4.0f, th.rowSelected);
             if (Hovered(row)) r.FillRoundRect(row, 4.0f, th.rowHover);
 
-            const RectF icon = { row.l + 6.0f, row.t, row.l + 6.0f + kIconCell, row.b };
+            const RectF icon = { row.l + 6.0f, row.t, row.l + 6.0f + iconCell, row.b };
             const Color iconColor = selected ? th.rowSelectedText : th.textFolder;
             // Bookmarks keep the star: it says "you pinned this", which no icon
             // the shell can supply would.
@@ -229,43 +280,87 @@ void AppUi::PaintSidebar(Renderer& r, const RectF& area) {
                     default: glyph::Folder(r, icon, iconColor); break;
                 }
             }
+            // The row being carried keeps its place until the drop, but says so:
+            // with the pointer several rows away, the marker alone does not tell
+            // you what is being moved.
+            const bool carried = (drag_ == Drag::Sidebar && dragSidebarSection_ == id &&
+                                  dragSidebarIndex_ == index) ||
+                                 carrying(id);
+            const Color textColor = selected ? th.rowSelectedText : th.text;
             r.DrawText(label, { icon.r + 6.0f, row.t, row.r - 6.0f, row.b },
-                       selected ? th.rowSelectedText : th.text, FontRole::Ui, TextAlign::Left);
-            Add(row, Hit::SidebarItem, 0, nullptr, nullptr, fullPath);
+                       carried ? textColor.alpha(textColor.a * 0.45f) : textColor, FontRole::Ui,
+                       TextAlign::Left);
+            AddSidebar(row, Hit::SidebarItem, id, index, fullPath);
         }
         y += rowH;
     };
 
-    section("ui.quick_access");
-    for (const fs::Root& q : app_.quickAccess()) item(q.label, q.path, 0);
+    // The order the three come in is the user's, so this is a loop over that
+    // order rather than three calls in the order they were written.
+    const std::vector<SidebarSection>& order = app_.sidebarSections();
+    for (size_t s = 0; s < order.size(); ++s) {
+        if (s > 0) y += 6.0f;
+        switch (order[s]) {
+            case SidebarSection::QuickAccess:
+                if (section("ui.quick_access", SidebarSection::QuickAccess)) {
+                    const std::vector<fs::Root>& quick = app_.quickAccess();
+                    for (size_t i = 0; i < quick.size(); ++i) {
+                        item(SidebarSection::QuickAccess, static_cast<int>(i), quick[i].label,
+                             quick[i].path, 0);
+                    }
+                }
+                break;
 
-    y += 6.0f;
-    section("ui.bookmarks");
-    const std::vector<Bookmark>& marks = const_cast<App&>(app_).workspace().bookmarks;
-    for (const Bookmark& mark : marks) item(mark.name, mark.path, 2);
+            case SidebarSection::Bookmarks:
+                if (section("ui.bookmarks", SidebarSection::Bookmarks)) {
+                    const std::vector<Bookmark>& marks =
+                        const_cast<App&>(app_).workspace().bookmarks;
+                    for (size_t i = 0; i < marks.size(); ++i) {
+                        item(SidebarSection::Bookmarks, static_cast<int>(i), marks[i].name,
+                             marks[i].path, 2);
+                    }
+                }
+                break;
 
-    y += 6.0f;
-    section("ui.drives");
-    for (const fs::Root& d : app_.roots()) {
-        const int kind = (d.kind == fs::RootKind::Cloud)     ? 3
-                         : (d.kind == fs::RootKind::Network) ? 0
-                                                             : 1;
-        item(d.label, d.path, kind);
+            case SidebarSection::Drives:
+                if (section("ui.drives", SidebarSection::Drives)) {
+                    const std::vector<fs::Root>& drives = app_.roots();
+                    for (size_t i = 0; i < drives.size(); ++i) {
+                        const fs::Root& d = drives[i];
+                        const int kind = (d.kind == fs::RootKind::Cloud)     ? 3
+                                         : (d.kind == fs::RootKind::Network) ? 0
+                                                                             : 1;
+                        item(SidebarSection::Drives, static_cast<int>(i), d.label, d.path, kind);
 
-        // A thin capacity bar under fixed drives; free space is the number
-        // people actually look for here.
-        if (d.totalBytes > 0 && y - rowH > area.t && y < area.b) {
-            const RectF track = { area.l + 34.0f, y + 1.0f, area.r - 12.0f, y + 4.0f };
-            r.FillRoundRect(track, 1.5f, th.border);
-            const float used = 1.0f - static_cast<float>(static_cast<double>(d.freeBytes) /
-                                                         static_cast<double>(d.totalBytes));
-            const RectF fill = { track.l, track.t, track.l + track.w() * std::clamp(used, 0.0f, 1.0f),
-                                 track.b };
-            r.FillRoundRect(fill, 1.5f, used > 0.9f ? th.textError : th.accent);
-            y += 7.0f;
+                        // A thin capacity bar under fixed drives; free space is
+                        // the number people actually look for here.
+                        if (d.totalBytes == 0) continue;
+                        if (y - rowH > area.t && y < area.b) {
+                            const RectF track = { area.l + 34.0f, y + 1.0f, area.r - 12.0f,
+                                                  y + 4.0f };
+                            r.FillRoundRect(track, 1.5f, th.border);
+                            const float used =
+                                1.0f - static_cast<float>(static_cast<double>(d.freeBytes) /
+                                                          static_cast<double>(d.totalBytes));
+                            const RectF fill = { track.l, track.t,
+                                                 track.l + track.w() * std::clamp(used, 0.0f, 1.0f),
+                                                 track.b };
+                            r.FillRoundRect(fill, 1.5f, used > 0.9f ? th.textError : th.accent);
+                        }
+                        // Outside the visibility test: the bar takes its space
+                        // whether or not it is on screen, or the rows below it
+                        // shift as the list scrolls.
+                        y += 7.0f;
+                    }
+                }
+                break;
+
+            default:
+                break;
         }
     }
 
+    sidebarContent_ = y + sidebarScroll_ - top;
     r.PopClip();
 }
 
@@ -579,7 +674,7 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
                          th.paneFocusIdle, 1.0f);
         }
 
-        const RectF icon = { row.l + 6.0f, row.t, row.l + 6.0f + kIconCell, row.b };
+        const RectF icon = { row.l + 6.0f, row.t, row.l + 6.0f + IconCell(th), row.b };
         const RectF nameBox = { icon.r + 6.0f, row.t, colName.r, row.b };
 
         if (!entry) {
@@ -1116,8 +1211,108 @@ void AppUi::FinishTabDrag() {
     app_.host().Invalidate();
 }
 
+// Which slot in the section being dragged the pointer is asking for, plus the
+// boundary to draw the caret on. Only rows of that one section are considered:
+// a bookmark has no meaning among the drives, and the sections are separately
+// ordered lists rather than one list with headings in it.
+bool AppUi::ResolveSidebarDrop(float x, float y, int* outIndex, RectF* outMarker) const {
+    if (dragSidebarSection_ == SidebarSection::Count) return false;
+
+    for (const Region& candidate : regions_) {
+        if (candidate.kind != Hit::SidebarItem || candidate.section != dragSidebarSection_) continue;
+        if (!candidate.rect.contains(x, y)) continue;
+
+        // Past the midpoint means "after this one", which is also how both ends
+        // are reached: the top half of the first row and the bottom half of the
+        // last one. Nothing outside the section's own rows counts, so a drag
+        // that wanders into the neighbouring section proposes nothing rather
+        // than quietly landing back where it came from.
+        const bool after = y > candidate.rect.center().y;
+        *outIndex = candidate.index + (after ? 1 : 0);
+        const float edge = after ? candidate.rect.b : candidate.rect.t;
+        *outMarker = { candidate.rect.l, edge - 1.0f, candidate.rect.r, edge + 1.0f };
+        return true;
+    }
+    return false;
+}
+
+void AppUi::FinishSidebarDrag() {
+    if (dragSidebarSection_ != SidebarSection::Count && dragSidebarIndex_ >= 0 &&
+        dropSidebarIndex_ >= 0) {
+        int target = dropSidebarIndex_;
+        // Lifting the item out first shifts everything after it down by one.
+        if (target > dragSidebarIndex_) --target;
+        app_.MoveSidebarItem(dragSidebarSection_, dragSidebarIndex_, target);
+    }
+    CancelDrag();
+    app_.host().Invalidate();
+}
+
+// The rectangle a whole section occupies: its heading plus every row under it.
+// Built from the regions the last frame laid down rather than remembered, so a
+// folded section is simply its heading and nothing else.
+RectF AppUi::SectionBlock(SidebarSection section) const {
+    RectF block{};
+    for (const Region& candidate : regions_) {
+        const bool mine = (candidate.kind == Hit::SidebarSectionHeader ||
+                           candidate.kind == Hit::SidebarItem) &&
+                          candidate.section == section;
+        if (!mine) continue;
+        if (block.empty()) {
+            block = candidate.rect;
+        } else {
+            block.l = std::min(block.l, candidate.rect.l);
+            block.t = std::min(block.t, candidate.rect.t);
+            block.r = std::max(block.r, candidate.rect.r);
+            block.b = std::max(block.b, candidate.rect.b);
+        }
+    }
+    return block;
+}
+
+// Which slot in the section order a carried heading is asking for. Measured
+// against whole blocks, not the headings alone: with quick access open, its
+// heading is nowhere near the middle of the space it takes up, and dropping
+// "below the bookmarks" has to mean below the bookmarks' rows too.
+bool AppUi::ResolveSectionDrop(float x, float y, int* outIndex, RectF* outMarker) const {
+    if (!sidebarRect_.contains(x, y)) return false;
+
+    const std::vector<SidebarSection>& order = app_.sidebarSections();
+    for (size_t i = 0; i < order.size(); ++i) {
+        const RectF block = SectionBlock(order[i]);
+        if (block.empty() || y < block.t || y >= block.b) continue;
+
+        const bool after = y > block.center().y;
+        *outIndex = static_cast<int>(i) + (after ? 1 : 0);
+        const float edge = after ? block.b : block.t;
+        *outMarker = { sidebarRect_.l + 2.0f, edge - 1.0f, sidebarRect_.r - 2.0f, edge + 1.0f };
+        return true;
+    }
+    return false;
+}
+
+void AppUi::FinishSectionDrag() {
+    if (dragSectionIndex_ >= 0 && dropSectionIndex_ >= 0) {
+        int target = dropSectionIndex_;
+        // Lifting the section out first shifts everything after it up by one.
+        if (target > dragSectionIndex_) --target;
+        app_.MoveSidebarSection(dragSectionIndex_, target);
+    }
+    CancelDrag();
+    app_.host().Invalidate();
+}
+
 void AppUi::CancelDrag() {
     drag_ = Drag::None;
+    dragSection_ = SidebarSection::Count;
+    dragSectionIndex_ = -1;
+    dropSectionIndex_ = -1;
+    dropSectionMarker_ = {};
+    dragSidebarSection_ = SidebarSection::Count;
+    dragSidebarIndex_ = -1;
+    dropSidebarIndex_ = -1;
+    dropSidebarMarker_ = {};
+    pendingSidebarPath_.clear();
     dragSplitter_ = nullptr;
     marqueePane_ = nullptr;
     marqueeTab_ = nullptr;
@@ -1243,6 +1438,10 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             return true;
         } else if (drag_ == Drag::PendingTab && moved > kDragThreshold) {
             drag_ = Drag::Tab;
+        } else if (drag_ == Drag::PendingSidebar && moved > kDragThreshold) {
+            drag_ = Drag::Sidebar;
+        } else if (drag_ == Drag::PendingSection && moved > kDragThreshold) {
+            drag_ = Drag::Section;
         } else if (drag_ == Drag::PendingFile && moved > kDragThreshold) {
             // Hand off to the OS. BeginFileDrag blocks until the drag ends, so
             // clear our own state first.
@@ -1281,6 +1480,36 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             return true;
         }
 
+        if (drag_ == Drag::Section) {
+            int index = -1;
+            RectF marker{};
+            if (ResolveSectionDrop(e.x, e.y, &index, &marker)) {
+                dropSectionIndex_ = index;
+                dropSectionMarker_ = marker;
+            } else {
+                dropSectionIndex_ = -1;
+                dropSectionMarker_ = {};
+            }
+            app_.host().Invalidate();
+            return true;
+        }
+
+        if (drag_ == Drag::Sidebar) {
+            int index = -1;
+            RectF marker{};
+            if (ResolveSidebarDrop(e.x, e.y, &index, &marker)) {
+                dropSidebarIndex_ = index;
+                dropSidebarMarker_ = marker;
+            } else {
+                // Off the section - over a heading, another section, or the
+                // list. Nothing is proposed, so letting go here changes nothing.
+                dropSidebarIndex_ = -1;
+                dropSidebarMarker_ = {};
+            }
+            app_.host().Invalidate();
+            return true;
+        }
+
         const int shape = (region && region->kind == Hit::Splitter)
                               ? (region->node->kind == SplitNode::Kind::LeftRight ? 2 : 3)
                               : 0;
@@ -1309,6 +1538,29 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             FinishTabDrag();
             return true;
         }
+        if (drag_ == Drag::Sidebar) {
+            FinishSidebarDrag();
+            return true;
+        }
+        if (drag_ == Drag::Section) {
+            FinishSectionDrag();
+            return true;
+        }
+        if (drag_ == Drag::PendingSidebar) {
+            // Never moved far enough to be a drag, so it was a click after all.
+            const std::string path = pendingSidebarPath_;
+            const bool newTab = pendingSidebarNewTab_;
+            CancelDrag();
+            if (!path.empty()) app_.OpenPath(path, newTab);
+            return true;
+        }
+        if (drag_ == Drag::PendingSection) {
+            // Same: a heading that was pressed and let go is a fold, not a move.
+            const SidebarSection section = dragSection_;
+            CancelDrag();
+            app_.ToggleSidebarSection(section);
+            return true;
+        }
         const bool wasMarquee = (drag_ == Drag::Marquee);
         CancelDrag();
         if (wasMarquee) {
@@ -1325,7 +1577,8 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             return true;
         }
         if (region && sidebarRect_.contains(e.x, e.y)) {
-            sidebarScroll_ = std::max(0.0f, sidebarScroll_ - e.wheel * 60.0f);
+            const float maxScroll = std::max(0.0f, sidebarContent_ - sidebarRect_.h());
+            sidebarScroll_ = std::clamp(sidebarScroll_ - e.wheel * 60.0f, 0.0f, maxScroll);
             app_.host().Invalidate();
             return true;
         }
@@ -1365,9 +1618,46 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             app_.Execute(Cmd::NewSession);
             return true;
 
-        case Hit::SidebarItem:
-            app_.OpenPath(region->path, (e.mods & kModCtrl) != 0 || e.button == 2);
+        case Hit::SidebarSectionHeader: {
+            if (e.button != 0) return true;
+            // Arm a possible section move. Folding happens on the release, so
+            // that dragging a heading somewhere else does not also fold it on
+            // the way out.
+            const std::vector<SidebarSection>& order = app_.sidebarSections();
+            const auto it = std::find(order.begin(), order.end(), region->section);
+            drag_ = Drag::PendingSection;
+            dragSection_ = region->section;
+            dragSectionIndex_ =
+                (it == order.end()) ? -1 : static_cast<int>(std::distance(order.begin(), it));
+            dropSectionIndex_ = -1;
+            dropSectionMarker_ = {};
+            dragStartX_ = e.x;
+            dragStartY_ = e.y;
             return true;
+        }
+
+        case Hit::SidebarItem: {
+            const bool newTab = (e.mods & kModCtrl) != 0 || e.button == 2;
+            if (e.button != 0) {
+                // Only the left button can start a reorder, so the middle click
+                // has nothing to wait for.
+                app_.OpenPath(region->path, newTab);
+                return true;
+            }
+            // Arm a possible reorder. The folder opens on the release, not here:
+            // navigating on the press would mean every drag also walked away
+            // from the folder on screen.
+            drag_ = Drag::PendingSidebar;
+            dragSidebarSection_ = region->section;
+            dragSidebarIndex_ = region->index;
+            dropSidebarIndex_ = -1;
+            dropSidebarMarker_ = {};
+            pendingSidebarPath_ = region->path;
+            pendingSidebarNewTab_ = newTab;
+            dragStartX_ = e.x;
+            dragStartY_ = e.y;
+            return true;
+        }
 
         case Hit::TabBar:
             app_.FocusPane(region->pane);

@@ -271,6 +271,11 @@ void WinWindow::Paint() {
     // client area instead of only matching at start-up.
     ApplyDarkTitleBar();
 
+    // Same idea for the text formats: Cmd::FontLarger and friends move the size
+    // in the core, and DirectWrite formats are built once at that size. Cheap on
+    // every frame - UpdateTheme compares first and only rebuilds on a change.
+    renderer_.UpdateTheme(app_->theme(), dpiScale_ * 96.0f);
+
     if (icons_) {
         // Icons are drawn into a cell as tall as a row, so that - scaled by DPI -
         // is the size worth asking the shell for.
