@@ -44,6 +44,42 @@ struct Fixture {
         ui.OnMouse(e);
     }
 
+    void Press(float x, float y, uint8_t mods = 0, int button = 0) {
+        ui::MouseEvent e;
+        e.type = ui::MouseEvent::Type::Down;
+        e.x = x;
+        e.y = y;
+        e.button = button;
+        e.mods = mods;
+        ui.OnMouse(e);
+    }
+
+    // A move with the left button held, which is what a sweep is made of.
+    void Drag(float x, float y) {
+        ui::MouseEvent e;
+        e.type = ui::MouseEvent::Type::Move;
+        e.x = x;
+        e.y = y;
+        e.buttons = ui::kButtonLeft;
+        ui.OnMouse(e);
+    }
+
+    void Release(float x, float y) {
+        ui::MouseEvent e;
+        e.type = ui::MouseEvent::Type::Up;
+        e.x = x;
+        e.y = y;
+        ui.OnMouse(e);
+    }
+
+    Tab* tab() { return app.workspace().focusedTab(); }
+
+    // Well below the last row: the empty part of the list, where a band starts.
+    PointF EmptyPoint() const {
+        const Theme& th = app.theme();
+        return { th.sidebarWidth + 60.0f, listTop() + th.rowHeight * 9.0f };
+    }
+
     // Top of the first list row: the bars above it are all fixed height.
     float listTop() const {
         const Theme& th = app.theme();
@@ -160,6 +196,135 @@ KITE_TEST(appui, the_sidebar_lights_under_the_pointer_too) {
     f.Paint();
 
     KITE_EXPECT_EQ(f.renderer.FillsAt(th.rowHover, x, y).size(), size_t{ 1 });
+}
+
+// --- selection band ---------------------------------------------------------
+//
+// C:\home lists six rows - "..", two folders and three files - in a window with
+// room for far more, so everything below them is the empty space a band starts
+// from.
+
+KITE_TEST(appui, a_band_swept_up_from_the_empty_space_selects_the_rows_it_crosses) {
+    Fixture f;
+    f.Paint();
+
+    const PointF start = f.EmptyPoint();
+    f.Press(start.x, start.y);
+    KITE_EXPECT_EQ(f.tab()->MarkedCount(), 0);
+
+    f.Drag(start.x, f.RowPoint(2).y);
+    // Row 2 down to the last one: three files and a folder, "beta" included.
+    KITE_EXPECT_EQ(f.tab()->MarkedCount(), 4);
+
+    f.Release(start.x, f.RowPoint(2).y);
+    KITE_EXPECT_EQ(f.tab()->MarkedCount(), 4);
+}
+
+// The band is laid down from scratch every move, so pulling it back has to let
+// go of exactly what it caught.
+KITE_TEST(appui, pulling_the_band_back_releases_what_it_caught) {
+    Fixture f;
+    f.Paint();
+
+    const PointF start = f.EmptyPoint();
+    f.Press(start.x, start.y);
+    f.Drag(start.x, f.RowPoint(1).y);
+    KITE_EXPECT_EQ(f.tab()->MarkedCount(), 5);
+
+    f.Drag(start.x, start.y);
+    KITE_EXPECT_EQ(f.tab()->MarkedCount(), 0);
+}
+
+// Marks made before the sweep are the base it is drawn on, not something it
+// wipes: Ctrl on the band means the same thing it means on a click.
+KITE_TEST(appui, ctrl_keeps_what_was_already_selected) {
+    Fixture f;
+    f.Paint();
+
+    const PointF row = f.RowPoint(1);
+    f.Press(row.x, row.y, kModCtrl);
+    f.Release(row.x, row.y);
+    KITE_EXPECT_EQ(f.tab()->MarkedCount(), 1);
+
+    const PointF start = f.EmptyPoint();
+    f.Press(start.x, start.y, kModCtrl);
+    f.Drag(start.x, f.RowPoint(4).y);
+    // Rows 4 and 5, plus the one picked out by hand.
+    KITE_EXPECT_EQ(f.tab()->MarkedCount(), 3);
+
+    // And without Ctrl the same sweep starts from nothing.
+    f.Release(start.x, f.RowPoint(4).y);
+    f.Press(start.x, start.y);
+    f.Drag(start.x, f.RowPoint(4).y);
+    KITE_EXPECT_EQ(f.tab()->MarkedCount(), 2);
+}
+
+// A press in the empty space is also how the selection is dropped, and a hand
+// that shifts a pixel while clicking must not turn that into a selection.
+KITE_TEST(appui, a_click_in_the_empty_space_that_barely_moves_selects_nothing) {
+    Fixture f;
+    f.Paint();
+    f.app.Execute(Cmd::SelectAll);
+    KITE_EXPECT_NE(f.tab()->MarkedCount(), 0);
+
+    const PointF start = f.EmptyPoint();
+    f.Press(start.x, start.y);
+    f.Drag(start.x + 2.0f, start.y - 3.0f);
+    f.Release(start.x + 2.0f, start.y - 3.0f);
+
+    KITE_EXPECT_EQ(f.tab()->MarkedCount(), 0);
+}
+
+// ".." is a way out of the folder, not an item, so a band that runs off the top
+// of the list picks up everything except it.
+KITE_TEST(appui, the_parent_row_is_never_caught_by_the_band) {
+    Fixture f;
+    f.Paint();
+
+    const PointF start = f.EmptyPoint();
+    f.Press(start.x, start.y);
+    f.Drag(start.x, f.listTop() - 40.0f);
+
+    KITE_EXPECT_EQ(f.tab()->MarkedCount(), f.tab()->ItemCount());
+    KITE_EXPECT(f.tab()->IsParentRow(0));
+}
+
+// The band itself is drawn only while it is being swept. Sampled below the last
+// row, where the cursor row's wash - the same colour - cannot reach.
+KITE_TEST(appui, the_band_is_drawn_while_it_is_swept_and_gone_afterwards) {
+    Fixture f;
+    f.Paint();
+
+    const Color band = f.app.theme().accent.alpha(0.16f);
+    const PointF start = f.EmptyPoint();
+    const float sample = f.listTop() + f.app.theme().rowHeight * 7.0f;
+
+    f.Press(start.x, start.y);
+    f.Drag(start.x + 200.0f, f.RowPoint(2).y);
+    f.Paint();
+    KITE_EXPECT_EQ(f.renderer.FillsAt(band, start.x + 100.0f, sample).size(), size_t{ 1 });
+
+    f.Release(start.x + 200.0f, f.RowPoint(2).y);
+    f.Paint();
+    KITE_EXPECT_EQ(f.renderer.FillsAt(band, start.x + 100.0f, sample).size(), size_t{ 0 });
+}
+
+// Nothing is lit under the pointer during a sweep: the rows it covers already
+// say so as selected, and a second wash on one of them says nothing more.
+KITE_TEST(appui, no_row_is_lit_while_a_band_is_being_swept) {
+    Fixture f;
+    f.Paint();
+
+    const PointF start = f.EmptyPoint();
+    f.Press(start.x, start.y);
+    f.Drag(start.x, f.RowPoint(2).y);
+    f.Paint();
+    KITE_EXPECT_EQ(f.renderer.CountFills(f.app.theme().rowHover), 0);
+
+    f.Release(start.x, f.RowPoint(2).y);
+    f.Move(f.RowPoint(2).x, f.RowPoint(2).y);
+    f.Paint();
+    KITE_EXPECT_EQ(f.renderer.CountFills(f.app.theme().rowHover), 1);
 }
 
 // Moving the mouse redraws the window, so it may only ask for one when the

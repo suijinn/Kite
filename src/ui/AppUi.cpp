@@ -1,6 +1,7 @@
 #include "ui/AppUi.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "core/base/Format.h"
 #include "core/base/PathUtil.h"
@@ -41,11 +42,13 @@ const AppUi::Region* AppUi::Pick(float x, float y) const {
 // Nothing is lit while something is being dragged: during a splitter or tab
 // drag the pointer sweeps across rows it is not pointing at, and during a file
 // drag from outside, the drop feedback is the answer to "where would this land"
-// - a second highlight next to it only muddles it. Note the pending states are
-// deliberately not included, so pressing on a row does not blink it.
+// - a second highlight next to it only muddles it. A selection band is the same
+// case seen from the other side: the rows it covers are already washed as
+// selected, and lighting one more of them says nothing extra. Note the pending
+// states are deliberately not included, so pressing on a row does not blink it.
 bool AppUi::PointerOver(const RectF& box) const {
     if (!mouseInside_ || dropActive_) return false;
-    if (drag_ == Drag::Splitter || drag_ == Drag::Tab) return false;
+    if (drag_ == Drag::Splitter || drag_ == Drag::Tab || drag_ == Drag::Marquee) return false;
     return box.contains(mouseX_, mouseY_);
 }
 
@@ -115,6 +118,24 @@ void AppUi::PaintDragOverlay(Renderer& r) {
     // Where the dragged tab would be inserted.
     if (drag_ == Drag::Tab && !dropTabMarker_.empty()) {
         r.FillRect(dropTabMarker_, th.accent);
+    }
+
+    // The selection band. Drawn last and clipped to its own list, so sweeping
+    // past the edge of the pane does not paint over the bars or the neighbour.
+    if (drag_ == Drag::Marquee && marqueePane_) {
+        const Tab* tab = marqueePane_->activeTab();
+        if (tab) {
+            const RectF& body = marqueePane_->listArea;
+            const float anchorY = body.t + marqueeAnchorY_ - tab->scroll;
+            const RectF band =
+                RectF{ std::min(marqueeAnchorX_, marqueeX_), std::min(anchorY, marqueeY_),
+                       std::max(marqueeAnchorX_, marqueeX_), std::max(anchorY, marqueeY_) }
+                    .intersect(body);
+            if (!band.empty()) {
+                r.FillRect(band, th.accent.alpha(0.16f));
+                r.StrokeRect(band, th.accent.alpha(0.7f), 1.0f);
+            }
+        }
     }
 }
 
@@ -953,6 +974,82 @@ bool AppUi::HandleListClick(const Region& region, const MouseEvent& e) {
     return true;
 }
 
+// A press on the empty part of a list starts a selection band. Rows are not a
+// starting point: pressing one is how a file is dragged out, and taking that
+// away to gain a band would trade a daily operation for an occasional one.
+// That is also what every file manager does, Explorer included, and it means
+// the band is a tool for the space under a short listing - a long one is what
+// Shift+click is for.
+void AppUi::BeginMarquee(Pane* pane, const MouseEvent& e) {
+    Tab* tab = pane ? pane->activeTab() : nullptr;
+    if (!tab) return;
+
+    // Ctrl adds to what is already selected, exactly as it does for a click.
+    if ((e.mods & kModCtrl) == 0) tab->ClearMarks();
+
+    // The strip beside the rows belongs to the scrollbar whenever one is drawn.
+    // It is empty list space as far as hit testing goes, but sweeping a
+    // selection out of the thumb is not what anyone reaching for it wants.
+    const RectF& area = pane->listArea;
+    const bool overScrollbar = e.x >= area.r - kScrollbarWidth &&
+                               static_cast<float>(tab->visible.size()) * pane->rowHeight > area.h();
+    if (overScrollbar) return;
+
+    // No threshold to cross first, unlike a tab or a file drag: there is nothing
+    // else a press out here could turn into, and the band catches no row until
+    // it actually reaches one.
+    drag_ = Drag::Marquee;
+    marqueePane_ = pane;
+    marqueeTab_ = tab;
+    marqueeBase_ = tab->marked;
+    marqueeAnchorX_ = e.x;
+    marqueeAnchorY_ = (e.y - area.t) + tab->scroll;
+    marqueeX_ = e.x;
+    marqueeY_ = e.y;
+}
+
+// Which rows the band covers is answered by geometry every time, never
+// accumulated: the marks are laid down again from the ones held when the sweep
+// began, so pulling the band back releases exactly what it released, and marks
+// set earlier with Space or Ctrl+click are not swept away with it.
+void AppUi::UpdateMarquee(float x, float y) {
+    Tab* tab = marqueePane_ ? marqueePane_->activeTab() : nullptr;
+    // A listing that changed under the sweep (a watcher event, a tab switched
+    // from the keyboard) makes the remembered marks meaningless; let go rather
+    // than write them onto whatever is there now.
+    if (!tab || tab != marqueeTab_ || tab->marked.size() != marqueeBase_.size()) {
+        CancelDrag();
+        app_.host().Invalidate();
+        return;
+    }
+
+    marqueeX_ = x;
+    marqueeY_ = y;
+
+    const RectF& body = marqueePane_->listArea;
+    const float rowH = std::max(1.0f, marqueePane_->rowHeight);
+    const float contentY = (y - body.t) + tab->scroll;
+    const float top = std::min(marqueeAnchorY_, contentY);
+    const float bottom = std::max(marqueeAnchorY_, contentY);
+
+    tab->marked = marqueeBase_;
+
+    // Half-open bands: a row is caught when the band actually overlaps it, so a
+    // press in the empty space followed by a twitch selects nothing.
+    const int rows = static_cast<int>(tab->visible.size());
+    const int firstRow = static_cast<int>(std::floor(top / rowH));
+    const int lastRow = static_cast<int>(std::ceil(bottom / rowH)) - 1;
+    if (rows > 0 && lastRow >= firstRow && lastRow >= 0 && firstRow < rows) {
+        tab->MarkRange(firstRow, lastRow, true);
+        // The cursor follows the moving end, so Shift+arrow afterwards carries
+        // on from where the pointer stopped instead of jumping back.
+        tab->cursor = std::clamp(static_cast<int>(std::floor(contentY / rowH)), 0, rows - 1);
+        tab->ResetAnchor();
+    }
+
+    app_.host().Invalidate();
+}
+
 // Clicks while the shortcut editor is up. Nothing behind it is reachable: the
 // panel is modal in the same sense the shell's own menu is.
 bool AppUi::HandleKeySettingsClick(const MouseEvent& e) {
@@ -1022,6 +1119,10 @@ void AppUi::FinishTabDrag() {
 void AppUi::CancelDrag() {
     drag_ = Drag::None;
     dragSplitter_ = nullptr;
+    marqueePane_ = nullptr;
+    marqueeTab_ = nullptr;
+    marqueeBase_.clear();
+    marqueeBase_.shrink_to_fit();
     dragTabPane_ = nullptr;
     dragTabIndex_ = -1;
     dropTabPane_ = nullptr;
@@ -1137,6 +1238,9 @@ bool AppUi::OnMouse(const MouseEvent& e) {
         if (!leftHeld && drag_ != Drag::None) {
             // The button came up somewhere we did not see; do not get stuck.
             CancelDrag();
+        } else if (drag_ == Drag::Marquee) {
+            UpdateMarquee(e.x, e.y);
+            return true;
         } else if (drag_ == Drag::PendingTab && moved > kDragThreshold) {
             drag_ = Drag::Tab;
         } else if (drag_ == Drag::PendingFile && moved > kDragThreshold) {
@@ -1205,7 +1309,12 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             FinishTabDrag();
             return true;
         }
+        const bool wasMarquee = (drag_ == Drag::Marquee);
         CancelDrag();
+        if (wasMarquee) {
+            app_.host().Invalidate();
+            return true;
+        }
         return false;
     }
 
@@ -1338,7 +1447,13 @@ bool AppUi::OnMouse(const MouseEvent& e) {
 
         case Hit::ListBackground:
             app_.FocusPane(region->pane);
-            if (Tab* t = region->pane->activeTab()) t->ClearMarks();
+            if (e.button == 0 && e.clicks == 1) {
+                // Clears the marks itself unless Ctrl is down, so a press here
+                // still drops the selection even if the band catches nothing.
+                BeginMarquee(region->pane, e);
+            } else if (Tab* t = region->pane->activeTab()) {
+                t->ClearMarks();
+            }
             if (e.button == 1) {
                 app_.ShowContextMenuAt(e.screenX, e.screenY, (e.mods & kModShift) == 0);
             } else if (e.button == 0 && e.clicks >= 2) {

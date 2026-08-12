@@ -116,6 +116,7 @@ private:
         PendingTab,   // pressed on a tab, not yet moved far enough
         Tab,          // reordering / relocating a tab
         PendingFile,  // pressed on a row, may become an OS file drag
+        Marquee,      // pressed on empty list space, sweeping a selection band
     };
 
     struct Region {
@@ -150,6 +151,8 @@ private:
     void PaintDragOverlay(Renderer& r);
 
     bool HandleListClick(const Region& region, const MouseEvent& e);
+    void BeginMarquee(Pane* pane, const MouseEvent& e);
+    void UpdateMarquee(float x, float y);
     void ScrollPane(Pane* pane, float deltaPixels);
 
     bool ResolveTabDrop(float x, float y, Pane** outPane, int* outIndex) const;
@@ -180,6 +183,17 @@ private:
     SplitNode* dragSplitter_ = nullptr;
     float dragOrigin_ = 0.0f;
     float dragRatio_ = 0.5f;
+
+    // Where the band started, as a place in the listing (pixels from the top of
+    // row 0) rather than a place on the screen. Same reason the hover keeps no
+    // row index: what a point on the glass means changes when the list moves.
+    Pane* marqueePane_ = nullptr;
+    Tab* marqueeTab_ = nullptr;
+    float marqueeAnchorX_ = 0.0f;
+    float marqueeAnchorY_ = 0.0f;
+    float marqueeX_ = 0.0f;
+    float marqueeY_ = 0.0f;
+    std::vector<uint8_t> marqueeBase_;  // marks as they were when the sweep began
 
     Pane* dragTabPane_ = nullptr;
     int dragTabIndex_ = -1;
