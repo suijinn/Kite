@@ -309,6 +309,34 @@ KITE_TEST(keyeditor, scrolling_never_runs_past_the_ends_of_the_list) {
     KITE_EXPECT_EQ(h.editor.scroll(), static_cast<int>(h.editor.rows().size()) - 10);
 }
 
+// The panel reports its height on every frame, and the wheel scrolls away from
+// the selection. Re-clamping to the cursor on each of those reports undid the
+// scroll before it was ever drawn - the wheel looked dead.
+KITE_TEST(keyeditor, a_wheel_scroll_survives_the_next_frame) {
+    Harness h;
+    h.editor.SetPageRows(10);
+    h.editor.Scroll(12);
+    const int scrolled = h.editor.scroll();
+    KITE_EXPECT(scrolled > 0);
+    KITE_EXPECT(h.editor.cursor() < scrolled);  // the selection is off screen now
+
+    h.editor.SetPageRows(10);
+    KITE_EXPECT_EQ(h.editor.scroll(), scrolled);
+}
+
+// Losing height is the case the clamp exists for: what fits changed, and the
+// selection matters more than where the view happened to be.
+KITE_TEST(keyeditor, a_shorter_panel_brings_the_selection_back) {
+    Harness h;
+    h.editor.SetPageRows(10);
+    h.editor.Scroll(12);
+    KITE_EXPECT(h.editor.cursor() < h.editor.scroll());
+
+    h.editor.SetPageRows(8);
+    KITE_EXPECT(h.editor.cursor() >= h.editor.scroll());
+    KITE_EXPECT(h.editor.cursor() < h.editor.scroll() + 8);
+}
+
 KITE_TEST(keyeditor, reopening_starts_from_a_clean_slate) {
     Harness h;
     h.Type("terminal");

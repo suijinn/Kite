@@ -510,23 +510,44 @@ KITE_TEST(app, the_folder_menu_targets_the_folder_even_with_a_selection) {
 
 KITE_TEST(app, the_folder_menu_has_its_own_extended_form) {
     // Both halves of the split have to survive: the extended folder menu is
-    // still aimed at the folder, and still asks for the background menu.
+    // still aimed at the folder, and still asks for the item menu.
     Harness h;
     h.app.Execute(Cmd::ExtendedFolderContextMenu);
 
     KITE_EXPECT(h.shell.lastContextMenuExtended);
-    KITE_EXPECT(h.shell.lastContextMenuBackground);
+    KITE_EXPECT_FALSE(h.shell.lastContextMenuBackground);
     KITE_EXPECT_EQ(h.shell.lastContextMenuPaths.size(), size_t{ 1 });
     KITE_EXPECT_EQ(h.shell.lastContextMenuPaths.front(), h.tab()->path);
 }
 
-KITE_TEST(app, the_folder_menu_asks_for_the_background_menu) {
-    // Which menu is asked for decides what the handlers offer. As an *item*, a
-    // folder gets verbs that act on it from outside - TortoiseGit's "Git clone",
-    // meaning "clone into this one" - which is nonsense for the folder already
-    // being viewed, and was showing up inside working copies.
+KITE_TEST(app, the_folder_menu_asks_for_the_item_menu) {
+    // Which menu is asked for decides what the user reads. The background menu
+    // answers for the space *inside* the folder - New, Paste - so asking for it
+    // here produced a menu with most of the folder's own verbs missing: no Open,
+    // no Send to, no Copy, no Delete. The command means "this folder as the
+    // target", which is the item menu.
     Harness h;
     h.app.Execute(Cmd::FolderContextMenu);
+    KITE_EXPECT_FALSE(h.shell.lastContextMenuBackground);
+    KITE_EXPECT_EQ(h.shell.lastContextMenuPaths.front(), h.tab()->path);
+}
+
+KITE_TEST(app, the_empty_space_answers_with_the_background_menu) {
+    // Not the cursor row's menu: nothing was clicked, so the folder answers for
+    // the space inside it. The cursor is deliberately left on a real row.
+    Harness h;
+    h.tab()->cursor = 1;
+    KITE_EXPECT_FALSE(h.tab()->CursorPath().empty());
+
+    h.app.ShowBackgroundContextMenu(10, 20, false);
+
+    KITE_EXPECT(h.shell.lastContextMenuBackground);
+    KITE_EXPECT_EQ(h.shell.lastContextMenuPaths.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.shell.lastContextMenuPaths.front(), h.tab()->path);
+    KITE_EXPECT_FALSE(h.shell.lastContextMenuExtended);
+
+    h.app.ShowBackgroundContextMenu(10, 20, true);
+    KITE_EXPECT(h.shell.lastContextMenuExtended);
     KITE_EXPECT(h.shell.lastContextMenuBackground);
 }
 

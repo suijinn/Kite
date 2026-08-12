@@ -205,6 +205,42 @@ KITE_TEST(appui, the_sidebar_lights_under_the_pointer_too) {
     KITE_EXPECT_EQ(f.renderer.FillsAt(th.rowHover, x, y).size(), size_t{ 1 });
 }
 
+// --- right-click -------------------------------------------------------------
+
+// The empty space belongs to the folder, not to the row the cursor was left on,
+// and Shift asks for the extended verbs - the same rule as on a row. That flag
+// was inverted here, so the extended menu came up on a plain right-click and
+// Shift produced the plain one.
+KITE_TEST(appui, right_clicking_the_empty_space_asks_the_folder_for_its_background_menu) {
+    Fixture f;
+    f.Paint();
+    const PointF p = f.EmptyPoint();
+
+    f.Press(p.x, p.y, 0, 1);
+    KITE_EXPECT_EQ(f.shell.contextMenuCalls, 1);
+    KITE_EXPECT(f.shell.lastContextMenuBackground);
+    KITE_EXPECT_EQ(f.shell.lastContextMenuPaths.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(f.shell.lastContextMenuPaths.front(), f.tab()->path);
+    KITE_EXPECT_FALSE(f.shell.lastContextMenuExtended);
+
+    f.Press(p.x, p.y, kModShift, 1);
+    KITE_EXPECT_EQ(f.shell.contextMenuCalls, 2);
+    KITE_EXPECT(f.shell.lastContextMenuBackground);
+    KITE_EXPECT(f.shell.lastContextMenuExtended);
+}
+
+KITE_TEST(appui, a_row_follows_the_same_rule) {
+    Fixture f;
+    f.Paint();
+    const PointF p = f.RowPoint(1);
+
+    f.Press(p.x, p.y, 0, 1);
+    KITE_EXPECT_FALSE(f.shell.lastContextMenuExtended);
+
+    f.Press(p.x, p.y, kModShift, 1);
+    KITE_EXPECT(f.shell.lastContextMenuExtended);
+}
+
 // --- sidebar sections -------------------------------------------------------
 //
 // The fake sidebar holds one quick-access entry (C:\home, which is also the

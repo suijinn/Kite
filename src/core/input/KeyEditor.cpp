@@ -105,8 +105,19 @@ void KeyEditor::SelectCommand(Cmd id) {
 }
 
 void KeyEditor::SetPageRows(int rows) {
-    pageRows_ = std::max(1, rows);
-    EnsureCursorVisible();
+    const int wanted = std::max(1, rows);
+    if (wanted != pageRows_) {
+        // The window changed size: fewer rows fit than before, and the selection
+        // is the one thing that has to stay on screen.
+        pageRows_ = wanted;
+        EnsureCursorVisible();
+        return;
+    }
+    // This arrives every frame, so it must not pull the view back to the cursor:
+    // a wheel scroll away from the selection would be undone before it was ever
+    // drawn. Only the range still needs holding - the row count moves with the
+    // filter.
+    scroll_ = std::clamp(scroll_, 0, std::max(0, static_cast<int>(rows_.size()) - pageRows_));
 }
 
 void KeyEditor::SelectRow(int index) {
