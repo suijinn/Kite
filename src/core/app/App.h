@@ -58,6 +58,14 @@ struct Prompt {
     }
 };
 
+/// @brief サイドバーの区画。折り畳みはこの単位で行う。
+enum class SidebarSection : uint8_t {
+    QuickAccess,  ///< クイックアクセス
+    Bookmarks,    ///< ブックマーク
+    Drives,       ///< ドライブ
+    Count         ///< 列挙の終端。有効な区画ではない
+};
+
 /// @brief ウィンドウの位置とサイズ。
 struct WindowPlacement {
     int x = -1;             ///< 左端。負値なら OS 既定に任せる
@@ -195,6 +203,48 @@ public:
     /// @return 表示中なら true
     bool sidebarVisible() const { return sidebarVisible_; }
 
+    /// @brief サイドバーの区画を上から順に返す。
+    /// @return 区画の並び。必ず全区画がちょうど 1 回ずつ含まれる
+    const std::vector<SidebarSection>& sidebarSections() const { return sidebarSections_; }
+
+    /// @brief サイドバーの区画そのものを並べ替える。
+    /// @param[in] from 動かす区画の位置。sidebarSections() への添字
+    /// @param[in] to 動かした先の位置。**抜き取ったあとの並びでの添字**
+    ///            （MoveSidebarItem と同じ約束）
+    /// @return 並びが実際に変わったら true
+    bool MoveSidebarSection(int from, int to);
+
+    /// @brief サイドバーの区画が折り畳まれているかを返す。
+    /// @param[in] section 対象の区画。SidebarSection::Count は常に false
+    /// @return 折り畳まれていれば true
+    bool sidebarCollapsed(SidebarSection section) const;
+
+    /// @brief サイドバーの区画の折り畳みを切り替える。
+    /// @param[in] section 対象の区画。SidebarSection::Count なら何もしない
+    /// @note 状態は settings.ini に残る。ドライブが 20 台ある環境で、毎回開くたびに
+    ///       ブックマークまでスクロールし直すことになるため
+    void ToggleSidebarSection(SidebarSection section);
+
+    /// @brief 文字サイズの倍率を返す。
+    /// @return 倍率。1.0 が設定ファイルどおりの大きさ
+    float fontScale() const { return fontScale_; }
+
+    /// @brief サイドバーの項目を同じ区画の中で並べ替える。
+    /// @param[in] section 対象の区画。SidebarSection::Count なら何もしない
+    /// @param[in] from 動かす項目の位置
+    /// @param[in] to 動かした先の位置。**抜き取ったあとの並びでの添字**
+    ///            （Pane::ReorderTab と同じ約束。後ろへ動かすときは呼ぶ側が 1 引く）
+    /// @return 並びが実際に変わったら true。範囲外や移動なしなら false
+    /// @note クイックアクセスとドライブは OS が毎回作り直す一覧なので、並びは
+    ///       パスの列として settings.ini に覚え、`RefreshRoots()` で掛け直す。
+    ///       ブックマークは Kite 自身の並びなので bookmarks.ini がそのまま順序になる
+    bool MoveSidebarItem(SidebarSection section, int from, int to);
+
+    /// @brief サイドバーの区画に並ぶ項目数を返す。
+    /// @param[in] section 対象の区画
+    /// @return 項目数。SidebarSection::Count では 0
+    int SidebarItemCount(SidebarSection section) const;
+
     /// @brief ステータスバーに出すメッセージを返す。
     /// @return メッセージ。無ければ空文字列
     const std::string& statusMessage() const { return statusMessage_; }
@@ -316,6 +366,9 @@ public:
 
 private:
     void LoadConfig();
+    void LoadSidebarSections();
+    void ApplyTheme();
+    void SetFontScale(float scale);
     void LoadWorkspace(const std::vector<std::string>& startPaths);
     void SaveWorkspaceFile();
     void SaveSettings();
@@ -364,11 +417,20 @@ private:
 
     std::vector<fs::Root> roots_;
     std::vector<fs::Root> quickAccess_;
+    // 並べ替えた結果をパスで覚えたもの。ドライブも既知フォルダも列挙のたびに
+    // OS の順で返ってくるので、覚えていないと次の RefreshRoots() で元に戻る。
+    std::vector<std::string> quickAccessOrder_;
+    std::vector<std::string> driveOrder_;
 
     Prompt prompt_;
     bool keyHelp_ = false;
     bool keysChanged_ = false;
     bool sidebarVisible_ = true;
+    std::vector<SidebarSection> sidebarSections_ = { SidebarSection::QuickAccess,
+                                                     SidebarSection::Bookmarks,
+                                                     SidebarSection::Drives };
+    bool sidebarCollapsed_[static_cast<size_t>(SidebarSection::Count)] = {};
+    float fontScale_ = 1.0f;
     bool windowActive_ = true;
     bool darkTheme_ = true;
     bool shellIcons_ = true;

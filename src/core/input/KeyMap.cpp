@@ -126,6 +126,15 @@ const DefaultBinding kDefaults[] = {
     { Cmd::SortByDate,          "Ctrl+Shift+4" },
     { Cmd::ToggleSortOrder,     "Ctrl+Shift+R" },
     { Cmd::ToggleDirsFirst,     "Ctrl+Shift+F" },
+    // The browser row, and for the same reason: this is the one setting people
+    // reach for without wanting to know where the settings live. Ctrl+Plus is
+    // VK_OEM_PLUS, which is "=" on a US layout and ";" on a JIS one - both are
+    // the key browsers zoom in on there. Shift+ is bound too, because "Ctrl and
+    // the plus sign" is what the hand actually does on a US keyboard.
+    { Cmd::FontLarger,          "Ctrl+Plus" },
+    { Cmd::FontLarger,          "Ctrl+Shift+Plus" },
+    { Cmd::FontSmaller,         "Ctrl+Minus" },
+    { Cmd::FontReset,           "Ctrl+0" },
 
     // Bookmarks
     { Cmd::AddBookmark,         "Ctrl+D" },

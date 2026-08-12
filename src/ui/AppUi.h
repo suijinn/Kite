@@ -95,6 +95,7 @@ private:
         None,
         SessionChip,
         SessionAdd,
+        SidebarSectionHeader,
         SidebarItem,
         TabBar,
         TabItem,
@@ -117,6 +118,10 @@ private:
         Tab,          // reordering / relocating a tab
         PendingFile,  // pressed on a row, may become an OS file drag
         Marquee,      // pressed on empty list space, sweeping a selection band
+        PendingSidebar,  // pressed on a sidebar item, not yet moved far enough
+        Sidebar,         // reordering within one sidebar section
+        PendingSection,  // pressed on a sidebar heading, not yet moved far enough
+        Section,         // reordering the sidebar sections themselves
     };
 
     struct Region {
@@ -125,11 +130,14 @@ private:
         Pane* pane = nullptr;
         SplitNode* node = nullptr;
         int index = 0;
+        SidebarSection section = SidebarSection::Count;  ///< サイドバーの行のみ
         std::string path;
     };
 
     void Add(const RectF& r, Hit kind, int index = 0, Pane* pane = nullptr,
              SplitNode* node = nullptr, std::string path = {});
+    void AddSidebar(const RectF& r, Hit kind, SidebarSection section, int index,
+                    std::string path = {});
     const Region* Pick(float x, float y) const;
 
     bool PointerOver(const RectF& box) const;
@@ -157,6 +165,11 @@ private:
 
     bool ResolveTabDrop(float x, float y, Pane** outPane, int* outIndex) const;
     void FinishTabDrag();
+    bool ResolveSidebarDrop(float x, float y, int* outIndex, RectF* outMarker) const;
+    void FinishSidebarDrag();
+    RectF SectionBlock(SidebarSection section) const;
+    bool ResolveSectionDrop(float x, float y, int* outIndex, RectF* outMarker) const;
+    void FinishSectionDrag();
     void CancelDrag();
 
     App& app_;
@@ -195,6 +208,24 @@ private:
     float marqueeY_ = 0.0f;
     std::vector<uint8_t> marqueeBase_;  // marks as they were when the sweep began
 
+    // The sidebar row under the button, and where letting go would put it.
+    // Opening it waits for the release: navigating on the press would mean
+    // every reorder also left the folder the user was reordering from.
+    SidebarSection dragSidebarSection_ = SidebarSection::Count;
+    int dragSidebarIndex_ = -1;
+    int dropSidebarIndex_ = -1;
+    RectF dropSidebarMarker_{};
+    std::string pendingSidebarPath_;
+    bool pendingSidebarNewTab_ = false;
+
+    // A heading being carried moves its whole block - the heading and every row
+    // under it. Folding it waits for the release, for the same reason opening a
+    // folder does: the press cannot know yet which of the two it is.
+    SidebarSection dragSection_ = SidebarSection::Count;
+    int dragSectionIndex_ = -1;
+    int dropSectionIndex_ = -1;
+    RectF dropSectionMarker_{};
+
     Pane* dragTabPane_ = nullptr;
     int dragTabIndex_ = -1;
     Pane* dropTabPane_ = nullptr;
@@ -207,6 +238,9 @@ private:
 
     float sidebarScroll_ = 0.0f;
     RectF sidebarRect_{};
+    // Height of everything the last frame laid out, so folding a section away
+    // cannot leave the sidebar scrolled past what is left of it.
+    float sidebarContent_ = 0.0f;
 };
 
 }  // namespace kite::ui

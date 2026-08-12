@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 
 #include "TestFramework.h"
 #include "core/theme/Theme.h"
@@ -141,6 +142,47 @@ KITE_TEST(theme, ini_overrides_metrics_and_fonts) {
     dark.ApplyIni(ini);
     KITE_EXPECT_NEAR(dark.rowHeight, 26.0f, 0.001);
     KITE_EXPECT_EQ(dark.fontFamily, std::string("Meiryo"));
+}
+
+KITE_TEST(theme, scaling_takes_the_row_up_with_the_text) {
+    // The whole point of the method: a row that keeps its height while the text
+    // in it grows clips the text, which is exactly the bug a plain font_size
+    // knob produces.
+    Theme t = Theme::Dark();
+    const float font = t.fontSize;
+    const float row = t.rowHeight;
+    const float splitter = t.splitterWidth;
+
+    t.Scale(1.5f);
+    KITE_EXPECT_NEAR(t.fontSize, font * 1.5f, 0.001);
+    KITE_EXPECT_NEAR(t.rowHeight, std::round(row * 1.5f), 0.001);
+    KITE_EXPECT(t.tabBarHeight > Theme::Dark().tabBarHeight);
+    KITE_EXPECT(t.sidebarWidth > Theme::Dark().sidebarWidth);
+    // Nothing sits on the splitter, so it stays the width it was drawn at.
+    KITE_EXPECT_NEAR(t.splitterWidth, splitter, 0.001);
+}
+
+KITE_TEST(theme, scaling_by_one_or_by_nothing_changes_nothing) {
+    Theme t = Theme::Dark();
+    const Theme before = t;
+    t.Scale(1.0f);
+    t.Scale(0.0f);
+    t.Scale(-2.0f);
+    KITE_EXPECT_NEAR(t.fontSize, before.fontSize, 0.001);
+    KITE_EXPECT_NEAR(t.rowHeight, before.rowHeight, 0.001);
+}
+
+KITE_TEST(theme, scaling_applies_on_top_of_the_ini) {
+    // Order matters: the ini is the authored size, the scale is what the user
+    // asked for on top of it. Reading the ini after scaling would throw the
+    // scale away.
+    Ini ini;
+    ini.SetFloat("ui", "row_height", 30.0f);
+
+    Theme t = Theme::Dark();
+    t.ApplyIni(ini);
+    t.Scale(2.0f);
+    KITE_EXPECT_NEAR(t.rowHeight, 60.0f, 0.001);
 }
 
 KITE_TEST(theme, rect_geometry_helpers) {

@@ -1,5 +1,6 @@
 #include "core/theme/Theme.h"
 
+#include <cmath>
 #include <cstdlib>
 
 namespace kite {
@@ -151,6 +152,23 @@ void Theme::ApplyIni(const Ini& ini) {
     if (!family.empty()) fontFamily = family;
     const std::string mono = ini.GetStr("ui", "mono_family");
     if (!mono.empty()) monoFamily = mono;
+}
+
+void Theme::Scale(float factor) {
+    if (factor <= 0.0f || factor == 1.0f) return;
+
+    fontSize *= factor;
+
+    // 高さは整数 DIP に丸める。行がピクセル境界からずれると、縞模様の境目と
+    // カーソルの枠が行ごとに太さを変えて見える。
+    rowHeight = std::round(rowHeight * factor);
+    headerHeight = std::round(headerHeight * factor);
+    tabBarHeight = std::round(tabBarHeight * factor);
+    pathBarHeight = std::round(pathBarHeight * factor);
+    sessionBarHeight = std::round(sessionBarHeight * factor);
+    statusBarHeight = std::round(statusBarHeight * factor);
+    // 幅も同じ ─ 中身は「クイックアクセス」のような、縮めれば読めなくなる文字列。
+    sidebarWidth = std::round(sidebarWidth * factor);
 }
 
 }  // namespace kite

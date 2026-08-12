@@ -929,3 +929,234 @@ KITE_TEST(app, a_second_window_lets_the_os_place_it_instead_of_landing_on_the_fi
     KITE_EXPECT_EQ(second.placement().x, -1);
     KITE_EXPECT_EQ(second.placement().y, -1);
 }
+
+// --- text size --------------------------------------------------------------
+
+KITE_TEST(app, the_text_size_commands_move_the_whole_theme_not_just_the_font) {
+    Harness h;
+    const float font = h.app.theme().fontSize;
+    const float row = h.app.theme().rowHeight;
+
+    h.app.Execute(Cmd::FontLarger);
+    KITE_EXPECT(h.app.theme().fontSize > font);
+    // A taller row is what keeps the bigger text from being clipped by it.
+    KITE_EXPECT(h.app.theme().rowHeight > row);
+
+    h.app.Execute(Cmd::FontSmaller);
+    KITE_EXPECT_NEAR(h.app.theme().fontSize, font, 0.01f);
+    KITE_EXPECT_NEAR(h.app.theme().rowHeight, row, 0.01f);
+}
+
+KITE_TEST(app, the_text_size_stops_at_both_ends_and_says_where_it_is) {
+    Harness h;
+    for (int i = 0; i < 40; ++i) h.app.Execute(Cmd::FontLarger);
+    const float ceiling = h.app.theme().fontSize;
+    h.app.Execute(Cmd::FontLarger);
+    KITE_EXPECT_NEAR(h.app.theme().fontSize, ceiling, 0.001);
+    // Pressing into the limit is not silence: the size is reported either way.
+    KITE_EXPECT_FALSE(h.app.statusMessage().empty());
+
+    for (int i = 0; i < 40; ++i) h.app.Execute(Cmd::FontSmaller);
+    const float floor = h.app.theme().fontSize;
+    KITE_EXPECT(floor < ceiling);
+    h.app.Execute(Cmd::FontSmaller);
+    KITE_EXPECT_NEAR(h.app.theme().fontSize, floor, 0.001);
+
+    h.app.Execute(Cmd::FontReset);
+    KITE_EXPECT_NEAR(h.app.fontScale(), 1.0f, 0.001);
+    KITE_EXPECT_NEAR(h.app.theme().fontSize, Theme::Dark().fontSize, 0.001);
+}
+
+KITE_TEST(app, switching_the_theme_keeps_the_text_size) {
+    // The theme is rebuilt from scratch on a toggle, which is where a scale
+    // applied only once gets dropped.
+    Harness h;
+    h.app.Execute(Cmd::FontLarger);
+    const float scaled = h.app.theme().rowHeight;
+
+    h.app.Execute(Cmd::ToggleTheme);
+    KITE_EXPECT_FALSE(h.app.theme().dark);
+    KITE_EXPECT_NEAR(h.app.theme().rowHeight, scaled, 0.001);
+}
+
+KITE_TEST(app, the_text_size_and_the_folded_sidebar_sections_survive_a_restart) {
+    {
+        Harness h;
+        h.app.Execute(Cmd::FontLarger);
+        h.app.ToggleSidebarSection(SidebarSection::Drives);
+        h.app.SaveAll();
+    }
+
+    test::FakeFileSystem files;
+    test::PopulateStandardTree(files);
+    test::FakeShell shell;
+    test::FakeHost host;
+    App reopened(files, shell, host);
+    reopened.Init({});
+    test::PumpUntilSettled(reopened);
+
+    KITE_EXPECT_NEAR(reopened.fontScale(), 1.1f, 0.001);
+    KITE_EXPECT(reopened.theme().fontSize > Theme::Dark().fontSize);
+    KITE_EXPECT(reopened.sidebarCollapsed(SidebarSection::Drives));
+    KITE_EXPECT_FALSE(reopened.sidebarCollapsed(SidebarSection::Bookmarks));
+}
+
+// --- sidebar order ----------------------------------------------------------
+
+KITE_TEST(app, reordering_bookmarks_moves_the_number_shortcuts_with_them) {
+    // The order is not decoration: Alt+Shift+1..8 counts through this same list,
+    // so a bookmark that moved has to answer to its new number.
+    Harness h;
+    h.app.ToggleBookmark("C:\\home\\alpha");
+    h.app.ToggleBookmark("C:\\home\\beta");
+    KITE_EXPECT_EQ(h.app.workspace().bookmarks[0].path, std::string("C:\\home\\alpha"));
+
+    KITE_EXPECT(h.app.MoveSidebarItem(SidebarSection::Bookmarks, 1, 0));
+    KITE_EXPECT_EQ(h.app.workspace().bookmarks[0].path, std::string("C:\\home\\beta"));
+
+    h.app.Execute(Cmd::Bookmark1);
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home\\beta"));
+}
+
+KITE_TEST(app, a_move_that_goes_nowhere_is_refused) {
+    Harness h;
+    h.app.ToggleBookmark("C:\\home\\alpha");
+    KITE_EXPECT_FALSE(h.app.MoveSidebarItem(SidebarSection::Bookmarks, 0, 0));
+    KITE_EXPECT_FALSE(h.app.MoveSidebarItem(SidebarSection::Bookmarks, 3, 0));
+    KITE_EXPECT_FALSE(h.app.MoveSidebarItem(SidebarSection::Bookmarks, -1, 0));
+    KITE_EXPECT_FALSE(h.app.MoveSidebarItem(SidebarSection::Count, 0, 0));
+    KITE_EXPECT_EQ(h.app.workspace().bookmarks.size(), size_t{ 1 });
+}
+
+KITE_TEST(app, a_reordered_quick_access_list_survives_the_next_enumeration) {
+    // Quick access and the drives are the OS's lists, handed back in the OS's
+    // order every time they are asked for. Without the saved order laid back
+    // over them, a drag would be undone by the next refresh - which happens on
+    // every F5, not just at start-up.
+    Harness h;
+    h.files.quickAccess = { "C:\\home\\alpha", "C:\\home\\beta" };
+    h.app.Execute(Cmd::Refresh);
+    KITE_EXPECT_EQ(h.app.quickAccess()[0].path, std::string("C:\\home\\alpha"));
+
+    KITE_EXPECT(h.app.MoveSidebarItem(SidebarSection::QuickAccess, 1, 0));
+    KITE_EXPECT_EQ(h.app.quickAccess()[0].path, std::string("C:\\home\\beta"));
+
+    h.app.Execute(Cmd::Refresh);
+    KITE_EXPECT_EQ(h.app.quickAccess()[0].path, std::string("C:\\home\\beta"));
+}
+
+KITE_TEST(app, the_sidebar_order_round_trips_through_the_config_file) {
+    {
+        Harness h;
+        h.files.quickAccess = { "C:\\home\\alpha", "C:\\home\\beta" };
+        h.app.Execute(Cmd::Refresh);
+        h.app.MoveSidebarItem(SidebarSection::QuickAccess, 1, 0);
+        h.app.SaveAll();
+    }
+
+    test::FakeFileSystem files;
+    test::PopulateStandardTree(files);
+    files.quickAccess = { "C:\\home\\alpha", "C:\\home\\beta" };
+    test::FakeShell shell;
+    test::FakeHost host;
+    App reopened(files, shell, host);
+    reopened.Init({});
+    test::PumpUntilSettled(reopened);
+
+    KITE_EXPECT_EQ(reopened.quickAccess()[0].path, std::string("C:\\home\\beta"));
+    KITE_EXPECT_EQ(reopened.quickAccess()[1].path, std::string("C:\\home\\alpha"));
+}
+
+KITE_TEST(app, an_item_the_saved_order_never_heard_of_follows_the_ones_it_did) {
+    // A drive plugged in since the order was saved has no place in it. Landing
+    // it at the end is at least predictable; slotting it into the middle by
+    // enumeration order would move it every time the list changed.
+    {
+        Harness h;
+        h.files.quickAccess = { "C:\\home\\alpha", "C:\\home\\beta" };
+        h.app.Execute(Cmd::Refresh);
+        h.app.MoveSidebarItem(SidebarSection::QuickAccess, 1, 0);
+        h.app.SaveAll();
+    }
+
+    test::FakeFileSystem files;
+    test::PopulateStandardTree(files);
+    files.quickAccess = { "C:\\home\\alpha\\nested", "C:\\home\\alpha", "C:\\home\\beta" };
+    test::FakeShell shell;
+    test::FakeHost host;
+    App reopened(files, shell, host);
+    reopened.Init({});
+    test::PumpUntilSettled(reopened);
+
+    KITE_EXPECT_EQ(reopened.quickAccess()[0].path, std::string("C:\\home\\beta"));
+    KITE_EXPECT_EQ(reopened.quickAccess()[1].path, std::string("C:\\home\\alpha"));
+    KITE_EXPECT_EQ(reopened.quickAccess()[2].path, std::string("C:\\home\\alpha\\nested"));
+}
+
+KITE_TEST(app, the_sections_themselves_reorder_and_round_trip) {
+    {
+        Harness h;
+        KITE_EXPECT_EQ(static_cast<int>(h.app.sidebarSections()[0]),
+                       static_cast<int>(SidebarSection::QuickAccess));
+        KITE_EXPECT(h.app.MoveSidebarSection(2, 0));  // drives to the top
+        KITE_EXPECT_EQ(static_cast<int>(h.app.sidebarSections()[0]),
+                       static_cast<int>(SidebarSection::Drives));
+        h.app.SaveAll();
+    }
+
+    test::FakeFileSystem files;
+    test::PopulateStandardTree(files);
+    test::FakeShell shell;
+    test::FakeHost host;
+    App reopened(files, shell, host);
+    reopened.Init({});
+    test::PumpUntilSettled(reopened);
+
+    KITE_EXPECT_EQ(reopened.sidebarSections().size(), size_t{ 3 });
+    KITE_EXPECT_EQ(static_cast<int>(reopened.sidebarSections()[0]),
+                   static_cast<int>(SidebarSection::Drives));
+    KITE_EXPECT_EQ(static_cast<int>(reopened.sidebarSections()[1]),
+                   static_cast<int>(SidebarSection::QuickAccess));
+}
+
+KITE_TEST(app, a_settings_file_that_names_only_one_section_still_shows_all_three) {
+    // Hand-edited files, and files written by an older build, will not name
+    // every section. Dropping the ones it misses would take them off the screen
+    // with no way back short of editing the file again.
+    test::ResetFakePlatform();
+    test::FakeFiles()["C:\\home\\config\\settings.ini"] =
+        "[sidebar]\nsection=drives\nsection=nonsense\nsection=drives\n";
+
+    test::FakeFileSystem files;
+    test::PopulateStandardTree(files);
+    test::FakeShell shell;
+    test::FakeHost host;
+    App app(files, shell, host);
+    app.Init({});
+    test::PumpUntilSettled(app);
+
+    KITE_EXPECT_EQ(app.sidebarSections().size(), size_t{ 3 });
+    KITE_EXPECT_EQ(static_cast<int>(app.sidebarSections()[0]),
+                   static_cast<int>(SidebarSection::Drives));
+    // The rest follow in the built-in order.
+    KITE_EXPECT_EQ(static_cast<int>(app.sidebarSections()[1]),
+                   static_cast<int>(SidebarSection::QuickAccess));
+    KITE_EXPECT_EQ(static_cast<int>(app.sidebarSections()[2]),
+                   static_cast<int>(SidebarSection::Bookmarks));
+}
+
+KITE_TEST(app, folding_a_sidebar_section_is_a_toggle_and_asks_for_a_repaint) {
+    Harness h;
+    KITE_EXPECT_FALSE(h.app.sidebarCollapsed(SidebarSection::Bookmarks));
+    const int before = h.host.invalidateCount;
+
+    h.app.ToggleSidebarSection(SidebarSection::Bookmarks);
+    KITE_EXPECT(h.app.sidebarCollapsed(SidebarSection::Bookmarks));
+    KITE_EXPECT_EQ(h.host.invalidateCount, before + 1);
+    // One section at a time: the others are untouched.
+    KITE_EXPECT_FALSE(h.app.sidebarCollapsed(SidebarSection::QuickAccess));
+
+    h.app.ToggleSidebarSection(SidebarSection::Bookmarks);
+    KITE_EXPECT_FALSE(h.app.sidebarCollapsed(SidebarSection::Bookmarks));
+}

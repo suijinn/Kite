@@ -107,12 +107,23 @@ public:
     std::string HomeDir() override { return home; }
     std::string ConfigDir() override { return config; }
 
+    // Paths the sidebar's quick access section lists, in enumeration order.
+    // Set it to stand in for the known folders Windows hands back - the real one
+    // returns them in its own order every time, which is what any saved order
+    // has to be laid back over.
+    std::vector<std::string> quickAccess;
+
     std::vector<fs::Root> QuickAccess() override {
-        fs::Root root;
-        root.path = home;
-        root.label = "home";
-        root.kind = fs::RootKind::Special;
-        return { root };
+        std::vector<fs::Root> out;
+        for (const std::string& path : quickAccess.empty() ? std::vector<std::string>{ home }
+                                                           : quickAccess) {
+            fs::Root root;
+            root.path = path;
+            root.label = (path == home) ? "home" : kite::path::FileName(path);
+            root.kind = fs::RootKind::Special;
+            out.push_back(root);
+        }
+        return out;
     }
 
     bool MakeDirectory(const std::string& path, std::string*) override {
