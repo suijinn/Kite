@@ -98,6 +98,15 @@ public:
     /// @brief ウィンドウを閉じる。
     virtual void Close() = 0;
 
+    /// @brief Kite をもう 1 つのウィンドウで開く。
+    /// @param[in] dir 新しいウィンドウが最初に表示するフォルダ。空なら既定の場所
+    /// @return 開けたら true。開けなければ false
+    /// @note Windows 実装は別プロセスを起動する。1 プロセスに 2 つ目のウィンドウを
+    ///       作るのではないのは、App も描画資源もワーカースレッドもウィンドウ 1 つ
+    ///       ぶんの寿命に紐付いているため。新しいウィンドウは保存されたセッションを
+    ///       読まず、終了時にも書かない（App::SetStandalone()）
+    virtual bool OpenNewWindow(const std::string& dir) = 0;
+
     /// @brief IME の変換候補ウィンドウを出す位置を指定する。
     /// @param[in] x クライアント座標の X（DIP）
     /// @param[in] y クライアント座標の Y（DIP）

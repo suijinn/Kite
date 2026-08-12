@@ -124,6 +124,12 @@ void App::LoadConfig() {
     placement_.w = settings_.GetInt("window", "w", 1180);
     placement_.h = settings_.GetInt("window", "h", 720);
     placement_.maximized = settings_.GetBool("window", "maximized", false);
+    // 2 枚目は大きさだけ受け継ぎ、位置は OS に選ばせる。保存された座標をそのまま
+    // 使うと、開いた瞬間に元のウィンドウとぴったり重なって増えたことが分からない。
+    if (standalone_) {
+        placement_.x = -1;
+        placement_.y = -1;
+    }
 
     keymap_.LoadDefaults();
     Ini keysIni;
@@ -204,7 +210,9 @@ void App::SaveSettings() {
 void App::LoadWorkspace(const std::vector<std::string>& startPaths) {
     std::string text;
     Ini ws;
-    if (plat::ReadTextFile(ConfigPath("sessions.ini"), text)) ws.Parse(text);
+    // 単独ウィンドウは保存されたセッションを読まない。読めば「新しいウィンドウ」に
+    // 元の窓の全セッションが複製され、頼んだフォルダはその何枚目かのタブになる。
+    if (!standalone_ && plat::ReadTextFile(ConfigPath("sessions.ini"), text)) ws.Parse(text);
 
     for (int i = 0;; ++i) {
         const std::string sec = "session." + std::to_string(i);
@@ -215,9 +223,16 @@ void App::LoadWorkspace(const std::vector<std::string>& startPaths) {
         if (s) workspace_.sessions.push_back(std::move(s));
     }
 
+    // 単独ウィンドウでは開始位置そのものが最初のタブになる。ここで home を開くと、
+    // 頼まれていない場所のタブが必ず 1 枚余る。
+    size_t firstExtra = 0;
     if (workspace_.sessions.empty()) {
-        const std::string home = fs_.HomeDir();
-        workspace_.AddSession(strings_.Format("ui.new_session", { "1" }), home);
+        std::string start = fs_.HomeDir();
+        if (standalone_ && !startPaths.empty()) {
+            start = path::Normalize(startPaths.front());
+            firstExtra = 1;
+        }
+        workspace_.AddSession(strings_.Format("ui.new_session", { "1" }), start);
     }
     workspace_.active = std::clamp(ws.GetInt("workspace", "active", 0), 0,
                                    static_cast<int>(workspace_.sessions.size()) - 1);
@@ -230,10 +245,10 @@ void App::LoadWorkspace(const std::vector<std::string>& startPaths) {
     }
 
     // Command-line paths open as extra tabs in the focused pane.
-    if (!startPaths.empty()) {
+    if (firstExtra < startPaths.size()) {
         if (Pane* p = workspace_.focusedPane()) {
-            for (const std::string& sp : startPaths) {
-                Tab* t = p->AddTab(path::Normalize(sp));
+            for (size_t i = firstExtra; i < startPaths.size(); ++i) {
+                Tab* t = p->AddTab(path::Normalize(startPaths[i]));
                 t->view = defaultView_;
             }
         }
@@ -252,6 +267,9 @@ void App::SaveWorkspaceFile() {
 }
 
 void App::SaveAll() {
+    // 単独ウィンドウは何も書かない。設定もセッションも起動時の写しでしかないので、
+    // 後から閉じたほうが本体の変更を古い内容で上書きしてしまう。
+    if (standalone_) return;
     SaveSettings();
     SaveWorkspaceFile();
     dirty_ = false;
@@ -1000,6 +1018,13 @@ void App::Execute(Cmd cmd) {
 
     switch (cmd) {
         // --- application -----------------------------------------------------
+        case Cmd::NewWindow:
+            // 表示中のフォルダを引き継ぐ。開けなかったことは黙って捨てない
+            // ─ 何も起きないのと、増えないのとは別の話。
+            if (!host_.OpenNewWindow(tab ? tab->path : std::string())) {
+                SetStatus(strings_.Get("ui.new_window_failed"));
+            }
+            break;
         case Cmd::Quit:
             host_.Close();
             break;
@@ -1386,7 +1411,7 @@ void App::Execute(Cmd cmd) {
             break;
         case Cmd::SaveWorkspace:
             SaveAll();
-            SetStatus(strings_.Get("ui.saved"));
+            SetStatus(strings_.Get(standalone_ ? "ui.standalone_no_save" : "ui.saved"));
             break;
         case Cmd::Session1: GotoSession(0); break;
         case Cmd::Session2: GotoSession(1); break;

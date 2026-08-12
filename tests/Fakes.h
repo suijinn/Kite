@@ -231,6 +231,10 @@ public:
     int closeCount = 0;
     std::string title;
     std::vector<std::string> lastDrag;
+    // Folders a new window was asked for, in order.
+    std::vector<std::string> newWindows;
+    // Set to false to act like an exe that could not be launched again.
+    bool canOpenNewWindow = true;
     // A window that has never been shown cannot map coordinates; set this to
     // false to exercise the "no anchor available" path.
     bool canMapCoordinates = true;
@@ -244,6 +248,10 @@ public:
     void Invalidate() override { ++invalidateCount; }
     void SetTitle(const std::string& utf8) override { title = utf8; }
     void Close() override { ++closeCount; }
+    bool OpenNewWindow(const std::string& dir) override {
+        newWindows.push_back(dir);
+        return canOpenNewWindow;
+    }
     void SetImePosition(float, float) override {}
     void SetCursorShape(int) override {}
     bool ClientToScreen(float x, float y, int& screenX, int& screenY) override {

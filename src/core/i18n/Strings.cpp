@@ -25,6 +25,7 @@ const Row kEn[] = {
     { "group.other", "Other" },
 
     // --- commands ---
+    { "cmd.new_window", "New window" },
     { "cmd.quit", "Quit" },
     { "cmd.reload_config", "Reload configuration" },
     { "cmd.open_config_folder", "Open configuration folder" },
@@ -187,6 +188,8 @@ const Row kEn[] = {
     { "ui.drop_move", "Move to {0}" },
     { "ui.watching_off", "Auto-refresh unavailable for this location" },
     { "ui.shell_menu_failed", "The shell menu could not be shown" },
+    { "ui.new_window_failed", "A new window could not be opened" },
+    { "ui.standalone_no_save", "This window does not save its workspace" },
 };
 
 const Row kJa[] = {
@@ -202,6 +205,7 @@ const Row kJa[] = {
     { "group.shell", "シェル連携" },
     { "group.other", "その他" },
 
+    { "cmd.new_window", "新しいウィンドウ" },
     { "cmd.quit", "終了" },
     { "cmd.reload_config", "設定を再読み込み" },
     { "cmd.open_config_folder", "設定フォルダを開く" },
@@ -363,6 +367,8 @@ const Row kJa[] = {
     { "ui.drop_move", "{0} に移動" },
     { "ui.watching_off", "この場所は自動更新できません" },
     { "ui.shell_menu_failed", "シェルメニューを表示できませんでした" },
+    { "ui.new_window_failed", "新しいウィンドウを開けませんでした" },
+    { "ui.standalone_no_save", "このウィンドウはワークスペースを保存しません" },
 };
 
 }  // namespace

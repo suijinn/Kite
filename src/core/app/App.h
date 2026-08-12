@@ -97,8 +97,21 @@ public:
     /// @note UI 層が描画のたびに呼ぶ
     uint32_t IconFor(const std::string& path);
 
+    /// @brief 単独ウィンドウとして動かすかを指定する。
+    /// @param[in] standalone true なら単独ウィンドウ
+    /// @note Init() より前に呼ぶこと。単独ウィンドウは保存されたセッションを読まず、
+    ///       設定もワークスペースも書き戻さない。`Cmd::NewWindow` で開いた 2 枚目
+    ///       以降がこれにあたる。読めば新しいウィンドウに元の窓の全セッションが
+    ///       複製され、書けば後から閉じたほうが本体の変更を古い内容で上書きする
+    void SetStandalone(bool standalone) { standalone_ = standalone; }
+
+    /// @brief 単独ウィンドウかを返す。
+    /// @return 単独ウィンドウなら true
+    bool standalone() const { return standalone_; }
+
     /// @brief 設定とワークスペースを読み込み、最初の列挙を開始する。
-    /// @param[in] startPaths コマンドラインで指定されたパス。追加タブとして開く
+    /// @param[in] startPaths コマンドラインで指定されたパス。追加タブとして開く。
+    ///            単独ウィンドウでは先頭がそのウィンドウ自身の開始位置になる
     /// @return 常に true
     bool Init(const std::vector<std::string>& startPaths);
 
@@ -293,6 +306,7 @@ public:
     void SyncWatches();
 
     /// @brief 設定とワークスペースをすべて保存する。
+    /// @note 単独ウィンドウでは何もしない
     void SaveAll();
 
     /// @brief 設定フォルダ内のファイルパスを組み立てる。
@@ -358,6 +372,7 @@ private:
     bool windowActive_ = true;
     bool darkTheme_ = true;
     bool shellIcons_ = true;
+    bool standalone_ = false;
     std::string language_ = "auto";
     ViewState defaultView_;
 
