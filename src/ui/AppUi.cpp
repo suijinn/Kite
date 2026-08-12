@@ -1745,7 +1745,12 @@ bool AppUi::OnMouse(const MouseEvent& e) {
                 t->ClearMarks();
             }
             if (e.button == 1) {
-                app_.ShowContextMenuAt(e.screenX, e.screenY, (e.mods & kModShift) == 0);
+                // The background menu, not whatever the cursor happens to be
+                // parked on: the click was on the space inside the folder, which
+                // is what Explorer answers with New and Paste. Shift asks for the
+                // extended verbs here as it does on a row.
+                app_.ShowBackgroundContextMenu(e.screenX, e.screenY,
+                                               (e.mods & kModShift) != 0);
             } else if (e.button == 0 && e.clicks >= 2) {
                 // Double-clicking past the last row goes up, the way it does in
                 // every file manager that has ever offered it.

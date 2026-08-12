@@ -319,10 +319,19 @@ public:
 
     /// @brief 表示中のフォルダに対してシェルのコンテキストメニューを表示する。
     /// @param[in] extended true なら拡張メニューを最初から出す
-    /// @note 選択の有無にかかわらずフォルダ自身が対象。出すのは「背景」メニューで、
-    ///       フォルダを項目として右クリックしたときのメニューではない。表示位置は
-    ///       カーソル行に合わせる（CursorRowAnchor()）
+    /// @note 選択の有無にかかわらずフォルダ自身が対象。出すのは「項目」メニュー
+    ///       ─ 親フォルダの一覧でそのフォルダを右クリックしたときと同じ献立で、
+    ///       送る・コピー・削除・7-Zip などが並ぶ。表示位置はカーソル行に合わせる
+    ///       （CursorRowAnchor()）
     void ShowFolderContextMenu(bool extended);
+
+    /// @brief 一覧の余白に対してシェルの「背景」メニューを表示する。
+    /// @param[in] screenX 表示位置の X（スクリーン座標）。負ならカーソル位置
+    /// @param[in] screenY 表示位置の Y（スクリーン座標）。負ならカーソル位置
+    /// @param[in] extended true なら拡張メニューを最初から出す
+    /// @note カーソル行や選択は見ない。余白はどの項目でもないので、答えるのは
+    ///       表示中のフォルダの背景（新規作成・貼り付け）だけ
+    void ShowBackgroundContextMenu(int screenX, int screenY, bool extended);
 
     /// @brief ブックマークの登録と解除を切り替える。
     /// @param[in] path 対象のパス

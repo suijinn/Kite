@@ -903,10 +903,23 @@ void App::ShowFolderContextMenu(bool extended) {
     int x = -1;
     int y = -1;
     CursorRowAnchor(x, y);
-    // The background menu, not the folder's own item menu. Asking for the item
-    // menu here is what put "clone into this folder" in front of someone who was
-    // standing inside a working copy.
-    ShowShellMenu({ t->path }, x, y, extended, true);
+    // The item menu, which is the folder's own full menu - Open, Send to, Copy,
+    // Delete, 7-Zip, Restore previous versions. The background menu was tried
+    // here and is the wrong one: it answers for the space inside the folder, so
+    // it carries New and Paste and nothing that acts on the folder itself, and
+    // the result reads as a menu with most of its entries missing. What the
+    // background menu was meant to keep out - "Git clone into this folder" -
+    // turned out to follow CMF_EXTENDEDVERBS, not this choice, and is already
+    // where Explorer keeps it: behind Shift.
+    ShowShellMenu({ t->path }, x, y, extended, false);
+}
+
+void App::ShowBackgroundContextMenu(int screenX, int screenY, bool extended) {
+    Tab* t = workspace_.focusedTab();
+    if (!t || t->path.empty()) return;
+    // The cursor row is not what was clicked, so it must not answer: pointing at
+    // the empty space means the folder itself, as the space inside it.
+    ShowShellMenu({ t->path }, screenX, screenY, extended, true);
 }
 
 void App::ShowShellMenu(const std::vector<std::string>& paths, int screenX, int screenY,
