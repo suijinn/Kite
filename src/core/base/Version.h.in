@@ -1,0 +1,30 @@
+/// @file
+/// @brief ビルド時に埋め込まれる版番号とコミット。
+///
+/// 実体は CMake が `src/core/base/Version.h.in` から生成する（`cmake/GitVersion.cmake`）。
+/// 版の正は `CMakeLists.txt` の `project(Kite VERSION x.y.z)` の 1 行だけで、ここに
+/// 入るのはその写し。コミットは `git rev-parse --short` の結果で、未コミットの変更が
+/// あれば末尾に `+` が付く。git が無い場合や、書庫を展開しただけでリポジトリの外に
+/// ある場合は "unknown" になる。
+///
+/// **動いている Kite が自分の版を名乗れる経路はここだけ**。画面（セッションバー右端、
+/// タイトルバー、ショートカット一覧）に出しているのはこの値。exe のプロパティに出る
+/// VERSIONINFO は同じ元（`cmake/GitVersion.cmake` の 1 回の実行）から来るが、実行中の
+/// コードからは読めない ─ 自分のリソースを読み返すより、ここを見るほうが確実。
+
+#pragma once
+
+namespace kite::version {
+
+/// @brief 版番号。`x.y.z` 形式
+inline constexpr const char* kNumber = "@KITE_VERSION@";
+
+/// @brief ビルドしたコミットの短縮 SHA-1。
+///
+/// 不明なら "unknown"。作業ツリーに未コミットの変更があれば末尾に "+" が付く。
+inline constexpr const char* kCommit = "@KITE_GIT_COMMIT@";
+
+/// @brief 画面に出す 1 行表記。`0.1.0 (4c0d5d7)` の形
+inline constexpr const char* kDisplay = "@KITE_VERSION@ (@KITE_GIT_COMMIT@)";
+
+}  // namespace kite::version

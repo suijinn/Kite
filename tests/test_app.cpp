@@ -2,6 +2,7 @@
 // real command dispatch, real key map, real async loader.
 #include "Fakes.h"
 #include "TestFramework.h"
+#include "core/base/Version.h"
 
 using namespace kite;
 
@@ -46,6 +47,18 @@ KITE_TEST(app, starts_in_the_home_folder_with_one_session_and_one_pane) {
     // ".." leads the list, and the cursor starts below it.
     KITE_EXPECT(h.tab()->IsParentRow(0));
     KITE_EXPECT_EQ(h.tab()->cursor, 1);
+}
+
+KITE_TEST(app, the_caption_names_the_folder_and_the_build_before_anything_is_typed) {
+    // The build stamp is the whole reason the caption is worth reading twice:
+    // the exe has no VERSIONINFO resource, so this and the session bar are the
+    // only places a running Kite says which commit it came from. Set from Init,
+    // because a window that reports its version only after the first keystroke
+    // is no use to whoever is being asked what they are running.
+    Harness h;
+    KITE_EXPECT(h.host.title.find("C:\\home") != std::string::npos);
+    KITE_EXPECT(h.host.title.find(version::kNumber) != std::string::npos);
+    KITE_EXPECT(h.host.title.find(version::kCommit) != std::string::npos);
 }
 
 KITE_TEST(app, writes_a_reference_keys_file_on_first_run) {
@@ -451,6 +464,26 @@ KITE_TEST(app, bookmarks_toggle_and_navigate) {
     KITE_EXPECT_EQ(h.app.workspace().bookmarks.size(), size_t{ 0 });
 }
 
+KITE_TEST(app, losing_the_window_focus_repaints_once_and_only_on_a_change) {
+    // Windows reports activation far more often than it changes - every menu,
+    // every dialog - and a repaint per report is a repaint per mouse move over
+    // the caption.
+    Harness h;
+    KITE_EXPECT(h.app.windowActive());
+
+    const int before = h.host.invalidateCount;
+    h.app.SetWindowActive(false);
+    KITE_EXPECT_FALSE(h.app.windowActive());
+    KITE_EXPECT_EQ(h.host.invalidateCount, before + 1);
+
+    h.app.SetWindowActive(false);
+    KITE_EXPECT_EQ(h.host.invalidateCount, before + 1);
+
+    h.app.SetWindowActive(true);
+    KITE_EXPECT(h.app.windowActive());
+    KITE_EXPECT_EQ(h.host.invalidateCount, before + 2);
+}
+
 KITE_TEST(app, the_extended_context_menu_is_a_distinct_command) {
     Harness h;
     h.app.Execute(Cmd::ContextMenu);
@@ -471,7 +504,55 @@ KITE_TEST(app, the_folder_menu_targets_the_folder_even_with_a_selection) {
     h.app.Execute(Cmd::FolderContextMenu);
     KITE_EXPECT_EQ(h.shell.lastContextMenuPaths.size(), size_t{ 1 });
     KITE_EXPECT_EQ(h.shell.lastContextMenuPaths.front(), h.tab()->path);
+    // Retargeting is all it does; the extended verbs are their own command.
+    KITE_EXPECT_FALSE(h.shell.lastContextMenuExtended);
+}
+
+KITE_TEST(app, the_folder_menu_has_its_own_extended_form) {
+    // Both halves of the split have to survive: the extended folder menu is
+    // still aimed at the folder, and still asks for the background menu.
+    Harness h;
+    h.app.Execute(Cmd::ExtendedFolderContextMenu);
+
     KITE_EXPECT(h.shell.lastContextMenuExtended);
+    KITE_EXPECT(h.shell.lastContextMenuBackground);
+    KITE_EXPECT_EQ(h.shell.lastContextMenuPaths.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.shell.lastContextMenuPaths.front(), h.tab()->path);
+}
+
+KITE_TEST(app, the_folder_menu_asks_for_the_background_menu) {
+    // Which menu is asked for decides what the handlers offer. As an *item*, a
+    // folder gets verbs that act on it from outside - TortoiseGit's "Git clone",
+    // meaning "clone into this one" - which is nonsense for the folder already
+    // being viewed, and was showing up inside working copies.
+    Harness h;
+    h.app.Execute(Cmd::FolderContextMenu);
+    KITE_EXPECT(h.shell.lastContextMenuBackground);
+}
+
+KITE_TEST(app, a_menu_with_nothing_to_act_on_falls_back_to_the_background_menu) {
+    // Nothing marked and the cursor on "..": there is no item to offer a menu
+    // for, so the folder being listed answers - as its background, which is the
+    // menu an empty-space right-click gives in Explorer.
+    Harness h;
+    h.app.Execute(Cmd::SelectNone);
+    h.tab()->cursor = 0;
+    KITE_EXPECT(h.tab()->IsParentRow(0));
+
+    h.app.Execute(Cmd::ContextMenu);
+
+    KITE_EXPECT_EQ(h.shell.lastContextMenuPaths.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.shell.lastContextMenuPaths.front(), h.tab()->path);
+    KITE_EXPECT(h.shell.lastContextMenuBackground);
+}
+
+KITE_TEST(app, a_menu_over_a_selection_stays_the_item_menu) {
+    Harness h;
+    h.app.Execute(Cmd::SelectAll);
+    h.app.Execute(Cmd::ContextMenu);
+
+    KITE_EXPECT(h.shell.lastContextMenuPaths.size() > 1);
+    KITE_EXPECT_FALSE(h.shell.lastContextMenuBackground);
 }
 
 KITE_TEST(app, the_folder_menu_has_its_own_binding) {

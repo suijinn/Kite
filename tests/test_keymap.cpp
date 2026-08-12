@@ -43,8 +43,15 @@ KITE_TEST(keymap, defaults_resolve_expected_commands) {
     KITE_EXPECT_EQ(keys.Lookup(ParseChord("Alt+1")), Cmd::Session1);
     KITE_EXPECT_EQ(keys.Lookup(ParseChord("Ctrl+1")), Cmd::Tab1);
     KITE_EXPECT_EQ(keys.Lookup(ParseChord("Alt+Shift+1")), Cmd::Bookmark1);
-    // The whole point of the app: the extended menu is one key away.
-    KITE_EXPECT_EQ(keys.Lookup(ParseChord("Menu")), Cmd::ExtendedContextMenu);
+    // Shift adds the extended verbs, the way it does in Explorer. Those verbs are
+    // the ones the shell hides on purpose, and handlers stock them accordingly -
+    // TortoiseGit files "Git Clone..." there - so the plain menu is what the bare
+    // key gives. Both halves are pinned: swapping one of the four silently costs
+    // a menu nobody can reach any more.
+    KITE_EXPECT_EQ(keys.Lookup(ParseChord("Menu")), Cmd::ContextMenu);
+    KITE_EXPECT_EQ(keys.Lookup(ParseChord("Shift+F10")), Cmd::ExtendedContextMenu);
+    KITE_EXPECT_EQ(keys.Lookup(ParseChord("Ctrl+Menu")), Cmd::FolderContextMenu);
+    KITE_EXPECT_EQ(keys.Lookup(ParseChord("Ctrl+Shift+F10")), Cmd::ExtendedFolderContextMenu);
 }
 
 KITE_TEST(keymap, unbound_chords_resolve_to_none) {

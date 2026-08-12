@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "platform/win/Resources.h"
 #include "platform/win/WinShell.h"
 #include "platform/win/WinUtf.h"
 
@@ -101,22 +102,35 @@ void WinWindow::Attach(App* app, ui::AppUi* appUi) {
 }
 
 bool WinWindow::Create(const WindowPlacement& placement) {
+    HINSTANCE instance = ::GetModuleHandleW(nullptr);
+
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
     wc.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
     wc.lpfnWndProc = &WinWindow::WindowProc;
-    wc.hInstance = ::GetModuleHandleW(nullptr);
+    wc.hInstance = instance;
     wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = nullptr;  // Direct2D paints every pixel
     wc.lpszClassName = kClassName;
-    wc.hIcon = ::LoadIconW(nullptr, IDI_APPLICATION);
+    // From our own resources, not the shell default. LoadIconW picks the large
+    // size for the class icon and hIconSmall the 16 px one; leaving hIconSmall
+    // unset makes Windows shrink the 256 px image for the caption and the
+    // taskbar, which is exactly where the .ico's small entries were drawn for.
+    wc.hIcon = ::LoadIconW(instance, MAKEINTRESOURCEW(IDI_APPICON));
+    wc.hIconSm = static_cast<HICON>(::LoadImageW(instance, MAKEINTRESOURCEW(IDI_APPICON), IMAGE_ICON,
+                                                 ::GetSystemMetrics(SM_CXSMICON),
+                                                 ::GetSystemMetrics(SM_CYSMICON), 0));
     ::RegisterClassExW(&wc);
 
     const int x = placement.x >= 0 ? placement.x : CW_USEDEFAULT;
     const int y = placement.y >= 0 ? placement.y : CW_USEDEFAULT;
 
-    hwnd_ = ::CreateWindowExW(0, kClassName, L"Kite", WS_OVERLAPPEDWINDOW, x, y, placement.w,
-                              placement.h, nullptr, nullptr, wc.hInstance, this);
+    // App::Init settles the caption before there is a window to carry it, so the
+    // stored one goes on at creation. Setting it afterwards would show the bare
+    // fallback for a frame first.
+    hwnd_ = ::CreateWindowExW(0, kClassName, title_.empty() ? L"Kite" : title_.c_str(),
+                              WS_OVERLAPPEDWINDOW, x, y, placement.w, placement.h, nullptr,
+                              nullptr, wc.hInstance, this);
     if (!hwnd_) return false;
 
     dpiScale_ = static_cast<float>(::GetDpiForWindow(hwnd_)) / 96.0f;
@@ -147,7 +161,8 @@ void WinWindow::Invalidate() {
 }
 
 void WinWindow::SetTitle(const std::string& utf8) {
-    if (hwnd_) ::SetWindowTextW(hwnd_, ToWide(utf8).c_str());
+    title_ = ToWide(utf8);
+    if (hwnd_) ::SetWindowTextW(hwnd_, title_.c_str());
 }
 
 void WinWindow::Close() {
@@ -404,6 +419,14 @@ LRESULT WinWindow::Handle(UINT message, WPARAM wparam, LPARAM lparam) {
             }
             return 0;
 
+        case WM_ACTIVATE:
+            // The focus ring and the cursor row are drawn differently when the
+            // keyboard is somewhere else, so the core is told. Note this also
+            // fires while a shell menu is up: the host's window takes the
+            // foreground, and Kite showing itself as inactive is the truth.
+            if (app_) app_->SetWindowActive(LOWORD(wparam) != WA_INACTIVE);
+            break;
+
         case WM_SETCURSOR:
             if (LOWORD(lparam) == HTCLIENT && cursorShape_ != 0) {
                 SetCursorShape(cursorShape_);
@@ -460,7 +483,22 @@ LRESULT WinWindow::Handle(UINT message, WPARAM wparam, LPARAM lparam) {
 
         // --- mouse ---
         case WM_MOUSEMOVE:
+            // Windows sends no "the pointer left" message unless it is asked to,
+            // once, per departure. Without it the row under the pointer would
+            // stay lit after the mouse has moved on to another window.
+            if (!mouseTracked_) {
+                TRACKMOUSEEVENT track{ sizeof(track), TME_LEAVE, hwnd_, 0 };
+                mouseTracked_ = ::TrackMouseEvent(&track) != FALSE;
+            }
             DispatchMouse(ui::MouseEvent::Type::Move, 0, 0, wparam, lparam);
+            return 0;
+        case WM_MOUSELEAVE:
+            mouseTracked_ = false;
+            if (ui_) {
+                ui::MouseEvent leave;
+                leave.type = ui::MouseEvent::Type::Leave;
+                ui_->OnMouse(leave);
+            }
             return 0;
         case WM_LBUTTONDOWN:
             ::SetCapture(hwnd_);

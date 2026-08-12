@@ -101,9 +101,13 @@ private:
     bool rendererReady_ = false;
     bool closing_ = false;
     int titleBarDark_ = -1;  ///< タイトルバーに適用済みのテーマ。-1 は未適用
+    std::wstring title_;     ///< 最後に指定されたタイトル。ウィンドウ作成前の指定も保持する
     uint32_t highSurrogate_ = 0;
     PointF imeCaret_{ 0.0f, 0.0f };
     int cursorShape_ = 0;
+
+    /// WM_MOUSELEAVE を予約済みか。TrackMouseEvent は 1 回で 1 通しか送らない
+    bool mouseTracked_ = false;
 
     // Drag & drop. OLE is initialized after the first frame so it never sits on
     // the startup path.

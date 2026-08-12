@@ -27,6 +27,9 @@ namespace kite::win {
 /// @param[in] screenX 表示位置の X（スクリーン座標）。負ならカーソル位置
 /// @param[in] screenY 表示位置の Y（スクリーン座標）。負ならカーソル位置
 /// @param[in] extended true なら CMF_EXTENDEDVERBS 付きで構築する
+/// @param[in] background true なら `paths` の先頭 1 件をフォルダとみなし、その「背景」
+///            メニュー（`IShellFolder::CreateViewObject`）を出す。false なら項目の
+///            メニュー（`IShellFolder::GetUIObjectOf`）
 /// @return 選ばれた項目を実行したら Invoked、何も選ばれなければ None、
 ///         メニューを構築できなければ Failed
 /// @pre COM が初期化済みであること
@@ -34,7 +37,7 @@ namespace kite::win {
 ///       失われるのはそのメニューだけで、ホストは次の要求を処理できる
 shellhost::Result ShowShellContextMenu(HWND menuOwner, HWND dialogOwner,
                                        const std::vector<std::string>& paths, int screenX,
-                                       int screenY, bool extended);
+                                       int screenY, bool extended, bool background);
 
 /// @brief 以降に作るメニューをダーク／ライトのどちらで描かせるかを指定する。
 /// @param[in] menuOwner メニューを追跡するウィンドウ

@@ -131,6 +131,9 @@ private:
              SplitNode* node = nullptr, std::string path = {});
     const Region* Pick(float x, float y) const;
 
+    bool PointerOver(const RectF& box) const;
+    bool Hovered(const RectF& box) const;
+
     void PaintSessionBar(Renderer& r, const RectF& area);
     void PaintSidebar(Renderer& r, const RectF& area);
     void PaintStatusBar(Renderer& r, const RectF& area);
@@ -140,7 +143,8 @@ private:
     bool HandleKeySettingsClick(const MouseEvent& e);
     void PaintNode(Renderer& r, SplitNode* node, const RectF& area);
     void PaintPane(Renderer& r, Pane* pane, const RectF& area);
-    void PaintTabBar(Renderer& r, Pane* pane, const RectF& area);
+    void PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused);
+    Color FocusColor(bool focused) const;
     void PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area);
     void PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool focused);
     void PaintDragOverlay(Renderer& r);
@@ -157,6 +161,17 @@ private:
     std::vector<Region> regions_;
     PointF caret_{ 0.0f, 0.0f };
     int cursorShape_ = 0;
+
+    // Where the pointer is, as of the last event. Painting asks this directly
+    // instead of remembering which row was hit: the row under a fixed pointer
+    // changes when the list scrolls, and no mouse event says so.
+    float mouseX_ = 0.0f;
+    float mouseY_ = 0.0f;
+    bool mouseInside_ = false;
+
+    // Only for deciding when a move is worth a repaint.
+    Hit hoverKind_ = Hit::None;
+    RectF hoverRect_{};
 
     Drag drag_ = Drag::None;
     float dragStartX_ = 0.0f;

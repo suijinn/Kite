@@ -32,8 +32,15 @@ void ReadColor(const Ini& ini, const std::string& sec, const char* key, Color* o
 // Deliberately achromatic: every surface, every line and every piece of text in
 // the dark theme is a pure grey, so nothing on screen carries a colour cast.
 // Hierarchy comes from brightness alone - folders are brighter than files,
-// selection is a lighter grey than the row under it. Only the error colour keeps
-// a hue, because "this failed" has to read as such at a glance.
+// selection is a lighter grey than the row under it.
+//
+// Two things are allowed a hue, and only because brightness cannot carry them.
+// The error colour, because "this failed" has to read as such at a glance; and
+// the focus colour, because "the keyboard is here" competes with a screen full
+// of greys that are all, by design, a shade apart. Both are muted: a low
+// saturation blue reads as a marker without becoming the loudest thing on
+// screen. Selection stays grey - it answers a different question from focus,
+// and giving both the same colour is how they stop being distinguishable.
 Theme Theme::Dark() {
     Theme t;
     t.dark = true;
@@ -48,13 +55,15 @@ Theme Theme::Dark() {
     t.textFolder = Color::hex(0xEDEDED);
     t.textError = Color::hex(0xD98C86);
 
-    t.accent = Color::hex(0xC0C0C0);
-    t.accentText = Color::hex(0x1B1B1B);
-    t.rowHover = Color::hex(0xFFFFFF, 0.05f);
+    t.accent = Color::hex(0x6C8EB4);
+    t.accentText = Color::hex(0x141414);
+    t.rowHover = Color::hex(0xFFFFFF, 0.08f);
     t.rowSelected = Color::hex(0x3A3A3A);
     t.rowSelectedText = Color::hex(0xF2F2F2);
-    t.cursorBorder = Color::hex(0x909090);
-    t.paneFocusBorder = Color::hex(0x767676);
+    t.cursorBorder = Color::hex(0x8FB0D2);
+    t.paneFocusBorder = Color::hex(0x7FA3C9);
+    t.paneFocusIdle = Color::hex(0x4E4E4E);
+    t.paneInactiveScrim = Color::hex(0x000000, 0.22f);
 
     t.tabActiveBg = Color::hex(0x1E1E1E);
     t.tabInactiveBg = Color::hex(0x191919);
@@ -82,13 +91,15 @@ Theme Theme::Light() {
     t.textFolder = Color::hex(0x1F4FA8);
     t.textError = Color::hex(0xB3261E);
 
-    t.accent = Color::hex(0x2563EB);
+    t.accent = Color::hex(0x3F6FA8);
     t.accentText = Color::hex(0xFFFFFF);
-    t.rowHover = Color::hex(0x000000, 0.05f);
-    t.rowSelected = Color::hex(0xCBDDFB);
+    t.rowHover = Color::hex(0x000000, 0.07f);
+    t.rowSelected = Color::hex(0xD3E0F0);
     t.rowSelectedText = Color::hex(0x10233F);
-    t.cursorBorder = Color::hex(0x2563EB);
-    t.paneFocusBorder = Color::hex(0x2563EB);
+    t.cursorBorder = Color::hex(0x3F6FA8);
+    t.paneFocusBorder = Color::hex(0x3F6FA8);
+    t.paneFocusIdle = Color::hex(0xBBBBBB);
+    t.paneInactiveScrim = Color::hex(0x000000, 0.06f);
 
     t.tabActiveBg = Color::hex(0xFFFFFF);
     t.tabInactiveBg = Color::hex(0xE4E6EA);
@@ -121,6 +132,8 @@ void Theme::ApplyIni(const Ini& ini) {
     ReadColor(ini, sec, "row_selected_text", &rowSelectedText);
     ReadColor(ini, sec, "cursor_border", &cursorBorder);
     ReadColor(ini, sec, "pane_focus_border", &paneFocusBorder);
+    ReadColor(ini, sec, "pane_focus_idle", &paneFocusIdle);
+    ReadColor(ini, sec, "pane_inactive_scrim", &paneInactiveScrim);
     ReadColor(ini, sec, "tab_active_bg", &tabActiveBg);
     ReadColor(ini, sec, "tab_inactive_bg", &tabInactiveBg);
     ReadColor(ini, sec, "tab_active_text", &tabActiveText);

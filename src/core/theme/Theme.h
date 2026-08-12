@@ -23,13 +23,25 @@ struct Theme {
     Color textFolder;  ///< フォルダ名の文字色
     Color textError;   ///< エラー表示の文字色
 
-    Color accent;           ///< アクセント色
+    Color accent;           ///< アクセント色。キーボードの居場所を示す色でもある
     Color accentText;       ///< アクセント色の上に載せる文字色
     Color rowHover;         ///< マウスが乗っている行の背景
     Color rowSelected;      ///< 選択された行の背景
     Color rowSelectedText;  ///< 選択された行の文字色
     Color cursorBorder;     ///< カーソル行の枠線
-    Color paneFocusBorder;  ///< フォーカスされたペインの枠線
+    Color paneFocusBorder;  ///< フォーカスされたペインの枠線（ウィンドウがアクティブなとき）
+
+    /// @brief フォーカスされたペインの枠線（ウィンドウが非アクティブなとき）。
+    ///
+    /// **無彩色にすること。** 他のウィンドウを操作している間もアクセント色のままだと、
+    /// 打鍵がどこへ行くのか画面から読み取れない。
+    Color paneFocusIdle;
+
+    /// @brief フォーカスされていないペインに掛ける膜。
+    ///
+    /// 枠線だけでは分割数が増えるほど探しにくくなるので、明度でも差を付ける。
+    /// アルファ込みの色で、ペイン全体の上から 1 枚重ねる。
+    Color paneInactiveScrim;
 
     Color tabActiveBg;      ///< アクティブなタブの背景
     Color tabInactiveBg;    ///< 非アクティブなタブの背景
