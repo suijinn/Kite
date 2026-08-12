@@ -18,6 +18,13 @@
 
 namespace kite::win {
 
+/// @brief 2 枚目以降のウィンドウであることを表すコマンドライン引数。
+///
+/// これが付いた起動だけが「単独ウィンドウ」（App::SetStandalone()）になる。
+/// パスだけを渡す起動と区別が要るのは、パスだけの起動はいずれ既存ウィンドウの
+/// 新しいタブになる予定だから（ROADMAP P1-3 単一インスタンス化）。
+constexpr char kNewWindowFlag[] = "--new-window";
+
 /// @brief メインウィンドウ。
 ///
 /// タブやブックマークが何であるかは一切知らない。OS のイベントを UI 層の型に
@@ -57,6 +64,11 @@ public:
 
     /// @copydoc IHost::Close
     void Close() override;
+
+    /// @copydoc IHost::OpenNewWindow
+    /// @note 自分と同じ exe を `--new-window` 付きで起動する。ジョブには入れない
+    ///       ─ 開いたウィンドウは開いた側より長生きしてよい
+    bool OpenNewWindow(const std::string& dir) override;
 
     /// @copydoc IHost::SetImePosition
     void SetImePosition(float x, float y) override;

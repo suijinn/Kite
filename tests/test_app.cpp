@@ -831,3 +831,101 @@ KITE_TEST(app, command_line_paths_open_as_extra_tabs) {
     KITE_EXPECT_EQ(app.workspace().focusedPane()->tabs.size(), size_t{ 3 });
     KITE_EXPECT_EQ(app.workspace().focusedTab()->path, std::string("C:\\home\\beta"));
 }
+
+KITE_TEST(app, a_new_window_is_asked_for_the_folder_being_viewed) {
+    // The window is another process, so all the controller can do is name the
+    // folder it wants that process to start on.
+    Harness h;
+    KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+N")));
+    KITE_EXPECT_EQ(h.host.newWindows.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.host.newWindows[0], std::string("C:\\home"));
+
+    h.app.Execute(Cmd::OpenSelected);  // into alpha
+    h.Settle();
+    h.app.Execute(Cmd::NewWindow);
+    KITE_EXPECT_EQ(h.host.newWindows.size(), size_t{ 2 });
+    KITE_EXPECT_EQ(h.host.newWindows[1], std::string("C:\\home\\alpha"));
+}
+
+KITE_TEST(app, a_new_window_that_could_not_be_opened_is_reported) {
+    // Launching the exe again can fail (it was replaced under a running Kite,
+    // for one). A window that never appears has to say why, like the shell menu.
+    Harness h;
+    h.host.canOpenNewWindow = false;
+    h.app.Execute(Cmd::NewWindow);
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.new_window_failed"));
+}
+
+KITE_TEST(app, a_second_window_opens_where_it_was_pointed_and_not_on_the_saved_sessions) {
+    Harness first;
+    first.app.Execute(Cmd::NewSession);
+    first.app.SaveAll();
+    KITE_EXPECT_EQ(test::FakeFiles().count("C:\\home\\config\\sessions.ini"), size_t{ 1 });
+
+    // Same config folder, standalone: the saved sessions are on disk and stay
+    // there. Restoring them would put the requested folder several tabs deep in
+    // a copy of the first window.
+    test::FakeFileSystem files;
+    test::PopulateStandardTree(files);
+    test::FakeShell shell;
+    test::FakeHost host;
+    App second(files, shell, host);
+    second.SetStandalone(true);
+    second.Init({ "C:\\home\\alpha" });
+    test::PumpUntilSettled(second);
+
+    KITE_EXPECT_EQ(second.workspace().sessions.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(second.workspace().focusedPane()->tabs.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(second.workspace().focusedTab()->path, std::string("C:\\home\\alpha"));
+}
+
+KITE_TEST(app, a_second_window_never_writes_the_workspace_back) {
+    Harness first;
+    first.app.SaveAll();
+    const std::string saved = test::FakeFiles()["C:\\home\\config\\sessions.ini"];
+
+    test::FakeFileSystem files;
+    test::PopulateStandardTree(files);
+    test::FakeShell shell;
+    test::FakeHost host;
+    App second(files, shell, host);
+    second.SetStandalone(true);
+    second.Init({ "C:\\home\\alpha" });
+    test::PumpUntilSettled(second);
+
+    second.Execute(Cmd::NewTab);
+    second.Execute(Cmd::SaveWorkspace);
+    second.Shutdown();
+
+    // Whichever window is closed last, the first one's layout is what survives.
+    KITE_EXPECT_EQ(test::FakeFiles()["C:\\home\\config\\sessions.ini"], saved);
+    // And saving is not silently ignored: it says the window does not save.
+    KITE_EXPECT_EQ(second.statusMessage(), second.strings().Get("ui.standalone_no_save"));
+}
+
+KITE_TEST(app, a_second_window_lets_the_os_place_it_instead_of_landing_on_the_first) {
+    Harness first;
+    WindowPlacement p;
+    p.x = 300;
+    p.y = 200;
+    p.w = 900;
+    p.h = 600;
+    first.app.SetPlacement(p);
+    first.app.SaveAll();
+
+    test::FakeFileSystem files;
+    test::PopulateStandardTree(files);
+    test::FakeShell shell;
+    test::FakeHost host;
+    App second(files, shell, host);
+    second.SetStandalone(true);
+    second.Init({ "C:\\home\\alpha" });
+    test::PumpUntilSettled(second);
+
+    // Size is worth inheriting; the position would put the new window exactly on
+    // top of the one that opened it.
+    KITE_EXPECT_EQ(second.placement().w, 900);
+    KITE_EXPECT_EQ(second.placement().h, 600);
+    KITE_EXPECT_EQ(second.placement().x, -1);
+    KITE_EXPECT_EQ(second.placement().y, -1);
+}

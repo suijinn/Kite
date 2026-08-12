@@ -25,9 +25,17 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     ::SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     std::vector<std::string> startPaths;
+    bool standalone = false;
     int argc = 0;
     if (LPWSTR* argv = ::CommandLineToArgvW(::GetCommandLineW(), &argc)) {
-        for (int i = 1; i < argc; ++i) startPaths.push_back(kite::win::ToUtf8(argv[i]));
+        for (int i = 1; i < argc; ++i) {
+            std::string arg = kite::win::ToUtf8(argv[i]);
+            if (arg == kite::win::kNewWindowFlag) {
+                standalone = true;
+                continue;
+            }
+            startPaths.push_back(std::move(arg));
+        }
         ::LocalFree(argv);
     }
 
@@ -46,6 +54,8 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     app.SetIconProvider(&icons);
     window.Attach(&app, &appUi);
     window.SetIconProvider(&icons);
+    // Before Init: it decides whether the saved sessions are read at all.
+    app.SetStandalone(standalone);
     app.Init(startPaths);
 
     if (!window.Create(app.placement())) return 1;

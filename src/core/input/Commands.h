@@ -39,6 +39,7 @@ enum class CmdGroup : uint8_t {
 ///       必要。片方でも欠けると test_strings.cpp が失敗する
 #define KITE_COMMAND_LIST(X)                                                                     \
     /* --- application ------------------------------------------------------ */                \
+    X(NewWindow,          "app.new_window",          "cmd.new_window",         App)              \
     X(Quit,               "app.quit",                "cmd.quit",               App)              \
     X(ReloadConfig,       "app.reload_config",       "cmd.reload_config",      App)              \
     X(OpenConfigFolder,   "app.open_config_folder",  "cmd.open_config_folder", App)              \

@@ -15,6 +15,9 @@ struct DefaultBinding {
 // Design notes for the defaults:
 //  * Ctrl+<digit> selects a tab, Alt+<digit> selects a session, Alt+Shift+<digit>
 //    jumps to a bookmark - three parallel, easy-to-remember rows.
+//  * Everything created lives on N, in rough order of how big the new thing is:
+//    Ctrl+N a window, Ctrl+Alt+N a session, Ctrl+Shift+N a folder,
+//    Ctrl+Alt+Shift+N a file.
 //  * Tab / Shift+Tab move between panes (the Total Commander muscle memory).
 //  * Alt+V / Alt+H split; both are reachable on a JIS keyboard, unlike Ctrl+\.
 //  * The Menu key opens the *extended* shell menu directly - that one-step
@@ -22,6 +25,7 @@ struct DefaultBinding {
 //    the folder being viewed, which a selection would otherwise hide.
 const DefaultBinding kDefaults[] = {
     // Application
+    { Cmd::NewWindow,           "Ctrl+N" },
     { Cmd::Quit,                "Ctrl+Q" },
     { Cmd::ReloadConfig,        "Ctrl+Alt+C" },
     { Cmd::OpenConfigFolder,    "Ctrl+Alt+Comma" },
@@ -137,7 +141,10 @@ const DefaultBinding kDefaults[] = {
 
     // File operations
     { Cmd::NewFolder,           "Ctrl+Shift+N" },
-    { Cmd::NewFile,             "Ctrl+N" },
+    // N is the "new" letter, and Ctrl+N is spoken for by the new window - the
+    // one binding here that other apps also have. New file takes the last free
+    // seat in the row rather than moving off N and being looked for there.
+    { Cmd::NewFile,             "Ctrl+Alt+Shift+N" },
     { Cmd::Rename,              "F2" },
     { Cmd::DeleteToRecycle,     "Delete" },
     { Cmd::DeletePermanent,     "Shift+Delete" },
