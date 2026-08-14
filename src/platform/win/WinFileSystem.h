@@ -20,7 +20,10 @@ namespace kite::win {
 ///       でなければならない。可変な状態を持たないことで満たしている
 class WinFileSystem final : public fs::IFileSystem {
 public:
-    /// @brief 既知フォルダを解決し、メディア未挿入時のダイアログを抑止する。
+    /// @brief 既知フォルダと設定ディレクトリを解決し、メディア未挿入時のダイアログを
+    ///        抑止する。
+    /// @note 設定ディレクトリは exe の隣の `config` を優先し、無ければ
+    ///       `%APPDATA%\\Kite`。選ぶ規則そのものは config::Choose() が持つ
     WinFileSystem();
 
     /// @copydoc fs::IFileSystem::List
@@ -38,6 +41,8 @@ public:
     std::string HomeDir() override;
 
     /// @copydoc fs::IFileSystem::ConfigDir
+    /// @note 置き場所はコンストラクタで一度だけ決める。実行中に決め直さないのは、
+    ///       設定を読んだ場所と書く場所が食い違わないようにするため
     std::string ConfigDir() override;
 
     /// @copydoc fs::IFileSystem::QuickAccess

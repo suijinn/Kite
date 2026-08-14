@@ -80,6 +80,74 @@ KITE_TEST(app, writes_a_reference_keys_file_on_first_run) {
     KITE_EXPECT(it->second.find("tab.new=Ctrl+T") != std::string::npos);
 }
 
+// A zip extracted into Program Files, or run from read-only media. Nothing Kite
+// writes will ever land, and the first launch is the only moment it can say so
+// while anyone is still looking - every later write happens on the way out.
+KITE_TEST(app, says_so_when_the_config_folder_refuses_the_first_write) {
+    test::ResetFakePlatform();
+    test::FakeReadOnlyPrefix() = "C:\\home\\config";
+
+    test::FakeFileSystem files;
+    test::FakeShell shell;
+    test::FakeHost host;
+    test::FakeWatcher watcher;
+    test::PopulateStandardTree(files);
+    App app(files, shell, host, &watcher);
+    app.Init({});
+    test::PumpUntilSettled(app);
+
+    KITE_EXPECT(app.statusMessage().find("keys.ini") != std::string::npos);
+    KITE_EXPECT_FALSE(app.statusExpired());
+    // The refused write left nothing behind.
+    KITE_EXPECT(test::FakeFiles().find("C:\\home\\config\\keys.ini") == test::FakeFiles().end());
+
+    test::ResetFakePlatform();
+}
+
+// The folder itself failing is a separate report: it comes before any file is
+// attempted, and it is the one case where nothing at all can be kept.
+KITE_TEST(app, says_so_when_the_config_folder_cannot_be_created) {
+    test::ResetFakePlatform();
+    test::FakeReadOnlyPrefix() = "C:\\home";
+
+    test::FakeFileSystem files;
+    test::FakeShell shell;
+    test::FakeHost host;
+    test::FakeWatcher watcher;
+    test::PopulateStandardTree(files);
+    App app(files, shell, host, &watcher);
+    app.Init({});
+    test::PumpUntilSettled(app);
+
+    KITE_EXPECT(!app.statusMessage().empty());
+    KITE_EXPECT(app.statusMessage().find("C:\\home\\config") != std::string::npos);
+
+    test::ResetFakePlatform();
+}
+
+KITE_TEST(app, ctrl_s_does_not_claim_to_have_saved_what_it_could_not_write) {
+    Harness h;
+    h.app.Execute(Cmd::SaveWorkspace);
+    KITE_EXPECT_EQ(h.app.statusMessage(), std::string("Workspace saved"));
+
+    test::FakeReadOnlyPrefix() = "C:\\home\\config";
+    h.app.Execute(Cmd::SaveWorkspace);
+    KITE_EXPECT_NE(h.app.statusMessage(), std::string("Workspace saved"));
+    // Which of the three files is named depends on the order they are written
+    // in; what has to hold is that the message points at the folder that
+    // refused them, since that is the part anyone can act on.
+    KITE_EXPECT(h.app.statusMessage().find("C:\\home\\config") != std::string::npos);
+
+    // The session file is attempted even though the settings write already
+    // failed, so a folder that only refuses one of them still keeps the other.
+    test::FakeReadOnlyPrefix() = "C:\\home\\config\\settings.ini";
+    test::FakeFiles().erase("C:\\home\\config\\sessions.ini");
+    h.app.Execute(Cmd::SaveWorkspace);
+    KITE_EXPECT(test::FakeFiles().count("C:\\home\\config\\sessions.ini") == 1);
+
+    test::ResetFakePlatform();
+}
+
 KITE_TEST(app, a_chord_dispatches_its_command) {
     Harness h;
     KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+T")));

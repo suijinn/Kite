@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -423,8 +424,10 @@ public:
     void SyncWatches();
 
     /// @brief 設定とワークスペースをすべて保存する。
-    /// @note 単独ウィンドウでは何もしない
-    void SaveAll();
+    /// @return すべて書けたら true
+    /// @note 単独ウィンドウでは何も書かずに true を返す。書けなかったファイルは
+    ///       ステータス行に出るが、終了時の呼び出しでは誰にも見えない
+    bool SaveAll();
 
     /// @brief 設定フォルダ内のファイルパスを組み立てる。
     /// @param[in] file ファイル名
@@ -432,14 +435,23 @@ public:
     std::string ConfigPath(const char* file) const;
 
 private:
+    /// @brief 設定フォルダへ 1 ファイル書き、失敗をステータス行に出す。
+    /// @param[in] file 設定フォルダ内のファイル名
+    /// @param[in] data 書き込む内容
+    /// @return 成功したら true
+    /// @note 書き込み失敗を握り潰さないための唯一の入口。設定フォルダへ書くものは
+    ///       すべてここを通すこと ─ 書けない場所（Program Files、読み取り専用の
+    ///       メディア）に置かれたとき、黙って保存されないのが一番たちが悪い
+    bool WriteConfigFile(const char* file, std::string_view data);
+
     void LoadConfig();
     void LoadSidebarSections();
     void ApplyTheme();
     void SetFontScale(float scale);
     void LoadWorkspace(const std::vector<std::string>& startPaths);
-    void SaveWorkspaceFile();
-    void SaveSettings();
-    void WriteKeysFile();
+    bool SaveWorkspaceFile();
+    bool SaveSettings();
+    bool WriteKeysFile();
     void CloseKeyEditor();
     void RefreshRoots();
 

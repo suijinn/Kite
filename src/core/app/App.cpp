@@ -158,6 +158,18 @@ std::string App::ConfigPath(const char* file) const {
     return path::Join(fs_.ConfigDir(), file);
 }
 
+// Kite's own writes are the only ones that can fail without the user having
+// asked for anything, so they are the only ones that have to announce
+// themselves. The message names the full path rather than the file: what went
+// wrong is almost always the folder (extracted into Program Files, run from
+// read-only media), and the file name alone does not say which folder it is.
+bool App::WriteConfigFile(const char* file, std::string_view data) {
+    const std::string path = ConfigPath(file);
+    if (plat::WriteTextFile(path, data)) return true;
+    SetStatus(strings_.Format("ui.config_write_failed", { path }));
+    return false;
+}
+
 uint32_t App::IconFor(const std::string& path) {
     if (!icons_ || !shellIcons_) return 0;
     return icons_->IconFor(path);
@@ -244,7 +256,11 @@ bool App::MoveSidebarItem(SidebarSection section, int from, int to) {
 // ---------------------------------------------------------------------------
 
 void App::LoadConfig() {
-    plat::EnsureDirectory(fs_.ConfigDir());
+    // The folder itself failing is worth saying on its own: every write after
+    // this one will fail too, and at that point nothing at all is being kept.
+    if (!plat::EnsureDirectory(fs_.ConfigDir())) {
+        SetStatus(strings_.Format("ui.config_write_failed", { fs_.ConfigDir() }));
+    }
 
     std::string text;
     settings_ = Ini();
@@ -362,7 +378,7 @@ void App::ToggleSidebarSection(SidebarSection section) {
     host_.Invalidate();
 }
 
-void App::WriteKeysFile() {
+bool App::WriteKeysFile() {
     std::string out =
         "# Kite key bindings.\n"
         "#\n"
@@ -375,7 +391,7 @@ void App::WriteKeysFile() {
         "# reload with Ctrl+Alt+C, or edit it on screen with Ctrl+F1 - which rewrites\n"
         "# this file, comments and all.\n\n";
     out += keymap_.ToIni().Serialize();
-    plat::WriteTextFile(ConfigPath("keys.ini"), out);
+    return WriteConfigFile("keys.ini", out);
 }
 
 void App::CloseKeyEditor() {
@@ -388,7 +404,7 @@ void App::CloseKeyEditor() {
     }
 }
 
-void App::SaveSettings() {
+bool App::SaveSettings() {
     settings_.Set("ui", "theme", darkTheme_ ? "dark" : "light");
     settings_.Set("ui", "language", language_);
     settings_.SetBool("ui", "sidebar", sidebarVisible_);
@@ -427,13 +443,18 @@ void App::SaveSettings() {
     settings_.SetInt("window", "h", placement_.h);
     settings_.SetBool("window", "maximized", placement_.maximized);
 
-    plat::WriteTextFile(ConfigPath("settings.ini"), settings_.Serialize());
+    const bool settingsOk = WriteConfigFile("settings.ini", settings_.Serialize());
 
     Ini bookmarksIni;
     for (const Bookmark& b : workspace_.bookmarks) {
         bookmarksIni.Append("bookmarks", b.name, b.path);
     }
-    plat::WriteTextFile(ConfigPath("bookmarks.ini"), bookmarksIni.Serialize());
+    // Attempted even if the settings write just failed: the two files fail for
+    // the same reason often enough, but not always - a folder can hold one file
+    // open and not the other, and skipping the second would lose bookmarks that
+    // could still have been written.
+    const bool bookmarksOk = WriteConfigFile("bookmarks.ini", bookmarksIni.Serialize());
+    return settingsOk && bookmarksOk;
 }
 
 void App::LoadWorkspace(const std::vector<std::string>& startPaths) {
@@ -484,7 +505,7 @@ void App::LoadWorkspace(const std::vector<std::string>& startPaths) {
     }
 }
 
-void App::SaveWorkspaceFile() {
+bool App::SaveWorkspaceFile() {
     Ini ws;
     ws.SetInt("workspace", "active", workspace_.active);
     for (size_t i = 0; i < workspace_.sessions.size(); ++i) {
@@ -492,16 +513,18 @@ void App::SaveWorkspaceFile() {
         ws.Set(sec, "name", workspace_.sessions[i]->name);
         ws.Set(sec, "layout", workspace_.sessions[i]->Serialize());
     }
-    plat::WriteTextFile(ConfigPath("sessions.ini"), ws.Serialize());
+    return WriteConfigFile("sessions.ini", ws.Serialize());
 }
 
-void App::SaveAll() {
+bool App::SaveAll() {
     // 単独ウィンドウは何も書かない。設定もセッションも起動時の写しでしかないので、
     // 後から閉じたほうが本体の変更を古い内容で上書きしてしまう。
-    if (standalone_) return;
-    SaveSettings();
-    SaveWorkspaceFile();
-    dirty_ = false;
+    if (standalone_) return true;
+    const bool settingsOk = SaveSettings();
+    const bool workspaceOk = SaveWorkspaceFile();
+    // 書けなかったものが残っているうちは「保存済み」にしない。
+    dirty_ = !(settingsOk && workspaceOk);
+    return settingsOk && workspaceOk;
 }
 
 // ---------------------------------------------------------------------------
@@ -1311,9 +1334,10 @@ bool App::OnKey(const Chord& chord) {
         if (keyEditor_.dirty()) {
             // Written out immediately rather than on close: a binding the user
             // just watched take effect must survive the app being killed.
-            WriteKeysFile();
+            // Only a write that landed earns the confirmation on the way out;
+            // otherwise the failure message stands.
+            keysChanged_ = WriteKeysFile();
             keyEditor_.ClearDirty();
-            keysChanged_ = true;
         }
         // Escape closes the screen from the inside; take the same exit as the
         // command would have, so the confirmation is not lost.
@@ -1801,8 +1825,13 @@ void App::Execute(Cmd cmd) {
             }
             break;
         case Cmd::SaveWorkspace:
-            SaveAll();
-            SetStatus(strings_.Get(standalone_ ? "ui.standalone_no_save" : "ui.saved"));
+            // 失敗したときは WriteConfigFile が出した「保存できません」をそのまま
+            // 残す ─ 書けていないのに「保存しました」と答えるのが最悪の応答。
+            if (standalone_) {
+                SetStatus(strings_.Get("ui.standalone_no_save"));
+            } else if (SaveAll()) {
+                SetStatus(strings_.Get("ui.saved"));
+            }
             break;
         case Cmd::Session1: GotoSession(0); break;
         case Cmd::Session2: GotoSession(1); break;
