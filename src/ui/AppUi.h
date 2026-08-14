@@ -106,6 +106,8 @@ private:
         ListRow,
         ListBackground,
         Splitter,
+        AddressBar,
+        CompletionRow,
         KeyPanel,
         KeyRow,
     };
@@ -146,7 +148,10 @@ private:
     void PaintSessionBar(Renderer& r, const RectF& area);
     void PaintSidebar(Renderer& r, const RectF& area);
     void PaintStatusBar(Renderer& r, const RectF& area);
+    void PaintPromptField(Renderer& r, const RectF& field);
     void PaintPrompt(Renderer& r, const RectF& area);
+    void LayoutCompletion(Renderer& r, const RectF& promptArea);
+    void PaintCompletion(Renderer& r);
     void PaintKeyHelp(Renderer& r, const RectF& area);
     void PaintKeySettings(Renderer& r, const RectF& area);
     bool HandleKeySettingsClick(const MouseEvent& e);
@@ -154,7 +159,7 @@ private:
     void PaintPane(Renderer& r, Pane* pane, const RectF& area);
     void PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused);
     Color FocusColor(bool focused) const;
-    void PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area);
+    void PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool focused);
     void PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool focused);
     void PaintDragOverlay(Renderer& r);
 
@@ -235,6 +240,14 @@ private:
     bool dropActive_ = false;
     RectF dropHighlight_{};
     std::string dropPath_;
+
+    // The completion popup, measured when the bar it drops out of is painted
+    // and drawn after every pane - it hangs over the list, and the layout
+    // underneath must not shift as candidates come and go. Nothing behind it
+    // lights up, so the rectangle has to be known before those rows are drawn.
+    RectF completionRect_{};
+    int completionTop_ = 0;   // first candidate on screen
+    int completionRows_ = 0;  // how many fit
 
     float sidebarScroll_ = 0.0f;
     RectF sidebarRect_{};

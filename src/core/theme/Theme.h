@@ -28,6 +28,15 @@ struct Theme {
     Color rowHover;         ///< マウスが乗っている行の背景
     Color rowSelected;      ///< 選択された行の背景
     Color rowSelectedText;  ///< 選択された行の文字色
+
+    /// @brief 入力欄で選択されている文字列の下敷き。
+    ///
+    /// **一覧の行の選択（rowSelected）とは別物。** こちらは OS の入力欄の作法に
+    /// 合わせた水色で、エクスプローラーのアドレスバーと同じ役割を果たす。
+    /// **文字色は変えないので、通常の文字色（text）が乗って読める明度にすること** ─
+    /// 選択部分だけ色を変えるには文字列を 3 つに割って描くことになり、詰めが
+    /// 入った瞬間に幅が合わなくなる（AppUi::PaintPromptField）。
+    Color textSelection;
     Color cursorBorder;     ///< カーソル行の枠線
     Color paneFocusBorder;  ///< フォーカスされたペインの枠線（ウィンドウがアクティブなとき）
 

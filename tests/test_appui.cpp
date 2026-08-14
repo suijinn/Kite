@@ -9,6 +9,16 @@ using namespace kite;
 
 namespace {
 
+// Top of everything below the session bar. The address bar is not a bar of the
+// window's own: it is the focused pane's breadcrumb row, inside the pane.
+float ContentTop(const Theme& th) { return th.sessionBarHeight; }
+
+// The breadcrumb row of a pane whose top-left is at (left, ContentTop).
+RectF PathBarOf(const Theme& th, float left, float right) {
+    const float top = ContentTop(th) + th.tabBarHeight;
+    return { left, top, right, top + th.pathBarHeight };
+}
+
 // Everything a UI test needs, already settled on C:\home.
 struct Fixture {
     test::FakeFileSystem files;
@@ -90,7 +100,7 @@ struct Fixture {
     // Top of the first list row: the bars above it are all fixed height.
     float listTop() const {
         const Theme& th = app.theme();
-        return th.sessionBarHeight + th.tabBarHeight + th.pathBarHeight + th.headerHeight;
+        return ContentTop(th) + th.tabBarHeight + th.pathBarHeight + th.headerHeight;
     }
 
     // A point in the middle of list row `index`, well clear of the sidebar.
@@ -198,7 +208,7 @@ KITE_TEST(appui, the_sidebar_lights_under_the_pointer_too) {
     // below the session bar and the heading takes one row.
     const Theme& th = f.app.theme();
     const float x = 60.0f;
-    const float y = th.sessionBarHeight + 4.0f + th.rowHeight * 1.5f;
+    const float y = ContentTop(th) + 4.0f + th.rowHeight * 1.5f;
     f.Move(x, y);
     f.Paint();
 
@@ -253,7 +263,7 @@ KITE_TEST(appui, clicking_a_sidebar_heading_folds_the_section_and_clicking_it_ag
     // Folding happens on the release: the press cannot tell a fold from the
     // start of a drag that moves the whole section somewhere else.
     const Theme& th = f.app.theme();
-    const float heading = th.sessionBarHeight + 4.0f + th.rowHeight * 0.5f;
+    const float heading = ContentTop(th) + 4.0f + th.rowHeight * 0.5f;
     f.Press(60.0f, heading);
     KITE_EXPECT_FALSE(f.app.sidebarCollapsed(SidebarSection::QuickAccess));
 
@@ -287,7 +297,7 @@ KITE_TEST(appui, folding_a_section_moves_the_ones_below_it_up) {
     // With quick access folded, the row after the two remaining gaps and the
     // three headings is the drive - and opening it navigates there.
     const Theme& th = f.app.theme();
-    const float y = th.sessionBarHeight + 4.0f + th.rowHeight * 3.5f + 12.0f;
+    const float y = ContentTop(th) + 4.0f + th.rowHeight * 3.5f + 12.0f;
     f.Click(60.0f, y);
     test::PumpUntilSettled(f.app);
     KITE_EXPECT_EQ(f.tab()->path, std::string("C:\\"));
@@ -313,7 +323,7 @@ struct SidebarFixture : Fixture {
     // bookmarks heading come first.
     float BookmarkY(int index) const {
         const Theme& th = app.theme();
-        return th.sessionBarHeight + 4.0f + 6.0f + th.rowHeight * (2.0f + index + 0.5f);
+        return ContentTop(th) + 4.0f + 6.0f + th.rowHeight * (2.0f + index + 0.5f);
     }
 
     std::string BookmarkAt(int index) const { return app.workspace().bookmarks[index].path; }
@@ -381,8 +391,8 @@ KITE_TEST(appui, dragging_a_heading_past_another_section_moves_the_whole_block) 
     // Quick access and drives are folded here, so each is one heading row and
     // the bookmarks block is the heading plus its three rows.
     const Theme& th = f.app.theme();
-    const float quickHeading = th.sessionBarHeight + 4.0f + th.rowHeight * 0.5f;
-    const float bookmarksHeading = th.sessionBarHeight + 4.0f + 6.0f + th.rowHeight * 1.5f;
+    const float quickHeading = ContentTop(th) + 4.0f + th.rowHeight * 0.5f;
+    const float bookmarksHeading = ContentTop(th) + 4.0f + 6.0f + th.rowHeight * 1.5f;
 
     f.Press(60.0f, bookmarksHeading);
     f.Drag(60.0f, quickHeading - 4.0f);  // above the middle of the quick access block
@@ -403,10 +413,10 @@ KITE_TEST(appui, a_section_dropped_over_an_open_neighbour_lands_by_that_blocks_m
     // Quick access is a heading and one entry, bookmarks a heading and three,
     // so the drives heading is the seventh row down, past both gaps.
     const Theme& th = f.app.theme();
-    const float drivesHeading = th.sessionBarHeight + 4.0f + 12.0f + th.rowHeight * 6.5f;
+    const float drivesHeading = ContentTop(th) + 4.0f + 12.0f + th.rowHeight * 6.5f;
     // Bookmarks sit second, four rows deep. Its first entry is above the middle
     // of that block, so the drives land in front of the whole thing.
-    const float insideBookmarks = th.sessionBarHeight + 4.0f + 6.0f + th.rowHeight * 3.5f;
+    const float insideBookmarks = ContentTop(th) + 4.0f + 6.0f + th.rowHeight * 3.5f;
 
     f.Press(60.0f, drivesHeading);
     f.Drag(60.0f, insideBookmarks);
@@ -421,7 +431,7 @@ KITE_TEST(appui, a_section_dropped_over_an_open_neighbour_lands_by_that_blocks_m
 KITE_TEST(appui, a_heading_dragged_and_put_back_neither_moves_nor_folds) {
     SidebarFixture f;
     const Theme& th = f.app.theme();
-    const float bookmarksHeading = th.sessionBarHeight + 4.0f + 6.0f + th.rowHeight * 1.5f;
+    const float bookmarksHeading = ContentTop(th) + 4.0f + 6.0f + th.rowHeight * 1.5f;
 
     f.Press(60.0f, bookmarksHeading);
     f.Drag(60.0f, bookmarksHeading + 10.0f);
@@ -444,7 +454,7 @@ KITE_TEST(appui, dragging_out_of_the_section_drops_nowhere) {
     const Theme& th = f.app.theme();
     // Quick access is open here, so the bookmark rows sit below its one entry.
     const float firstBookmark =
-        th.sessionBarHeight + 4.0f + 6.0f + th.rowHeight * 3.5f;
+        ContentTop(th) + 4.0f + 6.0f + th.rowHeight * 3.5f;
     f.Press(60.0f, firstBookmark);
     // Down into the drive rows, well past the bookmarks.
     f.Drag(60.0f, firstBookmark + th.rowHeight * 6.0f);
@@ -598,4 +608,198 @@ KITE_TEST(appui, only_crossing_into_another_item_asks_for_a_repaint) {
 
     f.Move(p.x, p.y + f.app.theme().rowHeight);
     KITE_EXPECT_EQ(f.host.invalidateCount, afterFirstMove + 1);
+}
+
+// The candidate list hangs over the pane rather than pushing it aside: the rows
+// underneath must not move while candidates come and go.
+KITE_TEST(appui, the_completion_popup_hangs_over_the_list_and_is_clickable) {
+    Fixture f;
+    f.app.Execute(Cmd::EditPath);
+    f.app.OnKey(ParseChord("End"));  // the bar opens selected; add to the path
+    for (char c : std::string("\\a")) f.app.OnChar(static_cast<uint32_t>(c));
+    test::PumpUntilSettled(f.app);
+    KITE_EXPECT_EQ(f.app.pathComplete().matches().size(), size_t{ 1 });
+
+    const Theme& th = f.app.theme();
+    f.Paint();
+
+    // It drops out of the bar it is being typed into - the breadcrumb row.
+    const float barBottom = PathBarOf(th, 0.0f, f.renderer.size.w).b;
+    const PointF row = { th.sidebarWidth + 60.0f, barBottom + th.rowHeight * 0.5f };
+    const std::vector<test::FakeRenderer::Fill> popup =
+        f.renderer.FillsAt(th.overlayBg, row.x, row.y);
+    KITE_EXPECT_EQ(popup.size(), size_t{ 1 });
+    KITE_EXPECT_NEAR(popup[0].rect.t, barBottom, 0.01f);
+    KITE_EXPECT_NEAR(popup[0].rect.h(), th.rowHeight, 0.01f);
+
+    // The pointer is over the popup, so nothing behind it may look pointable.
+    f.Move(row.x, row.y);
+    f.Paint();
+    KITE_EXPECT_EQ(f.renderer.CountFills(th.rowHover), 1);
+
+    f.Press(row.x, row.y);
+    test::PumpUntilSettled(f.app);
+    KITE_EXPECT_EQ(f.tab()->path, std::string("C:\\home\\alpha"));
+    KITE_EXPECT_EQ(f.app.prompt().kind, PromptKind::None);
+}
+
+// One bar in two states. The crumbs and the field take the same row, so going
+// from reading the path to editing it moves nothing.
+KITE_TEST(appui, the_breadcrumb_row_turns_into_the_address_field) {
+    Fixture f;
+    const Theme& th = f.app.theme();
+    const RectF bar = PathBarOf(th, th.sidebarWidth + 1.0f, f.renderer.size.w);
+
+    auto barPainted = [&](const Color& c) {
+        for (const test::FakeRenderer::Fill& fill : f.renderer.fills) {
+            if (!test::FakeRenderer::SameColor(fill.color, c)) continue;
+            if (std::abs(fill.rect.t - bar.t) < 0.01f && std::abs(fill.rect.b - bar.b) < 0.01f) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // Crumbs to begin with; no field, no caret.
+    f.Paint();
+    KITE_EXPECT(barPainted(th.tabActiveBg));
+    KITE_EXPECT_FALSE(barPainted(th.overlayBg));
+
+    const PointF row = f.RowPoint(1);
+    f.Move(row.x, row.y);
+    f.Paint();
+    const std::vector<test::FakeRenderer::Fill> before =
+        f.renderer.FillsAt(th.rowHover, row.x, row.y);
+    KITE_EXPECT_EQ(before.size(), size_t{ 1 });
+    const float rowTop = before[0].rect.t;
+
+    // The space after the last crumb is Ctrl+L.
+    f.Press(bar.r - 60.0f, bar.t + bar.h() * 0.5f);
+    KITE_EXPECT_EQ(f.app.prompt().kind, PromptKind::Path);
+    KITE_EXPECT_EQ(f.app.prompt().text, f.tab()->path);
+
+    f.Move(row.x, row.y);
+    f.Paint();
+    KITE_EXPECT(barPainted(th.overlayBg));
+    KITE_EXPECT_FALSE(barPainted(th.tabActiveBg));
+
+    // And the list did not move by so much as a pixel.
+    const std::vector<test::FakeRenderer::Fill> after =
+        f.renderer.FillsAt(th.rowHover, row.x, row.y);
+    KITE_EXPECT_EQ(after.size(), size_t{ 1 });
+    KITE_EXPECT_NEAR(after[0].rect.t, rowTop, 0.01f);
+
+    // Escaping puts the crumbs back.
+    f.app.OnKey(ParseChord("Escape"));
+    f.Paint();
+    KITE_EXPECT(barPainted(th.tabActiveBg));
+}
+
+// A crumb still navigates: only the empty space after them starts editing.
+KITE_TEST(appui, a_crumb_click_still_navigates) {
+    Fixture f;
+    const Theme& th = f.app.theme();
+    const RectF bar = PathBarOf(th, th.sidebarWidth + 1.0f, f.renderer.size.w);
+    f.Paint();
+
+    // The first crumb is the drive, at the left end of the bar.
+    f.Press(bar.l + 20.0f, bar.t + bar.h() * 0.5f);
+    test::PumpUntilSettled(f.app);
+    KITE_EXPECT_EQ(f.app.prompt().kind, PromptKind::None);
+    KITE_EXPECT_EQ(f.tab()->path, std::string("C:\\"));
+}
+
+// The prompts that ask about the list stay under it, where they always were.
+KITE_TEST(appui, the_other_prompts_still_come_up_at_the_bottom) {
+    Fixture f;
+    const Theme& th = f.app.theme();
+
+    f.app.Execute(Cmd::NewFolder);
+    f.Paint();
+
+    bool atBottom = false;
+    for (const test::FakeRenderer::Fill& fill : f.renderer.fills) {
+        if (!test::FakeRenderer::SameColor(fill.color, th.overlayBg)) continue;
+        if (fill.rect.l == 0.0f && fill.rect.r == f.renderer.size.w &&
+            std::abs(fill.rect.b - (f.renderer.size.h - th.statusBarHeight)) < 0.01f) {
+            atBottom = true;
+        }
+    }
+    KITE_EXPECT(atBottom);
+}
+
+// Ctrl+L opens with the path selected, and the wash is drawn behind the text in
+// the field's own colour - not the neutral one the list rows use.
+KITE_TEST(appui, the_selected_text_is_washed_behind_the_field) {
+    Fixture f;
+    const Theme& th = f.app.theme();
+
+    f.Paint();
+    const int before = f.renderer.CountFills(th.textSelection);
+
+    f.app.Execute(Cmd::EditPath);
+    KITE_EXPECT(f.app.prompt().hasSelection());
+    f.Paint();
+    KITE_EXPECT_EQ(f.renderer.CountFills(th.textSelection), before + 1);
+
+    const RectF bar = PathBarOf(th, th.sidebarWidth + 1.0f, f.renderer.size.w);
+    bool inBar = false;
+    for (const test::FakeRenderer::Fill& fill : f.renderer.fills) {
+        if (!test::FakeRenderer::SameColor(fill.color, th.textSelection)) continue;
+        if (fill.rect.t >= bar.t && fill.rect.b <= bar.b && fill.rect.w() > 1.0f) inBar = true;
+    }
+    KITE_EXPECT(inBar);
+}
+
+// A press anywhere else is an answer to something else: the field goes away and
+// takes the half-typed path with it.
+KITE_TEST(appui, clicking_outside_the_field_folds_the_address_bar) {
+    Fixture f;
+    const Theme& th = f.app.theme();
+    const RectF bar = PathBarOf(th, th.sidebarWidth + 1.0f, f.renderer.size.w);
+    const std::string was = f.tab()->path;
+
+    f.app.Execute(Cmd::EditPath);
+    f.Paint();
+
+    // Inside the field is not "outside": the bar stays open.
+    f.Press(bar.r - 60.0f, bar.t + bar.h() * 0.5f);
+    KITE_EXPECT_EQ(f.app.prompt().kind, PromptKind::Path);
+
+    // A row of the list is.
+    const PointF row = f.RowPoint(1);
+    f.Press(row.x, row.y);
+    KITE_EXPECT_EQ(f.app.prompt().kind, PromptKind::None);
+    KITE_EXPECT_EQ(f.tab()->path, was);
+
+    // And the click still did what it was for - it selected that row.
+    KITE_EXPECT_EQ(f.tab()->cursor, 1);
+
+    // The same goes for the empty space below the rows, and for the sidebar.
+    f.app.Execute(Cmd::EditPath);
+    f.Paint();
+    const PointF empty = f.EmptyPoint();
+    f.Press(empty.x, empty.y);
+    KITE_EXPECT_EQ(f.app.prompt().kind, PromptKind::None);
+
+    f.app.Execute(Cmd::EditPath);
+    f.Paint();
+    f.Press(60.0f, ContentTop(th) + 4.0f + th.rowHeight * 1.5f);
+    KITE_EXPECT_EQ(f.app.prompt().kind, PromptKind::None);
+}
+
+// Picking a candidate with the mouse is not "clicking outside" either.
+KITE_TEST(appui, clicking_a_candidate_does_not_count_as_clicking_away) {
+    Fixture f;
+    const Theme& th = f.app.theme();
+    f.app.Execute(Cmd::EditPath);
+    f.app.OnKey(ParseChord("End"));
+    for (char c : std::string("\\a")) f.app.OnChar(static_cast<uint32_t>(c));
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    const float barBottom = PathBarOf(th, 0.0f, f.renderer.size.w).b;
+    f.Press(th.sidebarWidth + 60.0f, barBottom + th.rowHeight * 0.5f);
+    test::PumpUntilSettled(f.app);
+    KITE_EXPECT_EQ(f.tab()->path, std::string("C:\\home\\alpha"));
 }

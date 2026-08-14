@@ -40,6 +40,45 @@ KITE_TEST(path, is_root) {
     KITE_EXPECT_FALSE(path::IsRoot("C:\\a"));
 }
 
+KITE_TEST(path, is_absolute) {
+    KITE_EXPECT(path::IsAbsolute("C:\\a"));
+    KITE_EXPECT(path::IsAbsolute("C:"));
+    KITE_EXPECT(path::IsAbsolute("\\\\server\\share\\a"));
+    KITE_EXPECT(path::IsAbsolute("\\a"));
+    KITE_EXPECT_FALSE(path::IsAbsolute("a\\b"));
+    KITE_EXPECT_FALSE(path::IsAbsolute(""));
+}
+
+// What Ctrl+arrow moves over in the address bar.
+KITE_TEST(path, segment_steps_move_one_path_component) {
+    const std::string p = "C:\\home\\alpha";
+
+    // Backwards from the end: the leaf, then the folder above it, then the root.
+    KITE_EXPECT_EQ(path::PrevSegment(p, p.size()), size_t{ 8 });
+    KITE_EXPECT_EQ(path::PrevSegment(p, 8), size_t{ 3 });
+    KITE_EXPECT_EQ(path::PrevSegment(p, 3), size_t{ 0 });
+    KITE_EXPECT_EQ(path::PrevSegment(p, 0), size_t{ 0 });
+
+    KITE_EXPECT_EQ(path::NextSegment(p, 0), size_t{ 2 });
+    KITE_EXPECT_EQ(path::NextSegment(p, 2), size_t{ 7 });
+    KITE_EXPECT_EQ(path::NextSegment(p, 7), p.size());
+    KITE_EXPECT_EQ(path::NextSegment(p, p.size()), p.size());
+
+    // Out of range is the end, not a crash.
+    KITE_EXPECT_EQ(path::PrevSegment(p, 999), size_t{ 8 });
+    KITE_EXPECT_EQ(path::NextSegment(p, 999), p.size());
+
+    // A run of separators is crossed in one step, either way.
+    const std::string doubled = "C:\\a\\\\b";
+    KITE_EXPECT_EQ(path::PrevSegment(doubled, 6), size_t{ 3 });
+    KITE_EXPECT_EQ(path::NextSegment(doubled, 4), doubled.size());
+
+    // Multi-byte names: separators are ASCII, so a step never lands inside one.
+    const std::string ja = "C:\\\xE3\x81\x82\\b";
+    KITE_EXPECT_EQ(path::PrevSegment(ja, ja.size()), size_t{ 7 });
+    KITE_EXPECT_EQ(path::PrevSegment(ja, 7), size_t{ 3 });
+}
+
 KITE_TEST(path, normalize_collapses_and_resolves) {
     KITE_EXPECT_EQ(path::Normalize("C:/a//b/./c"), std::string("C:\\a\\b\\c"));
     KITE_EXPECT_EQ(path::Normalize("C:\\a\\b\\..\\c"), std::string("C:\\a\\c"));

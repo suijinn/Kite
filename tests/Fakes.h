@@ -369,7 +369,9 @@ inline bool PumpUntilSettled(App& app, int timeoutMs = 4000) {
     for (int elapsed = 0; elapsed <= timeoutMs; elapsed += 2) {
         app.PumpLoader();
 
-        bool settled = true;
+        // The address bar's candidates come through the same loader, so a test
+        // that types and then checks the offer has to wait for that too.
+        bool settled = !app.pathComplete().wantsListing();
         if (Session* session = app.workspace().activeSession()) {
             for (Pane* pane : session->Panes()) {
                 for (const std::unique_ptr<Tab>& tab : pane->tabs) {

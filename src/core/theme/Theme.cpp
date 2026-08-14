@@ -38,10 +38,19 @@ void ReadColor(const Ini& ini, const std::string& sec, const char* key, Color* o
 // Two things are allowed a hue, and only because brightness cannot carry them.
 // The error colour, because "this failed" has to read as such at a glance; and
 // the focus colour, because "the keyboard is here" competes with a screen full
-// of greys that are all, by design, a shade apart. Both are muted: a low
-// saturation blue reads as a marker without becoming the loudest thing on
-// screen. Selection stays grey - it answers a different question from focus,
+// of greys that are all, by design, a shade apart. The blue is the one Windows
+// itself uses for the same job - #0078D4 and, on dark, the lighter #4CC2FF that
+// WinUI puts on focus rings - so that "this has the keyboard" looks the same
+// here as in the rest of the desktop. A desaturated version was tried first and
+// read as another grey. Row selection stays grey - it answers a different
+// question from focus,
 // and giving both the same colour is how they stop being distinguishable.
+//
+// The selection inside a text field (textSelection) is the other exception, and
+// it is blue for a different reason: every text field on the desktop washes its
+// selection light blue, and the address bar is read as a text field or not at
+// all. A grey wash there is barely a shade off the field itself, which is
+// exactly the "am I editing this?" doubt the colour exists to answer.
 Theme Theme::Dark() {
     Theme t;
     t.dark = true;
@@ -56,13 +65,17 @@ Theme Theme::Dark() {
     t.textFolder = Color::hex(0xEDEDED);
     t.textError = Color::hex(0xD98C86);
 
-    t.accent = Color::hex(0x6C8EB4);
+    t.accent = Color::hex(0x4CC2FF);
     t.accentText = Color::hex(0x141414);
     t.rowHover = Color::hex(0xFFFFFF, 0.08f);
     t.rowSelected = Color::hex(0x3A3A3A);
     t.rowSelectedText = Color::hex(0xF2F2F2);
-    t.cursorBorder = Color::hex(0x8FB0D2);
-    t.paneFocusBorder = Color::hex(0x7FA3C9);
+    // Mid blue rather than the light one the light theme uses: the text drawn
+    // over it is the ordinary light grey, so the wash has to stay dark enough
+    // to read through.
+    t.textSelection = Color::hex(0x2F5D8E);
+    t.cursorBorder = Color::hex(0x4CC2FF);
+    t.paneFocusBorder = Color::hex(0x4CC2FF);
     t.paneFocusIdle = Color::hex(0x4E4E4E);
     t.paneInactiveScrim = Color::hex(0x000000, 0.22f);
 
@@ -92,13 +105,14 @@ Theme Theme::Light() {
     t.textFolder = Color::hex(0x1F4FA8);
     t.textError = Color::hex(0xB3261E);
 
-    t.accent = Color::hex(0x3F6FA8);
+    t.accent = Color::hex(0x0078D4);
     t.accentText = Color::hex(0xFFFFFF);
     t.rowHover = Color::hex(0x000000, 0.07f);
     t.rowSelected = Color::hex(0xD3E0F0);
     t.rowSelectedText = Color::hex(0x10233F);
-    t.cursorBorder = Color::hex(0x3F6FA8);
-    t.paneFocusBorder = Color::hex(0x3F6FA8);
+    t.textSelection = Color::hex(0xCCE8FF);
+    t.cursorBorder = Color::hex(0x0078D4);
+    t.paneFocusBorder = Color::hex(0x0078D4);
     t.paneFocusIdle = Color::hex(0xBBBBBB);
     t.paneInactiveScrim = Color::hex(0x000000, 0.06f);
 
@@ -131,6 +145,7 @@ void Theme::ApplyIni(const Ini& ini) {
     ReadColor(ini, sec, "row_hover", &rowHover);
     ReadColor(ini, sec, "row_selected", &rowSelected);
     ReadColor(ini, sec, "row_selected_text", &rowSelectedText);
+    ReadColor(ini, sec, "text_selection", &textSelection);
     ReadColor(ini, sec, "cursor_border", &cursorBorder);
     ReadColor(ini, sec, "pane_focus_border", &paneFocusBorder);
     ReadColor(ini, sec, "pane_focus_idle", &paneFocusIdle);
