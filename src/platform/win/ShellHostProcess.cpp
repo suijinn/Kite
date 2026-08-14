@@ -2,6 +2,8 @@
 
 #include <cstdio>
 
+#include "platform/win/WinPaths.h"
+
 namespace kite::win {
 namespace {
 
@@ -27,23 +29,9 @@ ShellHostProcess::~ShellHostProcess() {
 }
 
 std::wstring ShellHostProcess::ExecutablePath() {
-    std::wstring buffer(MAX_PATH, L'\0');
-    for (;;) {
-        const DWORD length =
-            ::GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-        if (length == 0) return {};
-        if (length < buffer.size()) {
-            buffer.resize(length);
-            break;
-        }
-        buffer.resize(buffer.size() * 2);
-    }
-
-    const size_t slash = buffer.find_last_of(L"\\/");
-    if (slash == std::wstring::npos) return {};
-    buffer.resize(slash + 1);
-    buffer += kHostExeName;
-    return buffer;
+    const std::wstring dir = ModuleDirectory();
+    if (dir.empty()) return {};
+    return dir + L'\\' + kHostExeName;
 }
 
 void ShellHostProcess::Stop() {

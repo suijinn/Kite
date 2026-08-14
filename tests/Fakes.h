@@ -19,6 +19,11 @@ namespace kite::test {
 
 std::map<std::string, std::string>& FakeFiles();
 uint64_t& FakeClockMs();
+
+// Paths at or under this prefix refuse to be written. Empty means everything is
+// writable, which is what ResetFakePlatform() puts it back to.
+std::string& FakeReadOnlyPrefix();
+
 void ResetFakePlatform();
 
 // ---------------------------------------------------------------------------

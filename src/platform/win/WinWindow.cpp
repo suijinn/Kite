@@ -8,6 +8,7 @@
 #include <cmath>
 
 #include "platform/win/Resources.h"
+#include "platform/win/WinPaths.h"
 #include "platform/win/WinShell.h"
 #include "platform/win/WinUtf.h"
 
@@ -24,22 +25,6 @@ constexpr UINT_PTR kDragDropTimerId = 2;
 // is pushed past the first frame rather than run inside it. Nobody can start a
 // drag this soon after launch.
 constexpr UINT kDragDropDelayMs = 200;
-
-// The running kite.exe, so a second window is the same build as the first one -
-// GetModuleFileNameW rather than argv[0], which is whatever the caller typed.
-std::wstring ModuleFilePath() {
-    std::wstring buffer(MAX_PATH, L'\0');
-    for (;;) {
-        const DWORD length =
-            ::GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-        if (length == 0) return {};
-        if (length < buffer.size()) {
-            buffer.resize(length);
-            return buffer;
-        }
-        buffer.resize(buffer.size() * 2);
-    }
-}
 
 // Quotes one argument the way CommandLineToArgvW will take it apart again.
 // Backslashes only matter in front of the closing quote, and a folder path ends

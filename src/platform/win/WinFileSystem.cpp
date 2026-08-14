@@ -6,7 +6,9 @@
 #include <shellapi.h>
 #include <shlobj.h>
 
+#include "core/app/ConfigDir.h"
 #include "core/base/PathUtil.h"
+#include "platform/win/WinPaths.h"
 #include "platform/win/WinUtf.h"
 
 namespace kite::win {
@@ -122,6 +124,12 @@ bool RunFileOperation(UINT op, const std::vector<std::string>& from, const std::
     return true;
 }
 
+bool DirectoryExists(const std::string& path) {
+    if (path.empty()) return false;
+    const DWORD attrs = ::GetFileAttributesW(ToExtendedPath(path).c_str());
+    return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
 bool LooksLikeCloudLabel(const std::string& label) {
     static const char* kMarkers[] = { "Google Drive", "Box", "Dropbox", "OneDrive",
                                       "iCloud", "pCloud", "MEGA" };
@@ -139,8 +147,21 @@ WinFileSystem::WinFileSystem() {
     ::SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
 
     home_ = KnownFolder(FOLDERID_Profile);
+
+    // Portable first: a "config" folder next to the exe means the whole of Kite
+    // is that one folder, which is how the zip is meant to be used. Nothing is
+    // created here - only an existing folder switches Kite over, so extracting
+    // the zip somewhere unwritable (Program Files) is the user's own doing
+    // rather than something a first run silently arranged.
+    const std::string exeDir = ToUtf8(ModuleDirectory());
+    const std::string portable = exeDir.empty() ? std::string() : path::Join(exeDir, "config");
+
     const std::string appData = KnownFolder(FOLDERID_RoamingAppData);
-    configDir_ = appData.empty() ? path::Join(home_, "Kite") : path::Join(appData, "Kite");
+    const std::string roaming = appData.empty() ? path::Join(home_, "Kite")
+                                                : path::Join(appData, "Kite");
+
+    configDir_ = config::Choose({ { portable, DirectoryExists(portable) },
+                                  { roaming, DirectoryExists(roaming) } });
 }
 
 fs::ListResult WinFileSystem::List(const std::string& dir) {

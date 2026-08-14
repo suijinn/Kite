@@ -99,6 +99,10 @@ jobs:
             Copy-Item $path $stage
           }
           Copy-Item README.md $stage
+          # config フォルダを同梱することが「設定は exe の隣」の合図になる
+          # (WinFileSystem のコンストラクタ / config::Choose)。同梱しないと展開した
+          # だけでは %APPDATA%\Kite に書かれ、zip 1 つで完結しなくなる。
+          Copy-Item packaging/config $stage -Recurse
           # 展開先を散らかさないよう、書庫の中は 1 つのフォルダにまとめる。
           # -Path にフォルダ自身を渡すとその名前が書庫の中に残る ("$stage/*" だと
           # 中身だけが入り、Downloads に直接展開した人の手元で 3 つに散る)

@@ -21,10 +21,34 @@ uint64_t& FakeClockMs() {
     return now;
 }
 
+std::string& FakeReadOnlyPrefix() {
+    static std::string prefix;
+    return prefix;
+}
+
 void ResetFakePlatform() {
     FakeFiles().clear();
     FakeClockMs() = 1000;
+    FakeReadOnlyPrefix().clear();
 }
+
+namespace {
+
+// The prefix stands for a location that refuses to be written to - a zip
+// extracted into Program Files, a folder on read-only media.
+bool IsReadOnly(const std::string& path) {
+    const std::string& prefix = FakeReadOnlyPrefix();
+    return !prefix.empty() && path.compare(0, prefix.size(), prefix) == 0;
+}
+
+// The read-only folder itself is taken to exist already, which is what makes
+// SHCreateDirectoryExW answer ERROR_ALREADY_EXISTS on the real thing. Only
+// something new underneath it cannot be created.
+bool IsBelowReadOnly(const std::string& path) {
+    return IsReadOnly(path) && path.size() > FakeReadOnlyPrefix().size();
+}
+
+}  // namespace
 
 }  // namespace kite::test
 
@@ -39,11 +63,14 @@ bool ReadTextFile(const std::string& utf8Path, std::string& out) {
 }
 
 bool WriteTextFile(const std::string& utf8Path, std::string_view data) {
+    // A refused write leaves nothing behind, the way CreateFile refusing to open
+    // does: the file that was there before is still there, unchanged.
+    if (test::IsReadOnly(utf8Path)) return false;
     test::FakeFiles()[utf8Path] = std::string(data);
     return true;
 }
 
-bool EnsureDirectory(const std::string&) { return true; }
+bool EnsureDirectory(const std::string& utf8Path) { return !test::IsBelowReadOnly(utf8Path); }
 
 uint64_t NowMs() { return test::FakeClockMs(); }
 
