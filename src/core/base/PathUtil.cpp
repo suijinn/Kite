@@ -80,6 +80,22 @@ std::string Stem(std::string_view p) {
     return name.substr(0, dot);
 }
 
+size_t PrevSegment(std::string_view p, size_t pos) {
+    size_t i = pos < p.size() ? pos : p.size();
+    while (i > 0 && IsSep(p[i - 1])) --i;
+    while (i > 0 && !IsSep(p[i - 1])) --i;
+    return i;
+}
+
+size_t NextSegment(std::string_view p, size_t pos) {
+    size_t i = pos < p.size() ? pos : p.size();
+    while (i < p.size() && IsSep(p[i])) ++i;
+    while (i < p.size() && !IsSep(p[i])) ++i;
+    return i;
+}
+
+bool IsAbsolute(std::string_view p) { return RootLength(p) > 0; }
+
 bool IsRoot(std::string_view p) {
     const size_t root = RootLength(p);
     return root > 0 && p.size() <= root;

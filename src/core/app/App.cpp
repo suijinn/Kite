@@ -586,6 +586,14 @@ void App::PumpLoader() {
     if (done.empty()) return;
 
     for (fs::LoadedListing& l : done) {
+        if (completeToken_ != 0 && l.token == completeToken_) {
+            completeToken_ = 0;
+            // Handed over even when the listing failed: a folder that does not
+            // exist has no candidates, and saying so once stops the request
+            // from being made again on the next keystroke.
+            complete_.SetListing(l.path, l.result.entries);
+            continue;
+        }
         for (const std::unique_ptr<Session>& s : workspace_.sessions) {
             for (Pane* p : s->Panes()) {
                 for (std::unique_ptr<Tab>& t : p->tabs) {
@@ -599,6 +607,9 @@ void App::PumpLoader() {
             }
         }
     }
+    // The answer that just arrived may already be for the wrong folder - the
+    // user kept typing while it was in flight - so ask again from here.
+    RequestCompletion();
     EnsureCursorVisible();
     UpdateTitle();
     host_.Invalidate();
@@ -965,8 +976,15 @@ void App::BeginPrompt(PromptKind kind, const char* labelKey, const std::string& 
     prompt_.kind = kind;
     prompt_.labelKey = labelKey;
     prompt_.text = initial;
-    prompt_.caret = initial.size();
+    prompt_.SetCaret(initial.size());
     prompt_.pendingPaths.clear();
+    complete_.Reset();
+    completeToken_ = 0;
+    completeRequested_.clear();
+    // Primed but folded: the address bar opens on the folder that is already on
+    // screen, and listing its children before a single key is pressed would put
+    // a menu over the list for a question nobody asked.
+    if (kind == PromptKind::Path) complete_.SetInput(initial);
     host_.Invalidate();
 }
 
@@ -979,7 +997,68 @@ void App::CancelPrompt() {
         }
     }
     prompt_ = Prompt{};
+    complete_.Reset();
+    completeToken_ = 0;
+    completeRequested_.clear();
     host_.Invalidate();
+}
+
+// Feed the completion whatever is in the field now.
+//
+// Completion always finishes the tail of the text, so it only makes sense while
+// the caret is sitting at the end of it. With the caret parked in the middle,
+// candidates for the tail would be answering a question the user is not asking,
+// and adopting one would overwrite what comes after the caret.
+void App::SyncCompletion(bool open) {
+    if (prompt_.kind != PromptKind::Path) return;
+    if (prompt_.caret != prompt_.text.size()) {
+        complete_.Close();
+        return;
+    }
+    complete_.SetInput(prompt_.text);
+    if (open) complete_.Open();
+    RequestCompletion();
+}
+
+void App::RequestCompletion() {
+    if (!loader_ || !complete_.wantsListing()) return;
+    // One request per directory. Typing "C:\\Users\\ab" walks through three
+    // prefixes of one folder, and re-listing it for each keystroke would put a
+    // network share's latency on every letter.
+    if (completeToken_ != 0 && completeRequested_ == complete_.dir()) return;
+    completeRequested_ = complete_.dir();
+    completeToken_ = loader_->Request(complete_.dir());
+}
+
+bool App::MoveCompletion(int delta) {
+    if (prompt_.kind != PromptKind::Path) return false;
+    if (!complete_.open()) {
+        // The first Tab is what opens the list, so nothing has been enumerated
+        // yet. Ask now; the keystroke that follows finds the candidates there.
+        SyncCompletion(true);
+    }
+    // Still folded means the text is not something completion answers for - the
+    // caret is not at the end. The candidates from before are stale, so taking
+    // one now would overwrite the tail the caret is sitting in front of.
+    if (!complete_.open()) return false;
+    if (!complete_.Move(delta)) return false;
+    prompt_.text = complete_.text();
+    prompt_.SetCaret(prompt_.text.size());
+    host_.Invalidate();
+    return true;
+}
+
+void App::CancelPathEdit() {
+    if (prompt_.kind != PromptKind::Path) return;
+    CancelPrompt();
+}
+
+void App::ChooseCompletion(int index) {
+    if (prompt_.kind != PromptKind::Path) return;
+    if (!complete_.Select(index)) return;
+    prompt_.text = complete_.text();
+    prompt_.SetCaret(prompt_.text.size());
+    ApplyPrompt();
 }
 
 void App::ApplyPrompt() {
@@ -988,6 +1067,9 @@ void App::ApplyPrompt() {
     const std::string text = prompt_.text;
     std::vector<std::string> pending = prompt_.pendingPaths;
     prompt_ = Prompt{};
+    complete_.Reset();
+    completeToken_ = 0;
+    completeRequested_.clear();
 
     std::string err;
     switch (kind) {
@@ -1082,48 +1164,105 @@ bool App::HandlePromptKey(const Chord& chord) {
 
     switch (chord.key) {
         case Key::Escape:
+            // The candidate list goes first. Its whole point is to be dismissed
+            // without losing what has been typed so far.
+            if (complete_.open()) {
+                complete_.Close();
+                host_.Invalidate();
+                return true;
+            }
             CancelPrompt();
             return true;
         case Key::Enter:
             ApplyPrompt();
             return true;
+        case Key::Tab:
+        case Key::Down:
+        case Key::Up: {
+            if (prompt_.kind != PromptKind::Path) break;
+            const bool back =
+                (chord.key == Key::Up) || (chord.key == Key::Tab && (chord.mods & kModShift) != 0);
+            MoveCompletion(back ? -1 : 1);
+            return true;
+        }
         case Key::Backspace: {
             if (prompt_.isConfirm()) return true;
-            if (prompt_.caret > 0) {
+            if (prompt_.DeleteSelection()) {
+                syncFilter();
+                SyncCompletion(true);
+            } else if (prompt_.caret > 0) {
                 const size_t start = utf8::PrevBoundary(prompt_.text, prompt_.caret);
                 prompt_.text.erase(start, prompt_.caret - start);
-                prompt_.caret = start;
+                prompt_.SetCaret(start);
                 syncFilter();
+                SyncCompletion(true);
             }
             host_.Invalidate();
             return true;
         }
         case Key::Delete: {
             if (prompt_.isConfirm()) return true;
-            if (prompt_.caret < prompt_.text.size()) {
+            if (prompt_.DeleteSelection()) {
+                syncFilter();
+                SyncCompletion(true);
+            } else if (prompt_.caret < prompt_.text.size()) {
                 const size_t end = utf8::NextBoundary(prompt_.text, prompt_.caret);
                 prompt_.text.erase(prompt_.caret, end - prompt_.caret);
                 syncFilter();
+                SyncCompletion(true);
             }
             host_.Invalidate();
             return true;
         }
+        case Key::A:
+            // Select all. The chord is Cmd::SelectAll everywhere else, and it
+            // means the same thing here - the field is what has focus.
+            if (chord.mods != kModCtrl || prompt_.isConfirm()) break;
+            prompt_.SelectAll();
+            host_.Invalidate();
+            return true;
         case Key::Left:
-            prompt_.caret = utf8::PrevBoundary(prompt_.text, prompt_.caret);
+        case Key::Right: {
+            const bool back = (chord.key == Key::Left);
+            const bool extend = (chord.mods & kModShift) != 0;
+            size_t pos;
+            if ((chord.mods & kModCtrl) != 0) {
+                // Ctrl moves by path component. In a field that holds a path,
+                // that is what a "word" is - stopping inside "Users" is never
+                // what anyone reaches for Ctrl+arrow to do.
+                pos = back ? path::PrevSegment(prompt_.text, prompt_.caret)
+                           : path::NextSegment(prompt_.text, prompt_.caret);
+            } else if (!extend && prompt_.hasSelection()) {
+                // Without Shift, an arrow collapses the selection to its edge
+                // rather than also eating a character.
+                pos = back ? prompt_.selBegin() : prompt_.selEnd();
+            } else {
+                pos = back ? utf8::PrevBoundary(prompt_.text, prompt_.caret)
+                           : utf8::NextBoundary(prompt_.text, prompt_.caret);
+            }
+            // Shift keeps the anchor where it was, which is what makes a run of
+            // Shift+arrow grow one selection instead of a series of them.
+            if (extend) {
+                prompt_.caret = pos;
+            } else {
+                prompt_.SetCaret(pos);
+            }
+            SyncCompletion(false);
             host_.Invalidate();
             return true;
-        case Key::Right:
-            prompt_.caret = utf8::NextBoundary(prompt_.text, prompt_.caret);
-            host_.Invalidate();
-            return true;
+        }
         case Key::Home:
-            prompt_.caret = 0;
+        case Key::End: {
+            const size_t pos = (chord.key == Key::Home) ? 0 : prompt_.text.size();
+            if ((chord.mods & kModShift) != 0) {
+                prompt_.caret = pos;
+            } else {
+                prompt_.SetCaret(pos);
+            }
+            SyncCompletion(false);
             host_.Invalidate();
             return true;
-        case Key::End:
-            prompt_.caret = prompt_.text.size();
-            host_.Invalidate();
-            return true;
+        }
         default:
             break;
     }
@@ -1142,8 +1281,9 @@ bool App::OnChar(uint32_t cp) {
 
     std::string encoded;
     utf8::Encode(cp, encoded);
+    prompt_.DeleteSelection();
     prompt_.text.insert(prompt_.caret, encoded);
-    prompt_.caret += encoded.size();
+    prompt_.SetCaret(prompt_.caret + encoded.size());
 
     if (prompt_.kind == PromptKind::Filter) {
         if (Tab* t = workspace_.focusedTab()) {
@@ -1152,6 +1292,7 @@ bool App::OnChar(uint32_t cp) {
             EnsureCursorVisible();
         }
     }
+    SyncCompletion(true);
     host_.Invalidate();
     return true;
 }
@@ -1376,7 +1517,16 @@ void App::Execute(Cmd cmd) {
             if (tab) ActivateEntry(tab->cursor, true);
             break;
         case Cmd::EditPath:
-            if (tab) BeginPrompt(PromptKind::Path, "ui.path_label", tab->path);
+            // No label: the bar this takes over already showed the path as
+            // breadcrumbs, so a word in front of it only takes room from it.
+            //
+            // Selected whole, the way every address bar on the desktop opens:
+            // the usual next move is to paste or type a different path over it,
+            // and the wash is also what says the row stopped being breadcrumbs.
+            if (tab) {
+                BeginPrompt(PromptKind::Path, "", tab->path);
+                prompt_.SelectAll();
+            }
             break;
         case Cmd::FocusFilter:
             if (tab) BeginPrompt(PromptKind::Filter, "ui.filter_label", tab->filter);
@@ -1760,7 +1910,7 @@ void App::Execute(Cmd cmd) {
             if (!e) break;
             BeginPrompt(PromptKind::Rename, "ui.rename_label", e->name);
             // Preselect the stem so typing replaces the name, not the extension.
-            if (!e->isDir()) prompt_.caret = path::Stem(e->name).size();
+            if (!e->isDir()) prompt_.SetCaret(path::Stem(e->name).size());
             break;
         }
         case Cmd::DeleteToRecycle: DoDelete(false); break;

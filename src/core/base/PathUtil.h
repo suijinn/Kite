@@ -47,6 +47,27 @@ std::string Extension(std::string_view p);
 /// @return 拡張子を除いた名前
 std::string Stem(std::string_view p);
 
+/// @brief 1 つ前の構成要素の先頭位置を返す。
+/// @param[in] p 対象のパス
+/// @param[in] pos 現在位置。バイト添字。`p` の長さを超える値は末尾に丸める
+/// @return 移動先のバイト添字。すでに先頭なら 0
+/// @note 入力欄で `Ctrl+←` が動く単位。直前の区切りをまたいでから名前の先頭まで
+///       戻るので、`C:\a\b` の末尾からは `b` の先頭、次に `a` の先頭に止まる。
+///       区切りは ASCII なので、UTF-8 の途中で切れることはない
+size_t PrevSegment(std::string_view p, size_t pos);
+
+/// @brief 1 つ後ろの構成要素の末尾位置を返す。
+/// @param[in] p 対象のパス
+/// @param[in] pos 現在位置。バイト添字
+/// @return 移動先のバイト添字。すでに末尾なら `p` の長さ
+/// @note 入力欄で `Ctrl+→` が動く単位。PrevSegment() と対になる
+size_t NextSegment(std::string_view p, size_t pos);
+
+/// @brief パスが絶対パスかを判定する。
+/// @param[in] p 対象のパス
+/// @return "C:\\foo"、"\\\\server\\share"、"\\foo" のように根から始まっていれば true
+bool IsAbsolute(std::string_view p);
+
 /// @brief パスがルートそのものかを判定する。
 /// @param[in] p 対象のパス
 /// @return "C:\\" や "\\\\server\\share\\" のようなルートなら true

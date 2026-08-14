@@ -28,6 +28,18 @@ struct Harness {
 
     void Settle() { test::PumpUntilSettled(app); }
 
+    void Type(const std::string& text) {
+        for (char c : text) app.OnChar(static_cast<uint32_t>(c));
+    }
+
+    // Ctrl+L opens with the whole path selected, so anything typed next would
+    // replace it. Tests that mean to add to the path collapse that first, which
+    // is what pressing End does for a person too.
+    void EditPathAppend() {
+        app.Execute(Cmd::EditPath);
+        app.OnKey(ParseChord("End"));
+    }
+
     std::string CursorName() {
         const fs::Entry* entry = tab()->CursorEntry();
         return entry ? entry->name : std::string();
@@ -261,7 +273,7 @@ KITE_TEST(app, the_filter_prompt_narrows_the_list_while_typing) {
 
 KITE_TEST(app, the_path_prompt_navigates_on_enter) {
     Harness h;
-    h.app.Execute(Cmd::EditPath);
+    h.EditPathAppend();
     KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::Path);
     KITE_EXPECT_EQ(h.app.prompt().text, std::string("C:\\home"));
 
@@ -269,6 +281,267 @@ KITE_TEST(app, the_path_prompt_navigates_on_enter) {
     h.app.OnKey(ParseChord("Enter"));
     h.Settle();
     KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home\\beta"));
+}
+
+KITE_TEST(app, the_path_prompt_offers_folders_once_a_name_is_started) {
+    Harness h;
+    h.EditPathAppend();
+    // Nothing is offered - or even enumerated - before the first keystroke.
+    KITE_EXPECT_FALSE(h.app.pathComplete().open());
+
+    h.Type("\\a");
+    h.Settle();
+    KITE_EXPECT(h.app.pathComplete().open());
+    KITE_EXPECT_EQ(h.app.pathComplete().matches().size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.app.pathComplete().matches()[0], std::string("alpha"));
+
+    // Tab puts the candidate in the field, and Enter goes there.
+    KITE_EXPECT(h.app.OnKey(ParseChord("Tab")));
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("C:\\home\\alpha"));
+    KITE_EXPECT_EQ(h.app.prompt().caret, h.app.prompt().text.size());
+    h.app.OnKey(ParseChord("Enter"));
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home\\alpha"));
+    KITE_EXPECT_FALSE(h.app.pathComplete().open());
+}
+
+KITE_TEST(app, one_folder_is_enumerated_once_however_much_is_typed_into_it) {
+    Harness h;
+    h.EditPathAppend();
+    h.Type("\\a");
+    h.Settle();
+    const int afterFirst = h.files.listCalls;
+
+    // Three more keystrokes inside the same folder. Re-listing per letter would
+    // put a network share's latency on each one.
+    h.Type("lph");
+    h.Settle();
+    KITE_EXPECT_EQ(h.files.listCalls, afterFirst);
+    KITE_EXPECT_EQ(h.app.pathComplete().matches().size(), size_t{ 1 });
+
+    // Descending does need the new folder.
+    h.Type("a\\");
+    h.Settle();
+    KITE_EXPECT_EQ(h.files.listCalls, afterFirst + 1);
+    KITE_EXPECT_EQ(h.app.pathComplete().matches()[0], std::string("nested"));
+}
+
+KITE_TEST(app, escape_folds_the_candidates_before_it_closes_the_prompt) {
+    Harness h;
+    h.EditPathAppend();
+    h.Type("\\a");
+    h.Settle();
+    KITE_EXPECT(h.app.pathComplete().open());
+
+    // The first Escape dismisses the offer without losing the typed text.
+    KITE_EXPECT(h.app.OnKey(ParseChord("Escape")));
+    KITE_EXPECT_FALSE(h.app.pathComplete().open());
+    KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::Path);
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("C:\\home\\a"));
+
+    KITE_EXPECT(h.app.OnKey(ParseChord("Escape")));
+    KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::None);
+}
+
+KITE_TEST(app, the_offer_goes_away_when_the_caret_leaves_the_end_of_the_text) {
+    Harness h;
+    h.EditPathAppend();
+    h.Type("\\a");
+    h.Settle();
+    KITE_EXPECT(h.app.pathComplete().open());
+
+    // Completion finishes the tail of the text, so with the caret parked in the
+    // middle there is nothing it could honestly be offering.
+    h.app.OnKey(ParseChord("Left"));
+    KITE_EXPECT_FALSE(h.app.pathComplete().open());
+
+    // And Tab must not quietly take the candidate it had a moment ago: that
+    // would overwrite whatever the caret is sitting in front of.
+    h.app.OnKey(ParseChord("Tab"));
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("C:\\home\\a"));
+
+    // Back at the end, the folder is still listed, so it completes at once.
+    h.app.OnKey(ParseChord("End"));
+    KITE_EXPECT(h.app.OnKey(ParseChord("Tab")));
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("C:\\home\\alpha"));
+}
+
+KITE_TEST(app, tab_alone_opens_the_offer_on_a_folder_that_was_never_typed_into) {
+    Harness h;
+    // The drive itself, so that "C:\home" has something to be completed from.
+    h.files.dirs["C:\\"];
+    h.files.AddDir("C:\\home");
+
+    h.app.Execute(Cmd::EditPath);
+    // The address bar opens on C:\home, so the first Tab has to both ask for
+    // the listing and be the keystroke that opens the offer.
+    h.app.OnKey(ParseChord("Tab"));
+    h.Settle();
+    KITE_EXPECT(h.app.pathComplete().open());
+    KITE_EXPECT_EQ(h.app.pathComplete().dir(), std::string("C:\\"));
+    KITE_EXPECT_EQ(h.app.pathComplete().matches().size(), size_t{ 1 });
+
+    KITE_EXPECT(h.app.OnKey(ParseChord("Tab")));
+    KITE_EXPECT_EQ(h.app.pathComplete().selected(), 0);
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("C:\\home"));
+}
+
+KITE_TEST(app, completion_stays_out_of_the_other_prompts) {
+    Harness h;
+    h.app.Execute(Cmd::NewFolder);
+    h.Type("C:\\ho");
+    h.Settle();
+    KITE_EXPECT_FALSE(h.app.pathComplete().open());
+    // Tab is swallowed as before, so it cannot fire the pane shortcut.
+    KITE_EXPECT(h.app.OnKey(ParseChord("Tab")));
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("C:\\ho"));
+}
+
+KITE_TEST(app, ctrl_l_opens_with_the_whole_path_selected) {
+    Harness h;
+    // What every address bar on the desktop does: the path is there to be read,
+    // and selected so that typing a different one does not mean clearing it
+    // first. It is also what makes the row visibly stop being breadcrumbs.
+    h.app.Execute(Cmd::EditPath);
+    KITE_EXPECT(h.app.prompt().hasSelection());
+    KITE_EXPECT_EQ(h.app.prompt().selBegin(), size_t{ 0 });
+    KITE_EXPECT_EQ(h.app.prompt().selEnd(), h.app.prompt().text.size());
+
+    h.Type("D:");
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("D:"));
+}
+
+KITE_TEST(app, ctrl_a_selects_the_whole_field_and_the_next_key_replaces_it) {
+    Harness h;
+    h.EditPathAppend();
+    KITE_EXPECT_FALSE(h.app.prompt().hasSelection());
+
+    KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+A")));
+    KITE_EXPECT(h.app.prompt().hasSelection());
+    KITE_EXPECT_EQ(h.app.prompt().selBegin(), size_t{ 0 });
+    KITE_EXPECT_EQ(h.app.prompt().selEnd(), h.app.prompt().text.size());
+
+    // Typing over a selection replaces it - otherwise selecting all would be a
+    // way to move the caret and nothing else.
+    h.Type("D");
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("D"));
+    KITE_EXPECT_FALSE(h.app.prompt().hasSelection());
+    KITE_EXPECT_EQ(h.app.prompt().caret, size_t{ 1 });
+
+    // And Backspace clears it in one go.
+    h.app.Execute(Cmd::EditPath);
+    h.app.OnKey(ParseChord("Backspace"));
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string(""));
+}
+
+KITE_TEST(app, an_arrow_key_collapses_the_selection_instead_of_eating_a_character) {
+    Harness h;
+    h.app.Execute(Cmd::EditPath);
+    const std::string full = h.app.prompt().text;
+
+    h.app.OnKey(ParseChord("Left"));
+    KITE_EXPECT_EQ(h.app.prompt().text, full);
+    KITE_EXPECT_FALSE(h.app.prompt().hasSelection());
+    KITE_EXPECT_EQ(h.app.prompt().caret, size_t{ 0 });
+
+    h.app.OnKey(ParseChord("Ctrl+A"));
+    h.app.OnKey(ParseChord("Right"));
+    KITE_EXPECT_EQ(h.app.prompt().caret, full.size());
+}
+
+KITE_TEST(app, select_all_stays_out_of_the_confirmation_prompt) {
+    Harness h;
+    h.app.Execute(Cmd::CursorDown);
+    h.app.Execute(Cmd::DeleteToRecycle);
+    KITE_EXPECT(h.app.prompt().isConfirm());
+    const std::string shown = h.app.prompt().text;
+
+    // The text there is a count, not something to edit.
+    KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+A")));
+    KITE_EXPECT_FALSE(h.app.prompt().hasSelection());
+    KITE_EXPECT_EQ(h.app.prompt().text, shown);
+}
+
+KITE_TEST(app, shift_and_arrows_grow_one_selection) {
+    Harness h;
+    h.EditPathAppend();                    // "C:\home", caret at the end
+    const std::string full = h.app.prompt().text;
+
+    h.app.OnKey(ParseChord("Shift+Left"));
+    h.app.OnKey(ParseChord("Shift+Left"));
+    KITE_EXPECT(h.app.prompt().hasSelection());
+    // The anchor stays where editing began, so the run grows one selection
+    // rather than a new one per keystroke.
+    KITE_EXPECT_EQ(h.app.prompt().anchor, full.size());
+    KITE_EXPECT_EQ(h.app.prompt().caret, full.size() - 2);
+    KITE_EXPECT_EQ(h.app.prompt().selEnd() - h.app.prompt().selBegin(), size_t{ 2 });
+
+    // Coming back shrinks the same selection, and lands empty where it started.
+    h.app.OnKey(ParseChord("Shift+Right"));
+    KITE_EXPECT_EQ(h.app.prompt().selEnd() - h.app.prompt().selBegin(), size_t{ 1 });
+    h.app.OnKey(ParseChord("Shift+Right"));
+    KITE_EXPECT_FALSE(h.app.prompt().hasSelection());
+
+    // Shift+Home takes everything up to the caret; the text is untouched.
+    h.app.OnKey(ParseChord("Shift+Home"));
+    KITE_EXPECT_EQ(h.app.prompt().selBegin(), size_t{ 0 });
+    KITE_EXPECT_EQ(h.app.prompt().selEnd(), full.size());
+    KITE_EXPECT_EQ(h.app.prompt().text, full);
+}
+
+KITE_TEST(app, ctrl_and_arrows_move_a_whole_path_component) {
+    Harness h;
+    h.EditPathAppend();
+    h.Type("\\alpha\\nested");
+    const std::string full = h.app.prompt().text;  // C:\home\alpha\nested
+
+    h.app.OnKey(ParseChord("Ctrl+Left"));
+    KITE_EXPECT_EQ(h.app.prompt().caret, full.size() - 6);   // start of "nested"
+    h.app.OnKey(ParseChord("Ctrl+Left"));
+    KITE_EXPECT_EQ(h.app.prompt().caret, size_t{ 8 });       // start of "alpha"
+    KITE_EXPECT_FALSE(h.app.prompt().hasSelection());
+
+    h.app.OnKey(ParseChord("Ctrl+Right"));
+    KITE_EXPECT_EQ(h.app.prompt().caret, size_t{ 13 });      // end of "alpha"
+
+    // Ctrl+Shift takes the component instead of just stepping over it, which is
+    // how one folder in the middle of a path gets replaced.
+    h.app.OnKey(ParseChord("Ctrl+Shift+Left"));
+    KITE_EXPECT_EQ(h.app.prompt().selBegin(), size_t{ 8 });
+    KITE_EXPECT_EQ(h.app.prompt().selEnd(), size_t{ 13 });
+    h.Type("beta");
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("C:\\home\\beta\\nested"));
+}
+
+KITE_TEST(app, moving_off_the_end_folds_the_candidate_list) {
+    Harness h;
+    h.EditPathAppend();
+    h.Type("\\a");
+    h.Settle();
+    KITE_EXPECT(h.app.pathComplete().open());
+
+    // Ctrl+Left leaves the end of the text, so the offer no longer applies.
+    h.app.OnKey(ParseChord("Ctrl+Left"));
+    KITE_EXPECT_FALSE(h.app.pathComplete().open());
+}
+
+KITE_TEST(app, the_address_bar_can_be_folded_away_without_applying_it) {
+    Harness h;
+    const std::string was = h.tab()->path;
+    h.EditPathAppend();
+    h.Type("\\beta");
+
+    // What the UI calls when a press lands outside the field. The typed path is
+    // dropped, not navigated to: the click was an answer to something else.
+    h.app.CancelPathEdit();
+    KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::None);
+    KITE_EXPECT_FALSE(h.app.pathComplete().open());
+    KITE_EXPECT_EQ(h.tab()->path, was);
+
+    // It is the address bar's own exit, and leaves the other prompts alone.
+    h.app.Execute(Cmd::NewFolder);
+    h.app.CancelPathEdit();
+    KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::NewFolder);
 }
 
 KITE_TEST(app, prompt_editing_handles_multibyte_text_one_character_at_a_time) {

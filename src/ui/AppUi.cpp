@@ -69,6 +69,10 @@ bool AppUi::PointerOver(const RectF& box) const {
 // key editor take every click, so nothing behind them may look pointable.
 bool AppUi::Hovered(const RectF& box) const {
     if (app_.keyHelpVisible() || app_.keyEditor().visible()) return false;
+    // The completion popup covers only part of the window, so it is not an
+    // overlay in the sense above - but a row lit under it is just as unclickable
+    // as one lit under the shortcut sheet.
+    if (!completionRect_.empty() && completionRect_.contains(mouseX_, mouseY_)) return false;
     return PointerOver(box);
 }
 
@@ -93,9 +97,17 @@ void AppUi::Paint(Renderer& r) {
     const RectF statusBar = { rest.l, rest.b - th.statusBarHeight, rest.r, rest.b };
     rest.b = statusBar.t;
 
-    if (app_.prompt().active()) {
-        const float h = th.statusBarHeight + 6.0f;
-        const RectF promptBar = { rest.l, rest.b - h, rest.r, rest.b };
+    completionRect_ = {};
+
+    // The address is edited in the breadcrumb bar of the focused pane - see
+    // PaintPathBar. Nothing is reserved for it here: the bar it takes over is
+    // already on screen, so Ctrl+L moves nothing.
+    //
+    // The other prompts stay at the bottom. They are about the list, and moving
+    // the list down to ask "rename to what?" would push the row being renamed
+    // out from under the pointer.
+    if (app_.prompt().active() && app_.prompt().kind != PromptKind::Path) {
+        const RectF promptBar = { rest.l, rest.b - (th.statusBarHeight + 6.0f), rest.r, rest.b };
         PaintPrompt(r, promptBar);
         rest.b = promptBar.t;
     }
@@ -113,6 +125,7 @@ void AppUi::Paint(Renderer& r) {
     }
 
     PaintStatusBar(r, statusBar);
+    PaintCompletion(r);
     PaintDragOverlay(r);
 
     if (app_.keyHelpVisible()) PaintKeyHelp(r, full);
@@ -427,7 +440,7 @@ void AppUi::PaintPane(Renderer& r, Pane* pane, const RectF& area) {
 
     Tab* tab = pane->activeTab();
     const RectF pathBar = { rest.l, rest.t, rest.r, rest.t + th.pathBarHeight };
-    PaintPathBar(r, pane, tab, pathBar);
+    PaintPathBar(r, pane, tab, pathBar, focused);
     rest.t = pathBar.b;
 
     PaintList(r, pane, tab, rest, focused);
@@ -502,10 +515,37 @@ void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused
     r.FillRect({ area.l, area.b - 1.0f, area.r, area.b }, th.border);
 }
 
-void AppUi::PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area) {
+// The breadcrumbs, and the address bar they turn into.
+//
+// One bar, two states: the crumbs are the readable form of the path and the
+// field is the writable one, so they take the same place rather than stacking
+// two rows that say the same thing. Ctrl+L (or a click on the empty part of the
+// bar) swaps one for the other, and because the bar was already there, nothing
+// below it moves.
+void AppUi::PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool focused) {
     const Theme& th = app_.theme();
+
+    // Only the focused pane can be the one being typed into - the prompt is a
+    // single field, and it edits the focused tab's path.
+    if (focused && app_.prompt().kind == PromptKind::Path) {
+        r.FillRect(area, th.overlayBg);
+        PaintPromptField(r, { area.l + kPad, area.t, area.r - kPad, area.b });
+        // Accent while it holds the keyboard, which is what the colour means
+        // everywhere else in Kite.
+        r.FillRect({ area.l, area.b - 1.0f, area.r, area.b }, th.accent);
+        LayoutCompletion(r, area);
+        // Registered while editing too, so that a click landing on the field is
+        // told apart from a click landing anywhere else - which puts it away.
+        Add(area, Hit::AddressBar, 0, pane);
+        return;
+    }
+
     r.FillRect(area, th.tabActiveBg);
     if (!tab) return;
+
+    // Registered first so the crumbs, added below, win the hit test: clicking a
+    // crumb goes there, clicking the space after them starts editing.
+    Add(area, Hit::AddressBar, 0, pane);
 
     // Breadcrumbs: split the path into cumulative prefixes.
     std::vector<std::pair<std::string, std::string>> crumbs;  // label, full path
@@ -791,6 +831,35 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
                FontRole::UiSmall, TextAlign::Right);
 }
 
+// Text, selection and caret for one editable field.
+void AppUi::PaintPromptField(Renderer& r, const RectF& field) {
+    const Theme& th = app_.theme();
+    const Prompt& p = app_.prompt();
+
+    // The selection goes under the text rather than recolouring it: one
+    // DrawText call cannot paint a run in two colours, and splitting the string
+    // into three would measure each piece on its own - which drifts apart from
+    // the whole once kerning is involved.
+    if (p.hasSelection()) {
+        const float from =
+            r.MeasureText(std::string_view(p.text).substr(0, p.selBegin()), FontRole::Ui);
+        const float to =
+            r.MeasureText(std::string_view(p.text).substr(0, p.selEnd()), FontRole::Ui);
+        r.FillRect({ field.l + from, field.t + 3.0f, field.l + to, field.b - 3.0f },
+                   th.textSelection);
+    }
+
+    r.DrawText(p.text, field, th.text, FontRole::Ui, TextAlign::Left);
+
+    // The caret is the text colour, not the accent: it is a letter-shaped mark
+    // in a run of letters, and every field on the desktop draws it that way.
+    // The accent says where the keyboard is; the bar's own border already does.
+    const float caretX =
+        field.l + r.MeasureText(std::string_view(p.text).substr(0, p.caret), FontRole::Ui);
+    r.FillRect({ caretX, field.t + 4.0f, caretX + 1.5f, field.b - 4.0f }, th.text);
+    caret_ = { caretX, field.t };
+}
+
 void AppUi::PaintPrompt(Renderer& r, const RectF& area) {
     const Theme& th = app_.theme();
     const Strings& str = app_.strings();
@@ -805,13 +874,80 @@ void AppUi::PaintPrompt(Renderer& r, const RectF& area) {
                p.isConfirm() ? th.textError : th.textDim, FontRole::Ui, TextAlign::Left);
 
     if (!p.isConfirm()) {
-        const RectF field = { area.l + kPad + labelW, area.t, area.r - kPad, area.b };
-        r.DrawText(p.text, field, th.text, FontRole::Ui, TextAlign::Left);
+        PaintPromptField(r, { area.l + kPad + labelW, area.t, area.r - kPad, area.b });
+    }
+}
 
-        const float caretX =
-            field.l + r.MeasureText(std::string_view(p.text).substr(0, p.caret), FontRole::Ui);
-        r.FillRect({ caretX, field.t + 4.0f, caretX + 1.5f, field.b - 4.0f }, th.accent);
-        caret_ = { caretX, field.t };
+// Measure the candidate popup, without drawing it.
+//
+// Drawing has to wait until every pane is down - the list is what it hangs over
+// - but the rectangle is needed before the rows underneath are painted, or one
+// of them lights up under a pointer that is really over the popup. Measuring
+// here, from the bar the popup drops out of, puts it in hand before the list
+// below it is drawn.
+void AppUi::LayoutCompletion(Renderer& r, const RectF& promptArea) {
+    const PathComplete& pc = app_.pathComplete();
+    completionTop_ = 0;
+    completionRows_ = 0;
+    if (!pc.open() || pc.matches().empty()) return;
+
+    const Theme& th = app_.theme();
+    const float rowH = th.rowHeight;
+    const int count = static_cast<int>(pc.matches().size());
+
+    // The popup drops out of the bar and stops at the status bar - a folder with
+    // 200 subfolders would otherwise cover the whole window. It may hang over a
+    // pane below its own; that pane is painted after this one, so the rows it
+    // covers still know not to light up.
+    const float span = (r.surfaceSize().h - th.statusBarHeight) - promptArea.b;
+    completionRows_ = std::clamp(std::min(count, 10), 0, std::max(0, static_cast<int>(span / rowH)));
+    if (completionRows_ <= 0) return;
+
+    // Scrolling is derived from the selection rather than kept as state: the
+    // only way to move through this list is to move the selection.
+    const int sel = pc.selected();
+    if (sel >= completionRows_) completionTop_ = sel - completionRows_ + 1;
+    completionTop_ = std::clamp(completionTop_, 0, std::max(0, count - completionRows_));
+
+    float widest = 0.0f;
+    for (int i = 0; i < completionRows_; ++i) {
+        widest = std::max(widest, r.MeasureText(pc.TextAt(completionTop_ + i), FontRole::Ui));
+    }
+    const float width =
+        std::clamp(widest + kPad * 4.0f, 260.0f, std::max(260.0f, promptArea.w() - kPad * 2.0f));
+
+    const float height = rowH * static_cast<float>(completionRows_);
+    completionRect_ = { promptArea.l + kPad, promptArea.b, promptArea.l + kPad + width,
+                        promptArea.b + height };
+}
+
+void AppUi::PaintCompletion(Renderer& r) {
+    if (completionRect_.empty() || completionRows_ <= 0) return;
+
+    const Theme& th = app_.theme();
+    const PathComplete& pc = app_.pathComplete();
+    const float rowH = th.rowHeight;
+
+    r.FillRect(completionRect_, th.overlayBg);
+    r.StrokeRect(completionRect_, th.border, 1.0f);
+
+    for (int i = 0; i < completionRows_; ++i) {
+        const int index = completionTop_ + i;
+        if (index >= static_cast<int>(pc.matches().size())) break;
+        const RectF row = { completionRect_.l, completionRect_.t + rowH * static_cast<float>(i),
+                            completionRect_.r, completionRect_.t + rowH * static_cast<float>(i + 1) };
+
+        const bool selected = (index == pc.selected());
+        if (selected) {
+            r.FillRect(row, th.rowSelected);
+        } else if (PointerOver(row)) {
+            r.FillRect(row, th.rowHover);
+        }
+        // The whole path, not just the leaf: with ".." or forward slashes in
+        // what was typed, the name alone does not say where it would land.
+        r.DrawText(pc.TextAt(index), { row.l + kPad, row.t, row.r - kPad, row.b },
+                   selected ? th.rowSelectedText : th.textFolder, FontRole::Ui, TextAlign::Left);
+        Add(row, Hit::CompletionRow, index);
     }
 }
 
@@ -1598,6 +1734,19 @@ bool AppUi::OnMouse(const MouseEvent& e) {
         return true;
     }
 
+    // A press anywhere but the field itself puts the address bar away. Clicking
+    // elsewhere is already an answer to something else, and a half-typed path
+    // has no business staying open across it. The click then goes on to do
+    // whatever it was going to do - including opening the bar of another pane,
+    // which is why this runs before the dispatch below rather than inside it.
+    if (app_.prompt().kind == PromptKind::Path) {
+        const bool onField =
+            region && ((region->kind == Hit::AddressBar &&
+                        region->pane == app_.workspace().focusedPane()) ||
+                       region->kind == Hit::CompletionRow);
+        if (!onField) app_.CancelPathEdit();
+    }
+
     // Mouse back / forward buttons.
     if (e.button == 3) {
         app_.Execute(Cmd::GoBack);
@@ -1710,6 +1859,22 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             if (region->index >= 0 && region->index < 4) app_.Execute(kSortCommands[region->index]);
             return true;
         }
+
+        case Hit::AddressBar:
+            // Inside the field being edited: leave it alone. (Another pane's bar
+            // was already folded away above, and falls through to open there.)
+            if (app_.prompt().kind == PromptKind::Path) return true;
+            // Otherwise this is the space after the last crumb, and the click
+            // opens that pane's path for editing - hence the focus first.
+            app_.FocusPane(region->pane);
+            if (e.button == 0) app_.Execute(Cmd::EditPath);
+            return true;
+
+        case Hit::CompletionRow:
+            // Only the left button. A right-click here would otherwise fall
+            // through to the list underneath, which is not what was aimed at.
+            if (e.button == 0) app_.ChooseCompletion(region->index);
+            return true;
 
         case Hit::Splitter:
             drag_ = Drag::Splitter;

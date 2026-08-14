@@ -34,9 +34,9 @@ KITE_TEST(theme, dark_theme_keeps_text_readable_against_its_background) {
 KITE_TEST(theme, dark_theme_stays_neutral_grey) {
     // The dark default is meant to have no colour cast at all. A tint creeps back
     // in one channel at a time, so check every surface rather than eyeballing it.
-    // The focus colours are the deliberate exception and are checked below; the
-    // selection is not one of them and has to stay grey, or "selected" and
-    // "focused" become the same colour.
+    // The focus colours and the text-field selection are the deliberate
+    // exceptions and are checked below; the row selection is not one of them and
+    // has to stay grey, or "selected" and "focused" become the same colour.
     const Theme dark = Theme::Dark();
     const Color neutral[] = { dark.windowBg,    dark.panelBg,        dark.listBg,
                               dark.listBgAlt,   dark.border,         dark.text,
@@ -52,11 +52,12 @@ KITE_TEST(theme, dark_theme_stays_neutral_grey) {
     }
 }
 
-KITE_TEST(theme, the_focus_colours_are_blue_and_stay_muted) {
-    // The one hue either theme carries on purpose. It has to be blue, because
-    // that is what the rest of the desktop means by "this has the keyboard", and
-    // it has to stay unsaturated, because a grey screen makes any strong colour
-    // the loudest thing on it.
+KITE_TEST(theme, the_focus_colours_are_a_blue_that_reads_as_blue) {
+    // It has to be blue, because that is what the rest of the desktop means by
+    // "this has the keyboard". It also has to be *visibly* blue: a desaturated
+    // version of the right hue sat among the greys and read as one more of them,
+    // which is the whole failure this guards against. The upper bound only keeps
+    // it off pure cyan.
     for (const Theme& t : { Theme::Dark(), Theme::Light() }) {
         const Color focus[] = { t.accent, t.paneFocusBorder, t.cursorBorder };
         for (const Color& c : focus) {
@@ -64,8 +65,27 @@ KITE_TEST(theme, the_focus_colours_are_blue_and_stay_muted) {
             KITE_EXPECT(c.b > c.g);
             const float high = std::max(c.r, std::max(c.g, c.b));
             const float low = std::min(c.r, std::min(c.g, c.b));
-            KITE_EXPECT(high - low < 0.45f);
+            KITE_EXPECT(high - low > 0.25f);
+            KITE_EXPECT(high - low < 0.85f);
         }
+    }
+}
+
+KITE_TEST(theme, the_field_selection_is_blue_and_the_text_still_reads_on_it) {
+    // The other hue either theme carries on purpose, and for a different reason
+    // than focus: every text field on the desktop washes its selection blue, and
+    // a row that is being typed into is read as a field or not at all. A grey
+    // wash there sits a shade off the field itself - which is exactly the "am I
+    // editing this?" doubt the colour is there to answer.
+    for (const Theme& t : { Theme::Dark(), Theme::Light() }) {
+        KITE_EXPECT(t.textSelection.b > t.textSelection.r);
+        KITE_EXPECT(t.textSelection.b > t.textSelection.g);
+
+        // The text over it keeps its ordinary colour - one DrawText call cannot
+        // paint a run in two - so the wash has to stay clear of it in luminance.
+        const float sel = (t.textSelection.r + t.textSelection.g + t.textSelection.b) / 3.0f;
+        const float fg = (t.text.r + t.text.g + t.text.b) / 3.0f;
+        KITE_EXPECT(std::abs(fg - sel) > 0.3f);
     }
 }
 

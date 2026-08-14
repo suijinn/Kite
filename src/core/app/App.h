@@ -21,6 +21,7 @@
 #include "core/input/Commands.h"
 #include "core/input/KeyEditor.h"
 #include "core/input/KeyMap.h"
+#include "core/input/PathComplete.h"
 #include "core/model/Workspace.h"
 #include "core/theme/Theme.h"
 
@@ -45,11 +46,50 @@ struct Prompt {
     std::string labelKey;                    ///< 見出しの i18n キー
     std::string text;                        ///< 入力中の文字列
     size_t caret = 0;                        ///< キャレット位置。text へのバイト添字
+    size_t anchor = 0;                       ///< 選択範囲のもう一端。caret と等しければ選択なし
     std::vector<std::string> pendingPaths;   ///< 確認待ちの操作対象
 
     /// @brief 入力欄が表示されているかを判定する。
     /// @return 表示中なら true
     bool active() const { return kind != PromptKind::None; }
+
+    /// @brief 文字列が選択されているかを判定する。
+    /// @return 選択されていれば true
+    bool hasSelection() const { return caret != anchor; }
+
+    /// @brief 選択範囲の先頭を返す。
+    /// @return text へのバイト添字
+    size_t selBegin() const { return caret < anchor ? caret : anchor; }
+
+    /// @brief 選択範囲の終端を返す。
+    /// @return text へのバイト添字。選択が無ければ selBegin() と等しい
+    size_t selEnd() const { return caret < anchor ? anchor : caret; }
+
+    /// @brief キャレットを動かし、選択を解除する。
+    /// @param[in] pos 移動先。text へのバイト添字
+    void SetCaret(size_t pos) {
+        caret = pos;
+        anchor = pos;
+    }
+
+    /// @brief 全体を選択する。
+    void SelectAll() {
+        anchor = 0;
+        caret = text.size();
+    }
+
+    /// @brief 選択されている範囲を削除する。
+    /// @return 実際に削除したら true
+    /// @note 文字入力・Backspace・Delete がまずこれを呼ぶ。選択したまま打った
+    ///       文字が置き換えではなく挿入になると、全選択が何のためにあるのか
+    ///       分からなくなる
+    bool DeleteSelection() {
+        if (!hasSelection()) return false;
+        const size_t begin = selBegin();
+        text.erase(begin, selEnd() - begin);
+        SetCaret(begin);
+        return true;
+    }
 
     /// @brief 文字入力ではなく Yes/No の確認かを判定する。
     /// @return 確認なら true
@@ -183,6 +223,24 @@ public:
     /// @brief 入力欄の状態を返す（変更可能）。
     /// @return 入力欄への参照
     Prompt& prompt() { return prompt_; }
+
+    /// @brief パス入力の補完状態を返す。
+    /// @return 補完状態への参照
+    /// @note 出ているのは PromptKind::Path の入力欄のときだけ。他の入力欄では
+    ///       常に閉じている
+    const PathComplete& pathComplete() const { return complete_; }
+
+    /// @brief 編集中のアドレスバーを畳み、パンくずに戻す。
+    /// @note 打った文字列は捨てる。UI 層が「入力欄の外が押された」ときに呼ぶ ─
+    ///       押した先が答えなのだから、書きかけのパスを抱えたまま居座らせない。
+    ///       アドレスバー以外の入力欄には効かない
+    void CancelPathEdit();
+
+    /// @brief 補完候補を選び、そのフォルダへ移動する。
+    /// @param[in] index PathComplete::matches() への添字
+    /// @note UI 層が候補行のクリックで呼ぶ。キーボードは Tab で選んで Enter で
+    ///       決めるが、マウスで候補を押した人はもう決めている
+    void ChooseCompletion(int index);
 
     /// @brief ショートカット一覧が表示中かを返す。
     /// @return 表示中なら true
@@ -395,6 +453,9 @@ private:
     void CancelPrompt();
     void BeginPrompt(PromptKind kind, const char* labelKey, const std::string& initial);
     bool HandlePromptKey(const Chord& chord);
+    void SyncCompletion(bool open);
+    void RequestCompletion();
+    bool MoveCompletion(int delta);
 
     void ShowShellMenu(const std::vector<std::string>& paths, int screenX, int screenY,
                        bool extended, bool background);
@@ -432,6 +493,11 @@ private:
     std::vector<std::string> driveOrder_;
 
     Prompt prompt_;
+    PathComplete complete_;
+    // The listing the completion is waiting on. Kept apart from the tabs' own
+    // tokens so that typing past a slow folder just drops its answer.
+    uint64_t completeToken_ = 0;
+    std::string completeRequested_;
     bool keyHelp_ = false;
     bool keysChanged_ = false;
     bool sidebarVisible_ = true;

@@ -103,6 +103,7 @@ add_library(kite_core STATIC
     src/core/input/KeyEditor.cpp
     src/core/input/KeyMap.cpp
     src/core/input/Keys.cpp
+    src/core/input/PathComplete.cpp
     src/core/model/Workspace.cpp
     src/core/theme/Theme.cpp
     src/ui/AppUi.cpp
@@ -235,6 +236,7 @@ if(KITE_BUILD_TESTS)
         tests/test_strings.cpp
         tests/test_keymap.cpp
         tests/test_keyeditor.cpp
+        tests/test_pathcomplete.cpp
         tests/test_iconcache.cpp
         tests/test_theme.cpp
         tests/test_tab.cpp
@@ -249,7 +251,7 @@ if(KITE_BUILD_TESTS)
 
     # One CTest entry per suite so a failure names the area straight away.
     set(KITE_TEST_SUITES
-        utf8 path ini format strings keymap keyeditor theme tab workspace session app appui drop
+        utf8 path ini format strings keymap keyeditor pathcomplete theme tab workspace session app appui drop
         iconcache hostproto)
 
     foreach(suite IN LISTS KITE_TEST_SUITES)
