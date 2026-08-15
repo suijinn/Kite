@@ -803,3 +803,106 @@ KITE_TEST(appui, clicking_a_candidate_does_not_count_as_clicking_away) {
     test::PumpUntilSettled(f.app);
     KITE_EXPECT_EQ(f.tab()->path, std::string("C:\\home\\alpha"));
 }
+
+// --- wrapping ---------------------------------------------------------------
+//
+// Both bars used to stop drawing at the right edge, which left the tabs and
+// sessions past that point on screen in name only: nothing to click, and no sign
+// that anything had been left out.
+
+KITE_TEST(appui, the_tab_bar_stays_one_row_while_the_tabs_fit) {
+    Fixture f;
+    for (int i = 0; i < 4; ++i) f.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    const Theme& th = f.app.theme();
+    Pane* pane = f.app.workspace().focusedPane();
+    KITE_EXPECT_NEAR(pane->listArea.t,
+                     ContentTop(th) + th.tabBarHeight + th.pathBarHeight + th.headerHeight, 0.01f);
+}
+
+KITE_TEST(appui, the_tab_bar_grows_a_row_instead_of_running_off_the_edge) {
+    Fixture f;
+    // Wide enough for 14 tabs at the floor width, so twenty need a second row.
+    for (int i = 0; i < 19; ++i) f.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    const Theme& th = f.app.theme();
+    Pane* pane = f.app.workspace().focusedPane();
+    KITE_EXPECT_EQ(pane->tabs.size(), size_t{ 20 });
+    KITE_EXPECT_NEAR(pane->listArea.t,
+                     ContentTop(th) + th.tabBarHeight * 2.0f + th.pathBarHeight + th.headerHeight,
+                     0.01f);
+}
+
+KITE_TEST(appui, a_tab_on_the_second_row_can_be_clicked) {
+    Fixture f;
+    for (int i = 0; i < 19; ++i) f.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    const Theme& th = f.app.theme();
+    // First tab of the second row: the leftmost column, one bar height down.
+    const float x = th.sidebarWidth + 1.0f + 30.0f;
+    const float y = ContentTop(th) + th.tabBarHeight * 1.5f;
+    f.Click(x, y);
+    test::PumpUntilSettled(f.app);
+
+    Pane* pane = f.app.workspace().focusedPane();
+    KITE_EXPECT_EQ(pane->active, 14);
+}
+
+KITE_TEST(appui, the_session_bar_wraps_and_the_ninth_session_still_switches) {
+    Fixture f;
+    // Nine and beyond is the interesting part: only eight of them have a
+    // Cmd::SessionN, so a chip that dispatched by arithmetic used to run off the
+    // end of the command table.
+    for (int i = 0; i < 11; ++i) f.app.Execute(Cmd::NewSession);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    const Theme& th = f.app.theme();
+    KITE_EXPECT_EQ(f.app.workspace().sessions.size(), size_t{ 12 });
+    // The top of the pane area is the bottom of however many rows the bar took;
+    // the split tree records it every frame.
+    KITE_EXPECT(f.app.workspace().activeSession()->root->rect.t > th.sessionBarHeight);
+
+    // The last session is the active one, so its chip is the one wearing the
+    // active fill - which is how the test finds a chip without repeating the
+    // layout arithmetic.
+    const float barBottom = f.app.workspace().activeSession()->root->rect.t;
+    RectF chip{};
+    int found = 0;
+    for (const test::FakeRenderer::Fill& fill : f.renderer.fills) {
+        if (fill.rect.b > barBottom) continue;  // the same grey is used down in the list
+        if (fill.rect.h() < 4.0f) continue;     // and by the hairline under the bar
+        if (test::FakeRenderer::SameColor(fill.color, th.sessionActiveBg)) {
+            chip = fill.rect;
+            ++found;
+        }
+    }
+    KITE_EXPECT_EQ(found, 1);
+    KITE_EXPECT(chip.t >= th.sessionBarHeight);  // wrapped onto a later row
+
+    f.app.Execute(Cmd::Session1);
+    KITE_EXPECT_EQ(f.app.workspace().active, 0);
+    f.Paint();
+
+    f.Click(chip.center().x, chip.center().y);
+    test::PumpUntilSettled(f.app);
+    KITE_EXPECT_EQ(f.app.workspace().active, 11);
+}
+
+KITE_TEST(appui, nothing_behind_the_settings_screen_is_lit) {
+    Fixture f;
+    const PointF p = f.RowPoint(1);
+    f.Move(p.x, p.y);
+    f.Paint();
+    KITE_EXPECT_EQ(f.renderer.CountFills(f.app.theme().rowHover), 1);
+
+    f.app.Execute(Cmd::ShowSettings);
+    f.Paint();
+    KITE_EXPECT_EQ(f.renderer.CountFills(f.app.theme().rowHover), 0);
+}

@@ -47,6 +47,7 @@ enum class CmdGroup : uint8_t {
     X(ToggleLanguage,     "app.toggle_language",     "cmd.toggle_language",    App)              \
     X(ShowKeyHelp,        "app.key_help",            "cmd.key_help",           App)              \
     X(ShowKeySettings,    "app.key_settings",        "cmd.key_settings",       App)              \
+    X(ShowSettings,       "app.settings",            "cmd.settings",           App)              \
     X(CancelOverlay,      "app.cancel",              "cmd.cancel",             App)              \
     /* --- navigation ------------------------------------------------------- */                \
     X(GoUp,               "nav.up",                  "cmd.go_up",              Navigate)         \

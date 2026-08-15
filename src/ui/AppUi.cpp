@@ -68,7 +68,9 @@ bool AppUi::PointerOver(const RectF& box) const {
 // As above, for everything that an overlay covers. The shortcut sheet and the
 // key editor take every click, so nothing behind them may look pointable.
 bool AppUi::Hovered(const RectF& box) const {
-    if (app_.keyHelpVisible() || app_.keyEditor().visible()) return false;
+    if (app_.keyHelpVisible() || app_.keyEditor().visible() || app_.settingsEditor().visible()) {
+        return false;
+    }
     // The completion popup covers only part of the window, so it is not an
     // overlay in the sense above - but a row lit under it is just as unclickable
     // as one lit under the shortcut sheet.
@@ -90,7 +92,11 @@ void AppUi::Paint(Renderer& r) {
 
     RectF rest = full;
 
-    const RectF sessionBar = { rest.l, rest.t, rest.r, rest.t + th.sessionBarHeight };
+    // Laid out before it is painted: the bar is as tall as the number of rows
+    // the chips wrapped into, and nothing below it can be placed until that is
+    // known.
+    const float sessionH = LayoutSessionBar(r, rest);
+    const RectF sessionBar = { rest.l, rest.t, rest.r, rest.t + sessionH };
     PaintSessionBar(r, sessionBar);
     rest.t = sessionBar.b;
 
@@ -130,6 +136,7 @@ void AppUi::Paint(Renderer& r) {
 
     if (app_.keyHelpVisible()) PaintKeyHelp(r, full);
     if (app_.keyEditor().visible()) PaintKeySettings(r, full);
+    if (app_.settingsEditor().visible()) PaintSettings(r, full);
 }
 
 void AppUi::PaintDragOverlay(Renderer& r) {
@@ -176,6 +183,103 @@ void AppUi::PaintDragOverlay(Renderer& r) {
 
 // --- session bar ------------------------------------------------------------
 
+// Where every session chip goes, and how tall the bar has to be to hold them.
+//
+// Chips wrap onto further rows rather than being cut off at the right edge. A
+// session that cannot be seen cannot be clicked, and the bar exists to say what
+// is open - one that silently stops listing after the sixth session is worse
+// than no bar at all.
+//
+// Returns the height of the bar, in whole rows.
+float AppUi::LayoutSessionBar(Renderer& r, const RectF& area) {
+    const Theme& th = app_.theme();
+    Workspace& ws = app_.workspace();
+
+    sessionChips_.clear();
+    sessionAdd_ = {};
+    sessionBrand_ = {};
+
+    const float rowH = th.sessionBarHeight;
+    constexpr float kAddWidth = 22.0f;
+    constexpr float kGap = 4.0f;
+
+    // The build stamp keeps the top-right corner instead of trailing the last
+    // chip: it is the line someone gets asked to read out, and a landmark that
+    // moves down a row every time a session is added is not a landmark. Every
+    // row wraps early by its width, not just the first - which row is on top
+    // changes once the bar is scrolled. Dropped when the shortcut overlay is up:
+    // that panel repeats the stamp in its own heading.
+    const std::string brand = std::string("Kite ") + version::kDisplay;
+    const float brandW = r.MeasureText(brand, FontRole::UiSmall) + kPad * 2.0f;
+    const bool showBrand = !app_.keyHelpVisible() && (area.w() - brandW) > 240.0f;
+    const float rowRight = area.r - kPad - (showBrand ? brandW : 0.0f);
+
+    // First pass: which row each chip lands on, and where along it.
+    struct Slot {
+        int row;
+        float x;
+        float w;
+    };
+    std::vector<Slot> slots;
+    slots.reserve(ws.sessions.size());
+
+    int row = 0;
+    float x = kPad;
+    for (size_t i = 0; i < ws.sessions.size(); ++i) {
+        const std::string label = std::to_string(i + 1) + "  " + ws.sessions[i]->name;
+        const float w = r.MeasureText(label, FontRole::UiSmall) + kPad * 2.0f;
+        // The first chip on a row is placed whatever its width: a name long
+        // enough to overflow the window on its own still gets a row, and the
+        // text is clipped, rather than the loop wrapping for ever.
+        if (x > kPad && area.l + x + w > rowRight) {
+            ++row;
+            x = kPad;
+        }
+        slots.push_back({ row, x, w });
+        x += w + kGap;
+    }
+    if (x > kPad && area.l + x + kAddWidth > rowRight) {
+        ++row;
+        x = kPad;
+    }
+    const int totalRows = row + 1;
+
+    // The bar is a header, not a panel: past a quarter of the window it would be
+    // eating the listing it is supposed to label. Beyond that the rows scroll,
+    // and which rows are on screen is derived from the active session rather
+    // than remembered - a scroll position of our own could only ever disagree
+    // with the selection, the same reasoning as the completion popup's.
+    const int maxRows = std::max(1, static_cast<int>((r.surfaceSize().h * 0.25f) / rowH));
+    const int shownRows = std::min(totalRows, maxRows);
+    int firstRow = 0;
+    if (shownRows < totalRows) {
+        const int activeRow = (ws.active >= 0 && ws.active < static_cast<int>(slots.size()))
+                                  ? slots[static_cast<size_t>(ws.active)].row
+                                  : 0;
+        firstRow = std::clamp(activeRow - shownRows + 1, 0, totalRows - shownRows);
+    }
+
+    auto place = [&](int slotRow, float slotX, float w) {
+        const float top = area.t + static_cast<float>(slotRow - firstRow) * rowH;
+        return RectF{ area.l + slotX, top + 3.0f, area.l + slotX + w, top + rowH - 3.0f };
+    };
+    auto onScreen = [&](int slotRow) {
+        return slotRow >= firstRow && slotRow < firstRow + shownRows;
+    };
+
+    for (size_t i = 0; i < slots.size(); ++i) {
+        if (!onScreen(slots[i].row)) continue;
+        sessionChips_.push_back({ place(slots[i].row, slots[i].x, slots[i].w), static_cast<int>(i) });
+    }
+    // The add button follows the last chip. If that row is one of the scrolled
+    // ones it simply is not there; Cmd::NewSession still is.
+    if (onScreen(row)) sessionAdd_ = place(row, x, kAddWidth);
+    if (showBrand) {
+        sessionBrand_ = { area.r - brandW, area.t, area.r - kPad, area.t + rowH };
+    }
+    return static_cast<float>(shownRows) * rowH;
+}
+
 void AppUi::PaintSessionBar(Renderer& r, const RectF& area) {
     const Theme& th = app_.theme();
     Workspace& ws = app_.workspace();
@@ -183,41 +287,27 @@ void AppUi::PaintSessionBar(Renderer& r, const RectF& area) {
     r.FillRect(area, th.panelBg);
     r.FillRect({ area.l, area.b - 1.0f, area.r, area.b }, th.border);
 
-    float x = kPad;
-    for (size_t i = 0; i < ws.sessions.size(); ++i) {
-        const bool active = (static_cast<int>(i) == ws.active);
-        const std::string label = std::to_string(i + 1) + "  " + ws.sessions[i]->name;
-        const float w = r.MeasureText(label, FontRole::UiSmall) + kPad * 2.0f;
-        const RectF chip = { x, area.t + 3.0f, x + w, area.b - 3.0f };
-        if (chip.r > area.r - 30.0f) break;
+    for (const Chip& chip : sessionChips_) {
+        if (chip.index >= static_cast<int>(ws.sessions.size())) continue;
+        const bool active = (chip.index == ws.active);
+        const std::string label =
+            std::to_string(chip.index + 1) + "  " + ws.sessions[static_cast<size_t>(chip.index)]->name;
 
-        if (active) r.FillRoundRect(chip, 4.0f, th.sessionActiveBg);
-        if (Hovered(chip)) r.FillRoundRect(chip, 4.0f, th.rowHover);
-        r.DrawText(label, chip, active ? th.text : th.textDim, FontRole::UiSmall,
+        if (active) r.FillRoundRect(chip.box, 4.0f, th.sessionActiveBg);
+        if (Hovered(chip.box)) r.FillRoundRect(chip.box, 4.0f, th.rowHover);
+        r.DrawText(label, chip.box, active ? th.text : th.textDim, FontRole::UiSmall,
                    TextAlign::Center);
-        Add(chip, Hit::SessionChip, static_cast<int>(i));
-        x = chip.r + 4.0f;
+        Add(chip.box, Hit::SessionChip, chip.index);
     }
 
-    const RectF add = { x, area.t + 3.0f, x + 22.0f, area.b - 3.0f };
-    if (add.r < area.r - 8.0f) {
-        glyph::Plus(r, add, Hovered(add) ? th.text : th.textDim, 1.5f);
-        Add(add, Hit::SessionAdd);
+    if (!sessionAdd_.empty()) {
+        glyph::Plus(r, sessionAdd_, Hovered(sessionAdd_) ? th.text : th.textDim, 1.5f);
+        Add(sessionAdd_, Hit::SessionAdd);
     }
 
-    // The build stamp sits here rather than only in the caption: the caption is
-    // the first thing a taskbar truncates, and this is the line someone gets
-    // asked to read out when they report something. Dropped when the shortcut
-    // overlay is up - it repeats the stamp in its own heading.
-    if (!app_.keyHelpVisible()) {
-        const std::string brand = std::string("Kite ") + version::kDisplay;
-        const float w = r.MeasureText(brand, FontRole::UiSmall) + kPad;
-        // Sessions win the space: this is the one thing on the bar nobody needs
-        // to read twice.
-        if (x + kPad < area.r - w) {
-            r.DrawText(brand, { area.r - w, area.t, area.r - kPad, area.b },
-                       th.textDim.alpha(0.5f), FontRole::UiSmall, TextAlign::Right);
-        }
+    if (!sessionBrand_.empty()) {
+        r.DrawText(std::string("Kite ") + version::kDisplay, sessionBrand_,
+                   th.textDim.alpha(0.5f), FontRole::UiSmall, TextAlign::Right);
     }
 }
 
@@ -434,8 +524,9 @@ void AppUi::PaintPane(Renderer& r, Pane* pane, const RectF& area) {
     r.FillRect(area, th.listBg);
 
     RectF rest = area;
-    const RectF tabBar = { rest.l, rest.t, rest.r, rest.t + th.tabBarHeight };
-    PaintTabBar(r, pane, tabBar, focused);
+    const TabLayout tabs = LayoutTabBar(*pane, rest.w(), area.h());
+    const RectF tabBar = { rest.l, rest.t, rest.r, rest.t + tabs.height };
+    PaintTabBar(r, pane, tabBar, focused, tabs);
     rest.t = tabBar.b;
 
     Tab* tab = pane->activeTab();
@@ -456,25 +547,68 @@ void AppUi::PaintPane(Renderer& r, Pane* pane, const RectF& area) {
     r.PopClip();
 }
 
-void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused) {
+// How the tabs of one pane fold into rows, and how tall that makes the bar.
+//
+// Tabs shrink until they hit a floor, and then wrap. Up to that floor the result
+// is exactly the single row it always was; past it, the row that used to run off
+// the right edge - taking every tab on it out of reach of the mouse - becomes a
+// second row.
+//
+// The add button is why the width is measured against `avail` rather than the
+// full span: a full row can never use more than `avail`, so the last row always
+// keeps room for the plus at its end.
+AppUi::TabLayout AppUi::LayoutTabBar(const Pane& pane, float width, float paneHeight) const {
+    const Theme& th = app_.theme();
+    constexpr float kMaxTabWidth = 190.0f;
+    constexpr float kMinTabWidth = 70.0f;
+
+    TabLayout out;
+    const int count = static_cast<int>(pane.tabs.size());
+    const float avail = std::max(kMinTabWidth, width - 28.0f);
+    out.perTab = count == 0 ? kMaxTabWidth
+                            : std::clamp(avail / static_cast<float>(count), kMinTabWidth,
+                                         kMaxTabWidth);
+    out.perRow = std::max(1, static_cast<int>(avail / out.perTab));
+    out.rows = std::max(1, (std::max(count, 1) + out.perRow - 1) / out.perRow);
+
+    // Half the pane is the point where the tab bar stops labelling a listing and
+    // starts replacing it. Past that the rows scroll, and which ones are on
+    // screen comes from the active tab - the same rule the session bar and the
+    // completion popup follow, for the same reason: a remembered position could
+    // only disagree with the selection.
+    const int maxRows = std::max(1, static_cast<int>((paneHeight * 0.5f) / th.tabBarHeight));
+    out.shownRows = std::min(out.rows, maxRows);
+    if (out.shownRows < out.rows) {
+        const int activeRow = std::clamp(pane.active, 0, std::max(0, count - 1)) / out.perRow;
+        out.firstRow = std::clamp(activeRow - out.shownRows + 1, 0, out.rows - out.shownRows);
+    }
+    out.height = static_cast<float>(out.shownRows) * th.tabBarHeight;
+    return out;
+}
+
+void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused,
+                        const TabLayout& layout) {
     const Theme& th = app_.theme();
     r.FillRect(area, th.tabInactiveBg);
     // Registered first so the individual tabs, added below, win the hit test.
     Add(area, Hit::TabBar, 0, pane);
 
+    const float perTab = layout.perTab;
+    const float rowH = th.tabBarHeight;
     float x = area.l;
-    const float maxTabWidth = 190.0f;
-    const float minTabWidth = 70.0f;
-    const float avail = std::max(0.0f, area.w() - 28.0f);
-    const float perTab = pane->tabs.empty()
-                             ? maxTabWidth
-                             : std::clamp(avail / static_cast<float>(pane->tabs.size()),
-                                          minTabWidth, maxTabWidth);
+    float rowTop = area.t;
 
     for (size_t i = 0; i < pane->tabs.size(); ++i) {
+        const int row = static_cast<int>(i) / layout.perRow;
+        if (row < layout.firstRow) continue;
+        if (row >= layout.firstRow + layout.shownRows) break;
+
+        const int column = static_cast<int>(i) % layout.perRow;
+        rowTop = area.t + static_cast<float>(row - layout.firstRow) * rowH;
+        x = area.l + static_cast<float>(column) * perTab;
+
         const bool active = (static_cast<int>(i) == pane->active);
-        const RectF tabRect = { x, area.t, x + perTab, area.b };
-        if (tabRect.l > area.r - 20.0f) break;
+        const RectF tabRect = { x, rowTop, x + perTab, rowTop + rowH };
 
         r.FillRect(tabRect, active ? th.tabActiveBg : th.tabInactiveBg);
         if (Hovered(tabRect)) r.FillRect(tabRect, th.rowHover);
@@ -507,12 +641,25 @@ void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused
         x = tabRect.r;
     }
 
-    const RectF add = { x + 2.0f, area.t + 4.0f, x + 24.0f, area.b - 4.0f };
-    if (add.r < area.r) {
-        glyph::Plus(r, add, Hovered(add) ? th.text : th.textDim, 1.4f);
-        Add(add, Hit::TabAdd, 0, pane);
+    // The plus follows the last tab, on its row. When the rows are scrolled and
+    // that row is not one of the visible ones it is simply absent - Cmd::NewTab
+    // and the middle click on a folder both still make tabs.
+    const int lastRow = std::max(0, static_cast<int>(pane->tabs.size()) - 1) / layout.perRow;
+    if (lastRow >= layout.firstRow && lastRow < layout.firstRow + layout.shownRows) {
+        const RectF add = { x + 2.0f, rowTop + 4.0f, x + 24.0f, rowTop + rowH - 4.0f };
+        if (add.r < area.r) {
+            glyph::Plus(r, add, Hovered(add) ? th.text : th.textDim, 1.4f);
+            Add(add, Hit::TabAdd, 0, pane);
+        }
     }
-    r.FillRect({ area.l, area.b - 1.0f, area.r, area.b }, th.border);
+
+    // A line under every row, not just the bar: stacked rows of tabs run into
+    // one another otherwise, and the row a tab belongs to is what says which of
+    // its neighbours come before and after it.
+    for (int row = 0; row < layout.shownRows; ++row) {
+        const float bottom = area.t + static_cast<float>(row + 1) * rowH;
+        r.FillRect({ area.l, bottom - 1.0f, area.r, bottom }, th.border);
+    }
 }
 
 // The breadcrumbs, and the address bar they turn into.
@@ -1142,6 +1289,123 @@ void AppUi::PaintKeySettings(Renderer& r, const RectF& area) {
     }
 }
 
+// The settings screen.
+//
+// Same panel, same row rhythm and the same modal manners as the shortcut editor
+// - the two are siblings, and one of them being a different kind of window would
+// only be something else to learn. What differs is what a row holds: a value
+// with an arrow on each side, rather than a key combination to capture.
+void AppUi::PaintSettings(Renderer& r, const RectF& area) {
+    const Theme& th = app_.theme();
+    const Strings& str = app_.strings();
+    SettingsEditor& editor = app_.settingsEditor();
+
+    r.FillRect(area, th.overlayScrim);
+
+    const std::vector<SettingsEditor::Row>& rows = editor.rows();
+    const float rowH = th.rowHeight;
+    const float chrome = 38.0f + 20.0f + 8.0f + 26.0f + 12.0f;  // title, note, rule, footer, pad
+    const float wanted = chrome + rowH * static_cast<float>(rows.size());
+
+    const float width = std::clamp(area.w() - 48.0f, 200.0f, 560.0f);
+    const float height = std::min(wanted, std::max(120.0f, area.h() - 48.0f));
+    const float left = std::round(area.center().x - width * 0.5f);
+    const float top = std::round(area.center().y - height * 0.5f);
+    const RectF panel = { left, top, left + width, top + height };
+
+    r.FillRoundRect(panel, 8.0f, th.overlayBg);
+    r.StrokeRect(panel, th.border, 1.0f);
+    Add(panel, Hit::SettingsPanel);
+
+    const RectF titleBox = { panel.l + 20.0f, panel.t + 8.0f, panel.r - 20.0f, panel.t + 38.0f };
+    r.DrawText(str.Get("ui.settings_title"), titleBox, th.text, FontRole::UiBold, TextAlign::Left);
+
+    // Where the answers end up. A settings screen that writes a file the user
+    // may not have noticed should say which file, once, where it is read.
+    const RectF noteBox = { panel.l + 20.0f, titleBox.b, panel.r - 20.0f, titleBox.b + 20.0f };
+    r.DrawText(str.Get(app_.standalone() ? "ui.settings_no_save" : "ui.settings_file"), noteBox,
+               th.textDim.alpha(0.7f), FontRole::UiSmall, TextAlign::Left);
+
+    const RectF footer = { panel.l + 20.0f, panel.b - 26.0f, panel.r - 20.0f, panel.b - 6.0f };
+    r.DrawText(str.Get("ui.settings_hint"), footer, th.textDim, FontRole::UiSmall, TextAlign::Left);
+
+    const RectF body = { panel.l + 12.0f, noteBox.b + 4.0f, panel.r - 12.0f, footer.t - 4.0f };
+    r.FillRect({ body.l, body.t, body.r, body.t + 1.0f }, th.border);
+
+    r.PushClip(body);
+    for (size_t i = 0; i < rows.size(); ++i) {
+        const SettingsEditor::Row& row = rows[i];
+        const float y = body.t + 3.0f + static_cast<float>(i) * rowH;
+        const RectF box = { body.l + 4.0f, y, body.r - 6.0f, y + rowH };
+        if (box.t >= body.b) break;
+
+        if (row.header) {
+            r.DrawText(row.label, box.inset(6.0f, 0.0f), th.accent, FontRole::UiBold,
+                       TextAlign::Left);
+            continue;
+        }
+
+        const bool selected = (static_cast<int>(i) == editor.cursor());
+        if (selected) r.FillRoundRect(box, 4.0f, th.rowSelected);
+        // PointerOver, not Hovered: this panel is the overlay Hovered() blocks.
+        else if (PointerOver(box)) r.FillRoundRect(box, 4.0f, th.rowHover);
+
+        const float valueW = std::min(230.0f, box.w() * 0.55f);
+        const RectF valueBox = { box.r - valueW, box.t, box.r - 8.0f, box.b };
+        const RectF prev = { valueBox.l, valueBox.t, valueBox.l + 14.0f, valueBox.b };
+        const RectF next = { valueBox.r - 14.0f, valueBox.t, valueBox.r, valueBox.b };
+
+        r.DrawText(row.label, { box.l + 10.0f, box.t, valueBox.l - 8.0f, box.b },
+                   selected ? th.rowSelectedText : th.text, FontRole::Ui, TextAlign::Left);
+
+        // The arrows are the whole affordance: without them a value on the right
+        // reads as a report rather than as something this row can change.
+        const Color edge = th.textDim.alpha(0.35f);
+        glyph::ChevronLeft(r, prev, row.atFirst ? edge : th.textDim);
+        glyph::ChevronRight(r, next, row.atLast ? edge : th.textDim);
+        r.DrawText(row.value, { prev.r, box.t, next.l, box.b },
+                   selected ? th.rowSelectedText : th.text, FontRole::Ui, TextAlign::Center);
+
+        Add(box, Hit::SettingsRow, static_cast<int>(i));
+        Add(prev, Hit::SettingsPrev, static_cast<int>(i));
+        Add(next, Hit::SettingsNext, static_cast<int>(i));
+    }
+    r.PopClip();
+}
+
+// Clicks while the settings screen is up. Nothing behind it is reachable, the
+// same as the shortcut editor.
+bool AppUi::HandleSettingsClick(const MouseEvent& e) {
+    const Region* region = Pick(e.x, e.y);
+    if (region && (region->kind == Hit::SettingsRow || region->kind == Hit::SettingsPrev ||
+                   region->kind == Hit::SettingsNext)) {
+        SettingsEditor& editor = app_.settingsEditor();
+        editor.SelectRow(region->index);
+        if (e.button == 0) {
+            // The arrows step; the rest of the row cycles. Pressing a row over
+            // and over has to keep doing something, so that one wraps - the same
+            // split the keyboard makes between the arrow keys and Enter.
+            if (region->kind == Hit::SettingsPrev) {
+                editor.Adjust(-1, app_.strings());
+            } else if (region->kind == Hit::SettingsNext) {
+                editor.Adjust(1, app_.strings());
+            } else {
+                editor.Adjust(1, app_.strings(), true);
+            }
+            app_.ApplyPendingSetting();
+        }
+        app_.host().Invalidate();
+        return true;
+    }
+    if (region && region->kind == Hit::SettingsPanel) {
+        app_.host().Invalidate();
+        return true;
+    }
+    // Outside the panel: same as pressing Escape.
+    app_.Execute(Cmd::ShowSettings);
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Mouse
 // ---------------------------------------------------------------------------
@@ -1707,6 +1971,9 @@ bool AppUi::OnMouse(const MouseEvent& e) {
     }
 
     if (e.type == MouseEvent::Type::Wheel) {
+        // The settings panel holds every row it has, so there is nothing to
+        // scroll - but the list behind it must not scroll either.
+        if (app_.settingsEditor().visible()) return true;
         if (app_.keyEditor().visible()) {
             app_.keyEditor().Scroll(static_cast<int>(-e.wheel * 3.0f));
             app_.host().Invalidate();
@@ -1727,6 +1994,7 @@ bool AppUi::OnMouse(const MouseEvent& e) {
 
     if (e.type != MouseEvent::Type::Down) return false;
 
+    if (app_.settingsEditor().visible()) return HandleSettingsClick(e);
     if (app_.keyEditor().visible()) return HandleKeySettingsClick(e);
 
     if (app_.keyHelpVisible()) {
@@ -1761,7 +2029,9 @@ bool AppUi::OnMouse(const MouseEvent& e) {
 
     switch (region->kind) {
         case Hit::SessionChip:
-            app_.Execute(static_cast<Cmd>(static_cast<int>(Cmd::Session1) + region->index));
+            // Not Cmd::Session1 + index: there are only eight of those, and now
+            // that the bar wraps, the ninth chip is on screen and clickable.
+            app_.GotoSession(region->index);
             return true;
         case Hit::SessionAdd:
             app_.Execute(Cmd::NewSession);
@@ -1820,7 +2090,10 @@ bool AppUi::OnMouse(const MouseEvent& e) {
                     app_.workspace().closedTabs.push_back(closed);
                 }
             } else {
-                region->pane->Activate(region->index);
+                // Through App rather than Pane::Activate: a tab that dropped its
+                // listing while its session was in the background needs the
+                // re-enumeration that comes with it.
+                app_.GotoTab(region->index);
                 if (e.button == 0) {
                     // Arm a possible reorder; it only becomes a drag once the
                     // pointer actually moves.

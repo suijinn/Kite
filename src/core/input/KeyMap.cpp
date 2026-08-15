@@ -32,6 +32,8 @@ const DefaultBinding kDefaults[] = {
     { Cmd::ToggleTheme,         "Ctrl+Shift+M" },
     { Cmd::ShowKeyHelp,         "F1" },
     { Cmd::ShowKeySettings,     "Ctrl+F1" },
+    // 設定画面と、その中身が書かれるフォルダ。同じキーに Alt を足すと後者になる。
+    { Cmd::ShowSettings,        "Ctrl+Comma" },
     { Cmd::CancelOverlay,       "Escape" },
 
     // Navigation
