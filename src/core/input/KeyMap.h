@@ -15,8 +15,9 @@ namespace kite {
 
 /// @brief キーバインドの保持と解決を行う。
 ///
-/// 既定値は LoadDefaults() が持つ。keys.ini はその上から適用されるので、利用者は
-/// 変更したい行だけ書けばよい。値 "none" はそのコマンドの割り当てをすべて解除する。
+/// 既定値は LoadDefaults() が持つ。keys.ini はその上から適用され、**書かれている
+/// コマンドについてはファイルの内容がそのまま答えになる**（既定は残らない）。
+/// 触れていないコマンドは既定のまま。値 "none" は割り当て無しを意味する。
 /// すでに使われている和音を割り当てると、以前のコマンドから黙って奪う。
 class KeyMap {
 public:
@@ -26,7 +27,11 @@ public:
     /// @brief keys.ini の内容を現在の割り当てに適用する。
     /// @param[in] ini `[keys]` セクションを含む設定
     /// @param[out] warnings 解釈できなかった行の説明の追加先。不要なら nullptr
-    /// @note "none" は行の順序に関係なく、追加より先にまとめて処理される
+    /// @note 名前の挙がったコマンドの割り当ては、まとめて先に解除してから
+    ///       ファイルの順で入れ直す。1 つのコマンドを複数行書けばその全部が付く
+    /// @note 既定を足すのではなく置き換えるのは、生成した keys.ini の行を書き換えた
+    ///       ときに既定が残ると、一覧に出るのが先に割り当てられた既定のほうになり、
+    ///       編集がどこにも反映されないように見えるため
     void ApplyIni(const Ini& ini, std::vector<std::string>* warnings = nullptr);
 
     /// @brief 和音に対応するコマンドを引く。
@@ -39,10 +44,12 @@ public:
     /// @return 割り当て順の和音列。無ければ空
     std::vector<Chord> ChordsFor(Cmd id) const;
 
-    /// @brief コマンドの代表的な和音を表示用文字列で返す。
+    /// @brief コマンドに割り当てられた和音を表示用の 1 行にまとめて返す。
     /// @param[in] id 対象のコマンド
-    /// @return 最初に割り当てられた和音の文字列。無ければ空文字列
-    std::string PrimaryChordText(Cmd id) const;
+    /// @return 割り当て順に ", " で連ねた文字列。無ければ空文字列
+    /// @note 代表の 1 つだけを返していた頃は、2 つ目以降を割り当てても画面に
+    ///       出るのは常に最初の 1 つで、増やしたことが確かめられなかった
+    std::string ChordText(Cmd id) const;
 
     /// @brief 現在の割り当て全体を INI に書き出す。
     /// @return `[keys]` セクションを持つ設定
@@ -58,6 +65,11 @@ public:
     /// @brief コマンドへの割り当てをすべて解除する。
     /// @param[in] id 対象のコマンド
     void UnbindCommand(Cmd id);
+
+    /// @brief 和音 1 つぶんの割り当てを解除する。
+    /// @param[in] c 解除する和音。割り当てが無ければ何もしない
+    /// @note 同じコマンドに複数の和音がある場合に、その 1 つだけを外すために使う
+    void Unbind(const Chord& c);
 
     /// @brief 組み込みの既定割り当てを返す。現在の割り当ては見ない。
     /// @param[in] id 対象のコマンド

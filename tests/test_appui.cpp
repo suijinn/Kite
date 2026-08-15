@@ -161,6 +161,38 @@ struct Fixture {
         return ContentTop(th) + th.tabBarHeight + th.pathBarHeight + th.headerHeight;
     }
 
+    // Row `index` of the shortcut editor. Its panel is a fixed shape centred in
+    // the window, so where a row lands can be worked out from out here rather
+    // than fished back out of the paint.
+    RectF KeyRowRect(int index) const {
+        const float w = std::clamp(renderer.size.w - 48.0f, 160.0f, 640.0f);
+        const float h = std::max(120.0f, renderer.size.h -
+                                             std::max(32.0f, renderer.size.h * 0.08f) * 2.0f);
+        const float left = std::round(renderer.size.w * 0.5f - w * 0.5f);
+        const float top = std::round(renderer.size.h * 0.5f - h * 0.5f);
+        // Title, message line, and the rule under them.
+        const float bodyTop = top + 38.0f + 20.0f + 4.0f;
+        const float rowH = app.theme().rowHeight;
+        const float y = bodyTop + 3.0f +
+                        static_cast<float>(index - app.keyEditor().scroll()) * rowH;
+        return { left + 16.0f, y, left + w - 18.0f, y + rowH };
+    }
+
+    // The row's "add a key" button, at its right end.
+    PointF KeyAddPoint(int index) const {
+        const RectF row = KeyRowRect(index);
+        return { row.r - 18.0f, (row.t + row.b) * 0.5f };
+    }
+
+    // Which row of the shortcut editor holds a given command.
+    int KeyRowOf(Cmd id) const {
+        const std::vector<KeyEditor::Row>& rows = app.keyEditor().rows();
+        for (size_t i = 0; i < rows.size(); ++i) {
+            if (rows[i].cmd == id) return static_cast<int>(i);
+        }
+        return -1;
+    }
+
     // A point in the middle of list row `index`, well clear of the sidebar.
     PointF RowPoint(int index) const {
         const Theme& th = app.theme();
@@ -1136,4 +1168,183 @@ KITE_TEST(appui, nothing_behind_the_settings_screen_is_lit) {
     f.app.Execute(Cmd::ShowSettings);
     f.Paint();
     KITE_EXPECT_EQ(f.renderer.CountFills(f.app.theme().rowHover), 0);
+}
+
+// The shortcut editor's two verbs both need a way in from the mouse. The row
+// itself is "replace" - a second click on it arms the same capture Enter does -
+// so "add" gets a control of its own rather than a modifier nobody would guess.
+KITE_TEST(appui, the_plus_on_a_shortcut_row_adds_a_key_rather_than_replacing_it) {
+    Fixture f;
+    f.app.Execute(Cmd::ShowKeySettings);
+    f.Paint();
+
+    // "New folder" has exactly one chord by default, so two afterwards can only
+    // mean the old one survived.
+    const int index = f.KeyRowOf(Cmd::NewFolder);
+    KITE_EXPECT(index >= 0);
+    f.app.keyEditor().SelectRow(index);
+    f.Paint();
+
+    const PointF plus = f.KeyAddPoint(index);
+    f.Press(plus.x, plus.y);
+    KITE_EXPECT(f.app.keyEditor().capturing());
+
+    f.app.OnKey(ParseChord("Ctrl+Alt+Shift+F9"));
+    KITE_EXPECT_EQ(f.app.keys().ChordsFor(Cmd::NewFolder).size(), size_t{ 2 });
+    KITE_EXPECT_EQ(f.app.keys().Lookup(ParseChord("Ctrl+Shift+N")), Cmd::NewFolder);
+}
+
+// The plus is a target inside the row, so the rest of the row has to go on
+// meaning what it meant: one click selects, and nothing starts capturing.
+KITE_TEST(appui, clicking_a_shortcut_row_beside_the_plus_only_selects_it) {
+    Fixture f;
+    f.app.Execute(Cmd::ShowKeySettings);
+    f.Paint();
+
+    // The list opens at the top, so the row clicked has to be one of the ones
+    // actually on screen.
+    const std::vector<KeyEditor::Row>& rows = f.app.keyEditor().rows();
+    int index = -1;
+    for (size_t i = 0; i < rows.size(); ++i) {
+        if (!rows[i].header && static_cast<int>(i) != f.app.keyEditor().cursor()) {
+            index = static_cast<int>(i);
+            break;
+        }
+    }
+    KITE_EXPECT(index >= 0);
+
+    const RectF row = f.KeyRowRect(index);
+    f.Press(row.l + 20.0f, (row.t + row.b) * 0.5f);
+
+    KITE_EXPECT_EQ(f.app.keyEditor().cursor(), index);
+    KITE_EXPECT_FALSE(f.app.keyEditor().capturing());
+}
+
+// Picking one chord out of a line that holds several. The pieces are placed by
+// measuring, and the fake renderer measures 7 DIP per character, so where each
+// one sits is worked out here the same way the paint does it.
+KITE_TEST(appui, clicking_a_chord_twice_removes_that_one_binding) {
+    Fixture f;
+    f.app.Execute(Cmd::ShowKeySettings);
+    f.Paint();
+
+    // "Refresh" carries F5 and Ctrl+R by default.
+    const int index = f.KeyRowOf(Cmd::Refresh);
+    KITE_EXPECT(index >= 0);
+    f.app.keyEditor().SelectRow(index);
+    f.Paint();
+
+    const RectF row = f.KeyRowRect(index);
+    const float chordRight = row.r - 32.0f;  // the plus, and the gap before it
+    const float left = chordRight - 7.0f * static_cast<float>(std::string("F5, Ctrl+R").size());
+    const PointF f5 = { left + 7.0f, (row.t + row.b) * 0.5f };
+
+    f.Press(f5.x, f5.y);
+    KITE_EXPECT_EQ(f.app.keyEditor().chordCursor(), 0);
+    // Pointing at it is not removing it: one stray click must not cost a key.
+    KITE_EXPECT_EQ(f.app.keys().Lookup(ParseChord("F5")), Cmd::Refresh);
+
+    f.Paint();
+    f.Press(f5.x, f5.y);
+    KITE_EXPECT_EQ(f.app.keys().Lookup(ParseChord("F5")), Cmd::None);
+    KITE_EXPECT_EQ(f.app.keys().Lookup(ParseChord("Ctrl+R")), Cmd::Refresh);
+}
+
+// The shortcut sheet in a window too small for it. Three things share its title
+// line and every row holds two more, and each of them used to be handed a rect
+// running to the far edge - which reads as columns only while there is room for
+// columns.
+KITE_TEST(appui, nothing_on_the_shortcut_sheet_is_drawn_on_top_of_anything_else) {
+    Fixture f;
+    f.renderer.size = { 560.0f, 420.0f };
+    f.app.Execute(Cmd::ShowKeyHelp);
+    f.Paint();
+
+    const std::vector<test::FakeRenderer::Text> sheet =
+        f.renderer.TextsAfterFill(f.app.theme().overlayScrim);
+    KITE_EXPECT(sheet.size() > 10);
+
+    for (size_t i = 0; i < sheet.size(); ++i) {
+        for (size_t j = i + 1; j < sheet.size(); ++j) {
+            if (test::FakeRenderer::Overlaps(sheet[i].ink, sheet[j].ink)) {
+                KITE_FAIL("\"" + sheet[i].text + "\" and \"" + sheet[j].text + "\" overlap");
+            }
+        }
+    }
+}
+
+// Squeezing the leading is how the sheet fits; squeezing it past the height of
+// the letters is how it stopped being readable at all.
+KITE_TEST(appui, the_shortcut_sheet_keeps_its_rows_a_line_apart) {
+    Fixture f;
+    f.renderer.size = { 560.0f, 420.0f };
+    f.app.Execute(Cmd::ShowKeyHelp);
+    f.Paint();
+
+    std::vector<float> tops;
+    for (const test::FakeRenderer::Text& t : f.renderer.TextsAfterFill(f.app.theme().overlayScrim)) {
+        tops.push_back(t.ink.t);
+    }
+    std::sort(tops.begin(), tops.end());
+
+    const float least = f.renderer.LineHeight(ui::FontRole::UiSmall) * 0.85f;
+    for (size_t i = 1; i < tops.size(); ++i) {
+        const float gap = tops[i] - tops[i - 1];
+        if (gap > 0.01f) KITE_EXPECT(gap >= least - 0.01f);
+    }
+}
+
+// What a small window pushes off the bottom is still reachable, and the sheet
+// says so rather than simply ending.
+KITE_TEST(appui, the_wheel_moves_the_shortcut_sheet_and_not_the_list_behind_it) {
+    Fixture f;
+    f.renderer.size = { 560.0f, 420.0f };
+    f.app.Execute(Cmd::ShowKeyHelp);
+    f.Paint();
+
+    KITE_EXPECT(f.renderer.CountFills(f.app.theme().scrollThumb) > 0);
+    const size_t before = f.renderer.TextsAfterFill(f.app.theme().overlayScrim).size();
+    const float listScroll = f.tab()->scroll;
+
+    f.Wheel(280.0f, 210.0f, -3.0f);
+    f.Paint();
+
+    KITE_EXPECT_NEAR(f.tab()->scroll, listScroll, 0.01f);
+    // Different rows are on screen now, so the sheet did move.
+    const std::vector<test::FakeRenderer::Text> after =
+        f.renderer.TextsAfterFill(f.app.theme().overlayScrim);
+    KITE_EXPECT(after.size() > 10);
+    bool moved = false;
+    for (const test::FakeRenderer::Text& t : after) {
+        if (t.text == f.app.strings().Get("ui.key_help_title")) continue;
+        moved = true;
+        break;
+    }
+    KITE_EXPECT(moved);
+    KITE_EXPECT(before > 10);
+}
+
+// A full-size window still shows the whole sheet in one go: the scroll is the
+// answer to a small window, not a new way of reading it.
+KITE_TEST(appui, a_big_window_shows_the_whole_shortcut_sheet_at_once) {
+    Fixture f;
+    f.renderer.size = { 1600.0f, 1000.0f };
+    f.app.Execute(Cmd::ShowKeyHelp);
+    f.Paint();
+
+    KITE_EXPECT_EQ(f.renderer.CountFills(f.app.theme().scrollThumb), 0);
+}
+
+// The panel is a fraction of the window and the window has no floor, so the
+// sheet has to survive being asked for in a space it cannot have.
+KITE_TEST(appui, the_shortcut_sheet_survives_a_window_with_no_room_in_it) {
+    Fixture f;
+    f.renderer.size = { 220.0f, 120.0f };
+    f.app.Execute(Cmd::ShowKeyHelp);
+    f.Paint();
+
+    for (const test::FakeRenderer::Text& t : f.renderer.TextsAfterFill(f.app.theme().overlayScrim)) {
+        KITE_EXPECT(t.ink.r >= t.ink.l);
+        KITE_EXPECT(t.ink.b >= t.ink.t);
+    }
 }

@@ -409,6 +409,22 @@ void App::ToggleSidebarSection(SidebarSection section) {
     host_.Invalidate();
 }
 
+// Written out the moment anything changes rather than when the screen closes: a
+// binding the user just watched take effect must survive the app being killed.
+// Only a write that landed earns the confirmation on the way out; otherwise the
+// failure message stands.
+void App::SaveKeysIfChanged() {
+    if (!keyEditor_.dirty()) return;
+    keysChanged_ = WriteKeysFile();
+    keyEditor_.ClearDirty();
+}
+
+void App::RemoveKeyBinding(int index) {
+    keyEditor_.RemoveChord(index, keymap_, strings_);
+    SaveKeysIfChanged();
+    host_.Invalidate();
+}
+
 bool App::WriteKeysFile() {
     std::string out =
         "# Kite key bindings.\n"
@@ -416,7 +432,10 @@ bool App::WriteKeysFile() {
         "# Syntax:  <command> = <chord>\n"
         "#   Chords combine Ctrl / Shift / Alt with a key name, e.g. Ctrl+Shift+T.\n"
         "#   Repeat a command on several lines to give it several chords.\n"
-        "#   Use \"<command> = none\" to remove every binding for that command.\n"
+        "#   Use \"<command> = none\" to leave a command with no key at all.\n"
+        "#   The lines here are the whole answer for the commands they name: a\n"
+        "#   command listed once has exactly that one chord, built-in default or\n"
+        "#   not. Delete a command's lines entirely to get its default back.\n"
         "#\n"
         "# Written from the bindings that were active at the time. Edit it here and\n"
         "# reload with Ctrl+Alt+C, or edit it on screen with Ctrl+F1 - which rewrites\n"
@@ -1458,14 +1477,7 @@ bool App::OnKey(const Chord& chord) {
             return true;
         }
         const bool consumed = keyEditor_.HandleKey(chord, keymap_, strings_);
-        if (keyEditor_.dirty()) {
-            // Written out immediately rather than on close: a binding the user
-            // just watched take effect must survive the app being killed.
-            // Only a write that landed earns the confirmation on the way out;
-            // otherwise the failure message stands.
-            keysChanged_ = WriteKeysFile();
-            keyEditor_.ClearDirty();
-        }
+        SaveKeysIfChanged();
         // Escape closes the screen from the inside; take the same exit as the
         // command would have, so the confirmation is not lost.
         if (!keyEditor_.visible()) CloseKeyEditor();

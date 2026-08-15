@@ -288,9 +288,10 @@ public:
 // ---------------------------------------------------------------------------
 // Renderer
 //
-// Keeps the filled rectangles and throws the rest away. What a UI test can ask
-// about a frame is "was this painted, where, in what colour" - text and glyph
-// shapes are the renderer's business, not the layout's.
+// Keeps the filled rectangles and where each run of text ended up, and throws
+// the rest away. Glyph shapes are the renderer's business - but the box the ink
+// lands in is the layout's, and two of them on the same spot is a bug no colour
+// check can see.
 // ---------------------------------------------------------------------------
 
 class FakeRenderer final : public ui::Renderer {
@@ -298,21 +299,49 @@ public:
     struct Fill {
         RectF rect;
         Color color;
+        size_t seq = 0;  ///< 何番目の描画か。重なりは前後関係でしか判定できない
+    };
+
+    /// One run of text, with the box its glyphs actually cover - the layout rect
+    /// trimmed to the width of the string and pushed to whichever end the
+    /// alignment asked for. A right-aligned line in a wide rect leaves most of
+    /// that rect empty, and nothing is overlapping when something else is drawn
+    /// there.
+    struct Text {
+        RectF ink;
+        RectF rect;
+        std::string text;
+        ui::FontRole role = ui::FontRole::Ui;
+        size_t seq = 0;
     };
 
     std::vector<Fill> fills;
+    std::vector<Text> texts;
     SizeF size{ 1200.0f, 800.0f };
 
     void PushClip(const RectF&) override {}
     void PopClip() override {}
-    void FillRect(const RectF& r, const Color& c) override { fills.push_back({ r, c }); }
-    void FillRoundRect(const RectF& r, float, const Color& c) override { fills.push_back({ r, c }); }
+    void FillRect(const RectF& r, const Color& c) override { fills.push_back({ r, c, seq_++ }); }
+    void FillRoundRect(const RectF& r, float, const Color& c) override {
+        fills.push_back({ r, c, seq_++ });
+    }
     void StrokeRect(const RectF&, const Color&, float) override {}
     void DrawLine(float, float, float, float, const Color&, float) override {}
     void FillTriangle(PointF, PointF, PointF, const Color&) override {}
     void DrawIcon(uint32_t, const RectF&) override {}
-    void DrawText(std::string_view, const RectF&, const Color&, ui::FontRole,
-                  ui::TextAlign) override {}
+    void DrawText(std::string_view utf8, const RectF& r, const Color& c, ui::FontRole role,
+                  ui::TextAlign align) override {
+        // The same conditions the real renderer draws nothing under.
+        if (utf8.empty() || c.a <= 0.0f || r.w() <= 1.0f) return;
+        const float w = std::min(MeasureText(utf8, role), r.w());
+        RectF ink = { r.l, r.t, r.l + w, r.b };
+        if (align == ui::TextAlign::Right) ink = { r.r - w, r.t, r.r, r.b };
+        if (align == ui::TextAlign::Center) {
+            const float mid = (r.l + r.r) * 0.5f;
+            ink = { mid - w * 0.5f, r.t, mid + w * 0.5f, r.b };
+        }
+        texts.push_back({ ink, r, std::string(utf8), role, seq_++ });
+    }
     // Proportional enough for layout code to behave as it would on screen; the
     // exact number only has to be stable.
     float MeasureText(std::string_view utf8, ui::FontRole) override {
@@ -321,7 +350,26 @@ public:
     float LineHeight(ui::FontRole) override { return 16.0f; }
     SizeF surfaceSize() const override { return size; }
 
-    void Clear() { fills.clear(); }
+    void Clear() {
+        fills.clear();
+        texts.clear();
+        seq_ = 0;
+    }
+
+    /// Everything drawn after the last fill of this colour - the way to ask about
+    /// one overlay on its own, since the frame behind it was painted first and is
+    /// still sitting under the same coordinates.
+    std::vector<Text> TextsAfterFill(const Color& c) const {
+        size_t after = 0;
+        for (const Fill& f : fills) {
+            if (SameColor(f.color, c)) after = f.seq;
+        }
+        std::vector<Text> out;
+        for (const Text& t : texts) {
+            if (t.seq > after) out.push_back(t);
+        }
+        return out;
+    }
 
     // Every fill of this colour that covers the given point.
     std::vector<Fill> FillsAt(const Color& c, float x, float y) const {
@@ -343,6 +391,18 @@ public:
     static bool SameColor(const Color& a, const Color& b) {
         return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
     }
+
+    /// Half-open on both axes: two boxes that share an edge are next to each
+    /// other, not on top of each other. The tolerance is there because a stack of
+    /// rows is built by repeated addition, so the bottom of one and the top of
+    /// the next differ in the last bit rather than being equal.
+    static bool Overlaps(const RectF& a, const RectF& b) {
+        const float slack = 0.01f;
+        return a.l + slack < b.r && b.l + slack < a.r && a.t + slack < b.b && b.t + slack < a.b;
+    }
+
+private:
+    size_t seq_ = 0;
 };
 
 // ---------------------------------------------------------------------------

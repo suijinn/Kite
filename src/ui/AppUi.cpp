@@ -142,7 +142,13 @@ void AppUi::Paint(Renderer& r) {
     PaintCompletion(r);
     PaintDragOverlay(r);
 
-    if (app_.keyHelpVisible()) PaintKeyHelp(r, full);
+    if (app_.keyHelpVisible()) {
+        PaintKeyHelp(r, full);
+    } else {
+        // Every opening starts at the top. The sheet is read from the beginning,
+        // and where it was left last time is not something anyone remembers.
+        keyHelpScroll_ = 0;
+    }
     if (app_.keyEditor().visible()) PaintKeySettings(r, full);
     if (app_.settingsEditor().visible()) PaintSettings(r, full);
 }
@@ -1211,19 +1217,41 @@ void AppUi::PaintKeyHelp(Renderer& r, const RectF& area) {
     r.FillRoundRect(panel, 8.0f, th.overlayBg);
     r.StrokeRect(panel, th.border, 1.0f);
 
+    // Three pieces share this line, and each of them used to be handed a rect
+    // reaching the far side of it. Wide enough, that reads as three columns;
+    // narrow enough, they are drawn on top of each other and none of the three
+    // can be read. Each gets only the room left over by the one before it, and
+    // what does not fit is left out rather than piled on.
     const RectF titleBox = { panel.l + 20.0f, panel.t + 8.0f, panel.r - 20.0f, panel.t + 40.0f };
     const std::string title = str.Get("ui.key_help_title");
-    r.DrawText(title, titleBox, th.text, FontRole::UiBold, TextAlign::Left);
-    // This panel covers the session bar, and with it the build stamp. It comes
-    // along here because the overlay is the closest thing Kite has to an about box.
     const float titleW = r.MeasureText(title, FontRole::UiBold) + kPad * 2.0f;
-    r.DrawText(std::string("Kite ") + version::kDisplay,
-               { titleBox.l + titleW, titleBox.t, titleBox.r, titleBox.b },
-               th.textDim.alpha(0.7f), FontRole::UiSmall, TextAlign::Left);
-    r.DrawText(str.Get("ui.key_help_hint"), titleBox, th.textDim, FontRole::UiSmall,
-               TextAlign::Right);
 
-    const RectF content = { panel.l + 20.0f, titleBox.b + 4.0f, panel.r - 20.0f, panel.b - 12.0f };
+    const std::string hint = str.Get("ui.key_help_hint");
+    const float hintW = r.MeasureText(hint, FontRole::UiSmall);
+    float rest = titleBox.r;
+    if (titleW + hintW <= titleBox.w()) {
+        r.DrawText(hint, { titleBox.l + titleW, titleBox.t, titleBox.r, titleBox.b }, th.textDim,
+                   FontRole::UiSmall, TextAlign::Right);
+        rest = titleBox.r - hintW - kPad;
+    }
+
+    // This panel covers the session bar, and with it the build stamp. It comes
+    // along here because the overlay is the closest thing Kite has to an about
+    // box - and it is the first thing dropped, being the one nobody came for.
+    const std::string stamp = std::string("Kite ") + version::kDisplay;
+    if (titleBox.l + titleW + r.MeasureText(stamp, FontRole::UiSmall) <= rest) {
+        r.DrawText(stamp, { titleBox.l + titleW, titleBox.t, rest, titleBox.b },
+                   th.textDim.alpha(0.7f), FontRole::UiSmall, TextAlign::Left);
+    }
+    r.DrawText(title, { titleBox.l, titleBox.t, titleBox.l + titleW, titleBox.b }, th.text,
+               FontRole::UiBold, TextAlign::Left);
+
+    // Never inverted, however little room the window leaves: the panel is a
+    // fraction of a window that has no minimum size, and a clip whose bottom is
+    // above its top is not a small clip.
+    const RectF content = { panel.l + 20.0f, titleBox.b + 4.0f,
+                            std::max(panel.l + 21.0f, panel.r - 20.0f),
+                            std::max(titleBox.b + 5.0f, panel.b - 12.0f) };
     r.PushClip(content);
 
     // Flatten the command table into printable lines first, so column breaking
@@ -1244,43 +1272,94 @@ void AppUi::PaintKeyHelp(Renderer& r, const RectF& area) {
             if (!lines.empty()) lines.push_back({ false, true, {}, {} });
             lines.push_back({ true, false, str.Get(GroupLabelKey(info.group)), {} });
         }
-        lines.push_back({ false, false, str.Label(info.labelKey), km.PrimaryChordText(info.id) });
+        // Every chord, not the first one: a command with two keys on it that
+        // only ever printed one made the second impossible to check from here.
+        lines.push_back({ false, false, str.Label(info.labelKey), km.ChordText(info.id) });
     }
 
-    const int columns = std::clamp(static_cast<int>(content.w() / 290.0f), 1, 4);
+    // The chord column is as wide as the widest line of chords actually needs,
+    // and the number of columns follows from that. A fixed width was fine while
+    // every cell held one chord; "Ctrl+Shift+Tab, Ctrl+PageUp" does not fit in
+    // it, and a cheat sheet that cuts the answer in half is worse than no sheet.
+    float widest = 0.0f;
+    for (const Line& line : lines) {
+        if (!line.chord.empty()) widest = std::max(widest, r.MeasureText(line.chord, FontRole::Mono));
+    }
+    // Past this, one long line would push the whole sheet down to two columns.
+    widest = std::min(widest, 210.0f);
+
+    const int columns = std::clamp(static_cast<int>(content.w() / (widest + 160.0f)), 1, 4);
     const float colW = content.w() / static_cast<float>(columns);
 
-    int perColumn = (static_cast<int>(lines.size()) + columns - 1) / columns;
+    // How tall the sheet has to be for a given set of lines, with the group
+    // headings kept off the bottom of a column.
+    const auto reflow = [&columns](std::vector<Line>& all) {
+        int rows = (static_cast<int>(all.size()) + columns - 1) / columns;
+        for (int i = rows - 1; i < static_cast<int>(all.size()); i += rows) {
+            if (all[i].header) all.insert(all.begin() + i, { false, true, {}, {} });
+        }
+        return (static_cast<int>(all.size()) + columns - 1) / columns;
+    };
 
-    // Never leave a group heading stranded as the last line of a column.
-    for (int i = perColumn - 1; i < static_cast<int>(lines.size()); i += perColumn) {
-        if (lines[i].header) lines.insert(lines.begin() + i, { false, true, {}, {} });
+    // Shrink the leading rather than scroll - but only down to where the glyphs
+    // still clear each other. A small window used to drive this to a couple of
+    // pixels, and the sheet became one solid block of overlapping text.
+    const float minLine = r.LineHeight(FontRole::UiSmall) * 0.85f;
+    int perColumn = reflow(lines);
+    float lineH = std::clamp(content.h() / static_cast<float>(std::max(1, perColumn)), minLine,
+                             18.0f);
+
+    if (static_cast<float>(perColumn) * lineH > content.h()) {
+        // Still over. The blank line between groups is the cheapest thing on the
+        // sheet, so it goes before anything anybody came here to read does.
+        lines.erase(std::remove_if(lines.begin(), lines.end(),
+                                   [](const Line& l) { return l.spacer; }),
+                    lines.end());
+        perColumn = reflow(lines);
+        lineH = std::clamp(content.h() / static_cast<float>(std::max(1, perColumn)), minLine,
+                           18.0f);
     }
-    perColumn = (static_cast<int>(lines.size()) + columns - 1) / columns;
 
-    // Shrink the leading rather than overflow or scroll: the whole point of
-    // this sheet is seeing every binding at once.
-    const float lineH = std::min(18.0f, content.h() / static_cast<float>(std::max(1, perColumn)));
+    // Whatever is left over is reachable with the wheel. Cutting it off silently
+    // would be the sheet answering half the question and saying so nowhere.
+    const int shownRows = std::max(1, static_cast<int>(content.h() / lineH));
+    keyHelpScroll_ = std::clamp(keyHelpScroll_, 0, std::max(0, perColumn - shownRows));
 
     for (size_t i = 0; i < lines.size(); ++i) {
         const Line& line = lines[i];
         if (line.spacer) continue;
 
         const int column = std::min(columns - 1, static_cast<int>(i) / perColumn);
+        const int rowInColumn = static_cast<int>(i) % perColumn - keyHelpScroll_;
+        if (rowInColumn < 0 || rowInColumn >= shownRows) continue;
+
         const float x = content.l + static_cast<float>(column) * colW;
-        const float y = content.t + static_cast<float>(static_cast<int>(i) % perColumn) * lineH;
+        const float y = content.t + static_cast<float>(rowInColumn) * lineH;
         const RectF row = { x, y, x + colW - 14.0f, y + lineH };
 
         if (line.header) {
             r.DrawText(line.label, row, th.accent, FontRole::UiBold, TextAlign::Left);
             continue;
         }
-        const float chordW = std::min(112.0f, row.w() * 0.45f);
+        const float chordW = std::min(widest + 2.0f, row.w() * 0.6f);
         r.DrawText(line.label, { row.l, row.t, row.r - chordW - 6.0f, row.b }, th.text,
                    FontRole::UiSmall, TextAlign::Left);
         r.DrawText(line.chord.empty() ? "-" : line.chord, { row.r - chordW, row.t, row.r, row.b },
                    line.chord.empty() ? th.textDim.alpha(0.4f) : th.textDim, FontRole::Mono,
                    TextAlign::Right);
+    }
+
+    // The same thin mark the vertical tab bar uses, in the gutter every column
+    // already leaves at its right. Without it a sheet with rows below the fold
+    // looks exactly like one showing everything.
+    if (perColumn > shownRows) {
+        const RectF track = { content.r - 3.0f, content.t, content.r, content.b };
+        const float ratio = static_cast<float>(shownRows) / static_cast<float>(perColumn);
+        const float thumbH = std::max(24.0f, track.h() * ratio);
+        const float t = static_cast<float>(keyHelpScroll_) /
+                        static_cast<float>(std::max(1, perColumn - shownRows));
+        const float top = track.t + (track.h() - thumbH) * t;
+        r.FillRoundRect({ track.l, top, track.r, top + thumbH }, 1.5f, th.scrollThumb);
     }
     r.PopClip();
 }
@@ -1304,13 +1383,24 @@ void AppUi::PaintKeySettings(Renderer& r, const RectF& area) {
     r.StrokeRect(panel, th.border, 1.0f);
     Add(panel, Hit::KeyPanel);
 
+    // Title on the left, what is being searched for on the right. Both used to
+    // own the whole line, which is fine until the window is narrow enough for
+    // them to meet in the middle - so the second one only gets what the first
+    // leaves, and drops out entirely rather than landing on top of it.
     const RectF titleBox = { panel.l + 20.0f, panel.t + 8.0f, panel.r - 20.0f, panel.t + 38.0f };
-    r.DrawText(str.Get("ui.key_settings_title"), titleBox, th.text, FontRole::UiBold,
-               TextAlign::Left);
-    r.DrawText(editor.filter().empty() ? str.Get("ui.key_settings_search_hint")
-                                       : str.Format("ui.key_settings_filter", { editor.filter() }),
-               titleBox, editor.filter().empty() ? th.textDim.alpha(0.6f) : th.text,
-               FontRole::UiSmall, TextAlign::Right);
+    const std::string title = str.Get("ui.key_settings_title");
+    const float titleW = r.MeasureText(title, FontRole::UiBold) + kPad * 2.0f;
+    r.DrawText(title, { titleBox.l, titleBox.t, titleBox.l + titleW, titleBox.b }, th.text,
+               FontRole::UiBold, TextAlign::Left);
+
+    const std::string search =
+        editor.filter().empty() ? str.Get("ui.key_settings_search_hint")
+                                : str.Format("ui.key_settings_filter", { editor.filter() });
+    if (titleW + r.MeasureText(search, FontRole::UiSmall) <= titleBox.w()) {
+        r.DrawText(search, { titleBox.l + titleW, titleBox.t, titleBox.r, titleBox.b },
+                   editor.filter().empty() ? th.textDim.alpha(0.6f) : th.text, FontRole::UiSmall,
+                   TextAlign::Right);
+    }
 
     // The line under the title carries whatever the last action did - which
     // command lost a chord, above all. Silence there means nothing happened.
@@ -1360,8 +1450,17 @@ void AppUi::PaintKeySettings(Renderer& r, const RectF& area) {
         // PointerOver, not Hovered: this panel is the overlay Hovered() blocks.
         else if (PointerOver(box)) r.FillRoundRect(box, 4.0f, th.rowHover);
 
-        const float chordW = std::min(190.0f, box.w() * 0.5f);
-        r.DrawText(row.label, { box.l + 10.0f, box.t, box.r - chordW - 8.0f, box.b },
+        // The mouse way to add a chord instead of replacing one. The row itself
+        // and the double click are both "replace", so adding needs a target of
+        // its own - and its space is held on every row rather than made when the
+        // pointer arrives, or the chord beside it would shift as you cross it.
+        const RectF add = { box.r - 26.0f, box.t + 5.0f, box.r - 10.0f, box.b - 5.0f };
+
+        // Wide enough for two or three chords side by side. The labels are short
+        // and the panel is not: what gets cut off here cannot be read, and a
+        // shortcut nobody can read is one nobody can pick out and remove.
+        const float chordW = std::min(240.0f, box.w() * 0.5f);
+        r.DrawText(row.label, { box.l + 10.0f, box.t, add.l - chordW - 14.0f, box.b },
                    selected ? th.rowSelectedText : th.text, FontRole::Ui, TextAlign::Left);
 
         const bool capturingHere = selected && editor.capturing();
@@ -1372,10 +1471,52 @@ void AppUi::PaintKeySettings(Renderer& r, const RectF& area) {
                                  : row.chords.empty()     ? th.textDim.alpha(0.45f)
                                  : selected               ? th.rowSelectedText
                                                           : th.textDim;
-        r.DrawText(chordText, { box.r - chordW, box.t, box.r - 8.0f, box.b }, chordColor,
+        const float chordRight = add.l - 6.0f;
+
+        // One chord of several, marked out inside the line rather than drawn as
+        // its own control: the mark goes under the text, the way the selection in
+        // an input field does, so the row still reads as one answer. The pieces
+        // are measured separately only to place it - the font is monospaced here,
+        // so the parts do add up to the whole.
+        std::vector<RectF> chips;
+        if (!capturingHere && selected && row.chordTexts.size() > 1) {
+            const float sep = r.MeasureText(", ", FontRole::Mono);
+            float x = chordRight - r.MeasureText(row.chords, FontRole::Mono);
+            for (size_t c = 0; c < row.chordTexts.size(); ++c) {
+                const float w = r.MeasureText(row.chordTexts[c], FontRole::Mono);
+                const RectF chip = { x - 3.0f, box.t + 4.0f, x + w + 3.0f, box.b - 4.0f };
+                if (static_cast<int>(c) == editor.chordCursor()) {
+                    r.FillRoundRect(chip, 3.0f, th.accent.alpha(0.28f));
+                } else if (PointerOver(chip)) {
+                    r.FillRoundRect(chip, 3.0f, th.rowHover);
+                }
+                chips.push_back(chip);
+                x += w + sep;
+            }
+        }
+
+        r.DrawText(chordText, { chordRight - chordW, box.t, chordRight, box.b }, chordColor,
                    FontRole::Mono, TextAlign::Right);
 
         Add(box, Hit::KeyRow, i);
+        // After the row, so the pointer finds the chord rather than the line it
+        // sits on: Pick answers with the last thing registered.
+        for (size_t c = 0; c < chips.size(); ++c) Add(chips[c], Hit::KeyChord, static_cast<int>(c));
+
+        // Drawn faint on the row being pointed at or selected, the way the tab
+        // cross is: a plus on all forty rows at once reads as a column of
+        // buttons rather than a list of shortcuts. While the row is waiting for
+        // a key it is gone - there is nothing to add to a capture in progress.
+        if (!capturingHere && (selected || PointerOver(box))) {
+            const bool overAdd = PointerOver(add);
+            if (overAdd) r.FillRoundRect(add.inset(-2.0f), 3.0f, th.rowHover);
+            glyph::Plus(r, add,
+                        overAdd    ? th.text
+                        : selected ? th.rowSelectedText.alpha(0.7f)
+                                   : th.textDim.alpha(0.55f),
+                        1.2f);
+            Add(add, Hit::KeyAdd, i);
+        }
     }
     r.PopClip();
 
@@ -1650,6 +1791,30 @@ void AppUi::UpdateMarquee(float x, float y) {
 // panel is modal in the same sense the shell's own menu is.
 bool AppUi::HandleKeySettingsClick(const MouseEvent& e) {
     const Region* region = Pick(e.x, e.y);
+    if (region && region->kind == Hit::KeyAdd) {
+        // One click, unlike the row: this control means one thing, so there is
+        // nothing for a first click to disambiguate.
+        if (e.button == 0) {
+            app_.keyEditor().SelectRow(region->index);
+            app_.keyEditor().BeginCapture(true);
+        }
+        app_.host().Invalidate();
+        return true;
+    }
+    if (region && region->kind == Hit::KeyChord) {
+        // First click points at one of the chords on the line, second one takes
+        // it away - the row's own "select, then act" rhythm, and the reason a
+        // stray click on a shortcut cannot delete it.
+        if (e.button == 0) {
+            if (region->index == app_.keyEditor().chordCursor()) {
+                app_.RemoveKeyBinding(region->index);
+            } else {
+                app_.keyEditor().SelectChord(region->index, app_.strings());
+            }
+        }
+        app_.host().Invalidate();
+        return true;
+    }
     if (region && region->kind == Hit::KeyRow) {
         app_.keyEditor().SelectRow(region->index);
         // The second click is the one that arms capture, so a single click can
@@ -2085,6 +2250,14 @@ bool AppUi::OnMouse(const MouseEvent& e) {
         if (app_.settingsEditor().visible()) return true;
         if (app_.keyEditor().visible()) {
             app_.keyEditor().Scroll(static_cast<int>(-e.wheel * 3.0f));
+            app_.host().Invalidate();
+            return true;
+        }
+        if (app_.keyHelpVisible()) {
+            // The way to the rows a small window pushed off the bottom. The upper
+            // bound belongs to the paint, which is the only place that knows how
+            // many rows a column ended up with.
+            keyHelpScroll_ = std::max(0, keyHelpScroll_ - static_cast<int>(e.wheel * 3.0f));
             app_.host().Invalidate();
             return true;
         }
