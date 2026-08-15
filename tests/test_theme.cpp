@@ -178,6 +178,8 @@ KITE_TEST(theme, scaling_takes_the_row_up_with_the_text) {
     KITE_EXPECT_NEAR(t.rowHeight, std::round(row * 1.5f), 0.001);
     KITE_EXPECT(t.tabBarHeight > Theme::Dark().tabBarHeight);
     KITE_EXPECT(t.sidebarWidth > Theme::Dark().sidebarWidth);
+    // Same for the vertical tab bar: it holds tab names, so it is a container too.
+    KITE_EXPECT(t.tabBarWidth > Theme::Dark().tabBarWidth);
     // Nothing sits on the splitter, so it stays the width it was drawn at.
     KITE_EXPECT_NEAR(t.splitterWidth, splitter, 0.001);
 }

@@ -279,6 +279,11 @@ public:
     /// @return 設定されている位置
     NewTabPosition newTabPosition() const { return newTabPosition_; }
 
+    /// @brief タブバーを置く場所を返す。
+    /// @return 設定されている場所
+    /// @note UI 層はこれ 1 つでタブバーの向きを決める。Left なら縦置き
+    TabBarPosition tabBarPosition() const { return tabBarPosition_; }
+
     /// @brief サイドバーが表示中かを返す。
     /// @return 表示中なら true
     bool sidebarVisible() const { return sidebarVisible_; }
@@ -559,6 +564,7 @@ private:
     bool shellIcons_ = true;
     bool standalone_ = false;
     NewTabPosition newTabPosition_ = NewTabPosition::End;
+    TabBarPosition tabBarPosition_ = TabBarPosition::Top;
     std::string language_ = "auto";
     ViewState defaultView_;
 

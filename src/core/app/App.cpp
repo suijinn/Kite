@@ -50,6 +50,14 @@ NewTabPosition NewTabPositionFromName(const std::string& s) {
     return s == "after_current" ? NewTabPosition::AfterCurrent : NewTabPosition::End;
 }
 
+const char* TabBarPositionName(TabBarPosition p) {
+    return p == TabBarPosition::Left ? "left" : "top";
+}
+
+TabBarPosition TabBarPositionFromName(const std::string& s) {
+    return s == "left" ? TabBarPosition::Left : TabBarPosition::Top;
+}
+
 // Move one element, taking `to` as the index it should end up at once the
 // element has been lifted out - the same convention Pane::ReorderTab uses.
 template <typename T>
@@ -288,6 +296,7 @@ void App::LoadConfig() {
     // 既定は現行動作の「末尾」。ブラウザに合わせて隣に挿す人と、開いた順に並べて
     // おきたい人で分かれるので、どちらかを正解にせず設定にしてある。
     newTabPosition_ = NewTabPositionFromName(settings_.GetStr("ui", "new_tab_position", "end"));
+    tabBarPosition_ = TabBarPositionFromName(settings_.GetStr("ui", "tab_bar_position", "top"));
     ReadOrder(settings_, SidebarOrderSection(SidebarSection::QuickAccess), quickAccessOrder_);
     ReadOrder(settings_, SidebarOrderSection(SidebarSection::Drives), driveOrder_);
     for (size_t i = 0; i < static_cast<size_t>(SidebarSection::Count); ++i) {
@@ -425,6 +434,7 @@ SettingsValues App::CollectSettings() const {
     v.Set(SettingId::FontScale, FontScaleIndex(fontScale_));
     v.Set(SettingId::Sidebar, sidebarVisible_ ? 1 : 0);
     v.Set(SettingId::ShellIcons, shellIcons_ ? 1 : 0);
+    v.Set(SettingId::TabBarPos, tabBarPosition_ == TabBarPosition::Left ? 1 : 0);
     v.Set(SettingId::NewTabPos, newTabPosition_ == NewTabPosition::AfterCurrent ? 1 : 0);
     v.Set(SettingId::NewTabHidden, defaultView_.showHidden ? 1 : 0);
     v.Set(SettingId::NewTabDirsFirst, defaultView_.dirsFirst ? 1 : 0);
@@ -455,6 +465,9 @@ void App::ApplySetting(SettingId id, const SettingsValues& values) {
             break;
         case SettingId::ShellIcons:
             shellIcons_ = (index != 0);
+            break;
+        case SettingId::TabBarPos:
+            tabBarPosition_ = (index != 0) ? TabBarPosition::Left : TabBarPosition::Top;
             break;
         case SettingId::NewTabPos:
             newTabPosition_ = (index != 0) ? NewTabPosition::AfterCurrent : NewTabPosition::End;
@@ -515,6 +528,7 @@ bool App::SaveSettings() {
     settings_.SetFloat("ui", "font_scale", fontScale_);
     settings_.SetBool("ui", "shell_icons", shellIcons_);
     settings_.Set("ui", "new_tab_position", NewTabPositionName(newTabPosition_));
+    settings_.Set("ui", "tab_bar_position", TabBarPositionName(tabBarPosition_));
 
     // Rewritten whole rather than merged: a folder that has since disappeared
     // would otherwise sit in the file forever, holding a slot nothing fills.

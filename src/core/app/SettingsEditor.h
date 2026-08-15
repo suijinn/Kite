@@ -27,6 +27,12 @@ enum class NewTabPosition : uint8_t {
     AfterCurrent,  ///< 今のタブのすぐ右に作る
 };
 
+/// @brief タブバーを置く場所。向きもこれで決まる。
+enum class TabBarPosition : uint8_t {
+    Top,   ///< 一覧の上。横に並べ、収まらなければ行を増やす
+    Left,  ///< 一覧の左。縦に積み、収まらなければスクロールする
+};
+
 /// @brief 設定画面が扱う項目。
 ///
 /// @note 並び順がそのまま画面の並び順になる。SettingGroupOf() が区画を返すので、
@@ -37,6 +43,7 @@ enum class SettingId : uint8_t {
     FontScale,        ///< 文字の大きさ
     Sidebar,          ///< サイドバーを表示するか
     ShellIcons,       ///< シェルの実アイコンを使うか
+    TabBarPos,        ///< タブバーを置く場所（上＝横並び／左＝縦並び）
     NewTabPos,        ///< 新しいタブを作る位置
     NewTabHidden,     ///< 新しいタブの既定：隠しファイルを表示するか
     NewTabDirsFirst,  ///< 新しいタブの既定：フォルダを先頭にまとめるか
