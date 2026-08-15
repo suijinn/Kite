@@ -110,6 +110,8 @@ private:
         CompletionRow,
         KeyPanel,
         KeyRow,
+        KeyChord,
+        KeyAdd,
         SettingsPanel,
         SettingsRow,
         SettingsPrev,
@@ -287,6 +289,10 @@ private:
     std::vector<Chip> sessionChips_;
     RectF sessionAdd_{};
     RectF sessionBrand_{};
+
+    /// ショートカット一覧（F1）で送った行数。窓が小さくて全部が入らないときだけ
+    /// 意味を持つ。閉じている間は 0 に戻すので、開き直せば必ず先頭から。
+    int keyHelpScroll_ = 0;
 
     float sidebarScroll_ = 0.0f;
     RectF sidebarRect_{};

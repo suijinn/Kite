@@ -31,6 +31,7 @@ public:
         bool header = false;   ///< 分類の見出し行か
         std::string label;     ///< 表示名。見出し行では分類名
         std::string chords;    ///< 割り当ての表示文字列。無ければ空
+        std::vector<std::string> chordTexts;  ///< 同じ内容を和音 1 つずつに分けたもの
     };
 
     /// @brief 設定画面を開く。
@@ -63,6 +64,12 @@ public:
     /// @brief 選択中の行番号を返す。
     /// @return rows() への添字。行が無ければ -1
     int cursor() const { return cursor_; }
+
+    /// @brief 行の中で選ばれている和音の番号を返す。
+    /// @return 選択中の行の chordTexts への添字。選んでいなければ -1
+    /// @note 行そのものの選択とは別。Delete はこれが立っていればその 1 つだけを、
+    ///       立っていなければコマンドの割り当てを全部解除する
+    int chordCursor() const { return chordCursor_; }
 
     /// @brief 一覧の先頭に表示する行番号を返す。
     /// @return rows() への添字
@@ -113,6 +120,18 @@ public:
     /// @param[in] absolute true なら delta を移動先の行番号として扱う
     void MoveCursor(int delta, bool absolute = false);
 
+    /// @brief 行の中の和音を 1 つ選ぶ。
+    /// @param[in] index 選択中の行の chordTexts への添字。範囲外は選択解除
+    /// @param[in] strings メッセージの組み立てに使う文字列表
+    void SelectChord(int index, const Strings& strings);
+
+    /// @brief 行の中の和音 1 つぶんの割り当てを解除する。
+    /// @param[in] index 選択中の行の chordTexts への添字
+    /// @param[in,out] keys 変更対象の割り当て表
+    /// @param[in] strings メッセージの組み立てに使う文字列表
+    /// @note 解除後は同じ位置の和音に選択が残る。最後の 1 つを消したときだけ外れる
+    void RemoveChord(int index, KeyMap& keys, const Strings& strings);
+
     /// @brief キーの取り込みを開始する。
     /// @param[in] add true なら既存の割り当てを残して追加、false なら置き換え
     /// @note 選択が無い場合は何もしない
@@ -128,6 +147,8 @@ public:
     /// @return 消費したら true。表示していなければ false
     /// @note 表示中は Escape で閉じる以外のすべてを消費する。取り込み待ちの間は
     ///       Escape を除くあらゆる和音が割り当ての対象になる
+    /// @note Enter が置き換え、Ctrl+Enter が追加（Insert も同じ）。Delete で解除、
+    ///       Ctrl+R で 1 つを既定に戻し、Ctrl+Shift+R で全部を戻す
     bool HandleKey(const Chord& chord, KeyMap& keys, const Strings& strings);
 
     /// @brief 文字入力を絞り込みに反映する。
@@ -140,17 +161,22 @@ public:
 private:
     void EnsureCursorVisible();
     void SelectCommand(Cmd id);
+    void MoveChordCursor(int delta, const Strings& strings);
+    const std::vector<std::string>& SelectedChords() const;
 
     std::vector<Row> rows_;
     std::string filter_;
     std::string message_;
     int cursor_ = -1;
+    int chordCursor_ = -1;
     int scroll_ = 0;
     int pageRows_ = 20;
     bool visible_ = false;
     bool capturing_ = false;
     bool captureAdds_ = false;
     bool dirty_ = false;
+    /// 取り込みを終えた打鍵に続く文字入力を捨てるための印。
+    bool swallowNextChar_ = false;
 };
 
 }  // namespace kite

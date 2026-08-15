@@ -216,6 +216,13 @@ void KeyMap::Bind(const Chord& c, Cmd id) {
     order_.push_back({ c, id });
 }
 
+void KeyMap::Unbind(const Chord& c) {
+    byChord_.erase(c.packed());
+    order_.erase(std::remove_if(order_.begin(), order_.end(),
+                                [&](const std::pair<Chord, Cmd>& p) { return p.first == c; }),
+                 order_.end());
+}
+
 void KeyMap::UnbindCommand(Cmd id) {
     for (auto it = byChord_.begin(); it != byChord_.end();) {
         it = (it->second == id) ? byChord_.erase(it) : std::next(it);
@@ -229,10 +236,15 @@ void KeyMap::ApplyIni(const Ini& ini, std::vector<std::string>* warnings) {
     const Ini::Section* sec = ini.Find("keys");
     if (!sec) return;
 
-    // "none" must clear defaults before any additive line for the same command,
-    // so resolve clears in a first pass.
+    // A command the file names has exactly the chords the file gives it: every
+    // existing binding goes first, in one pass, so line order cannot matter.
+    //
+    // Adding on top of the defaults instead was worse than it sounds. The file
+    // Kite writes lists every command, so editing one of its lines is the normal
+    // way to change a key - and the default stayed bound underneath, still first
+    // in insertion order, which is the one the F1 sheet shows. The edit worked
+    // nowhere the user could see it. "none" falls out of the same pass.
     for (const Ini::Entry& e : sec->entries) {
-        if (!utf8::EqualsIgnoreCaseAscii(e.value, "none")) continue;
         const Cmd id = CommandFromName(e.key);
         if (id != Cmd::None) UnbindCommand(id);
     }
@@ -266,11 +278,13 @@ std::vector<Chord> KeyMap::ChordsFor(Cmd id) const {
     return out;
 }
 
-std::string KeyMap::PrimaryChordText(Cmd id) const {
-    for (const std::pair<Chord, Cmd>& p : order_) {
-        if (p.second == id) return FormatChord(p.first);
+std::string KeyMap::ChordText(Cmd id) const {
+    std::string out;
+    for (const Chord& c : ChordsFor(id)) {
+        if (!out.empty()) out += ", ";
+        out += FormatChord(c);
     }
-    return {};
+    return out;
 }
 
 Ini KeyMap::ToIni() const {
@@ -280,7 +294,10 @@ Ini KeyMap::ToIni() const {
     for (const CommandInfo& info : AllCommands()) {
         const std::vector<Chord> chords = ChordsFor(info.id);
         if (chords.empty()) {
-            sec.entries.push_back({ std::string("# ") + info.name, "none" });
+            // A real line, not a comment: read back, a commented-out command is
+            // a command the file never mentions, and the default returns. An
+            // unbound shortcut would come back from the dead on the next start.
+            sec.entries.push_back({ info.name, "none" });
             continue;
         }
         for (const Chord& c : chords) {

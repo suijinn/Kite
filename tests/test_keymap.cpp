@@ -76,7 +76,11 @@ KITE_TEST(keymap, defaults_contain_no_duplicate_chords) {
     }
 }
 
-KITE_TEST(keymap, ini_adds_a_binding_without_removing_defaults) {
+// The file Kite writes lists every command, so a line in it is how a key gets
+// changed. Adding on top of the default left the default bound underneath and
+// still first in insertion order - which is the chord the F1 sheet prints, so
+// the edit showed up nowhere the user could see it.
+KITE_TEST(keymap, ini_replaces_the_bindings_of_the_commands_it_names) {
     KeyMap keys;
     keys.LoadDefaults();
 
@@ -85,7 +89,27 @@ KITE_TEST(keymap, ini_adds_a_binding_without_removing_defaults) {
     keys.ApplyIni(ini);
 
     KITE_EXPECT_EQ(keys.Lookup(ParseChord("Ctrl+Alt+V")), Cmd::SplitLeftRight);
-    KITE_EXPECT_EQ(keys.Lookup(ParseChord("Alt+V")), Cmd::SplitLeftRight);
+    KITE_EXPECT_EQ(keys.Lookup(ParseChord("Alt+V")), Cmd::None);
+    KITE_EXPECT_EQ(keys.ChordsFor(Cmd::SplitLeftRight).size(), size_t{ 1 });
+    KITE_EXPECT_EQ(keys.ChordText(Cmd::SplitLeftRight), std::string("Ctrl+Alt+V"));
+
+    // And a command the file says nothing about keeps everything it had.
+    KITE_EXPECT_EQ(keys.Lookup(ParseChord("Alt+H")), Cmd::SplitTopBottom);
+}
+
+KITE_TEST(keymap, several_lines_for_one_command_are_all_of_its_chords) {
+    KeyMap keys;
+    keys.LoadDefaults();
+
+    Ini ini;
+    ini.Append("keys", "nav.refresh", "F6");
+    ini.Append("keys", "nav.refresh", "Ctrl+Alt+R");
+    keys.ApplyIni(ini);
+
+    KITE_EXPECT_EQ(keys.ChordsFor(Cmd::Refresh).size(), size_t{ 2 });
+    KITE_EXPECT_EQ(keys.Lookup(ParseChord("F5")), Cmd::None);
+    // The order in the file is the order on screen, and both of them are shown.
+    KITE_EXPECT_EQ(keys.ChordText(Cmd::Refresh), std::string("F6, Ctrl+Alt+R"));
 }
 
 KITE_TEST(keymap, ini_none_clears_every_binding_for_a_command) {
@@ -162,6 +186,26 @@ KITE_TEST(keymap, generated_ini_reloads_to_the_same_mapping) {
     KITE_EXPECT_EQ(reloaded.Lookup(ParseChord("Alt+Shift+8")), Cmd::Bookmark8);
 }
 
+// What the editor writes has to survive being read back over the defaults, or
+// a shortcut cleared on screen is back the next time Kite starts.
+KITE_TEST(keymap, a_cleared_binding_stays_cleared_through_the_generated_ini) {
+    KeyMap keys;
+    keys.LoadDefaults();
+    keys.UnbindCommand(Cmd::NextTab);
+    keys.Bind(ParseChord("F6"), Cmd::Refresh);
+
+    Ini written;
+    written.Parse(keys.ToIni().Serialize());
+
+    KeyMap reloaded;
+    reloaded.LoadDefaults();
+    reloaded.ApplyIni(written);
+
+    KITE_EXPECT_EQ(reloaded.ChordsFor(Cmd::NextTab).size(), size_t{ 0 });
+    KITE_EXPECT_EQ(reloaded.Lookup(ParseChord("Ctrl+Tab")), Cmd::None);
+    KITE_EXPECT_EQ(reloaded.ChordsFor(Cmd::Refresh).size(), keys.ChordsFor(Cmd::Refresh).size());
+}
+
 KITE_TEST(keymap, command_names_are_unique_and_resolvable) {
     std::set<std::string> names;
     for (const CommandInfo& info : AllCommands()) {
@@ -170,4 +214,23 @@ KITE_TEST(keymap, command_names_are_unique_and_resolvable) {
         KITE_EXPECT_EQ(std::string(CommandName(info.id)), std::string(info.name));
     }
     KITE_EXPECT_EQ(CommandFromName("nope"), Cmd::None);
+}
+
+KITE_TEST(keymap, one_chord_can_be_unbound_without_touching_the_others) {
+    KeyMap keys;
+    keys.LoadDefaults();
+
+    keys.Unbind(ParseChord("Ctrl+PageDown"));
+
+    KITE_EXPECT_EQ(keys.Lookup(ParseChord("Ctrl+PageDown")), Cmd::None);
+    KITE_EXPECT_EQ(keys.Lookup(ParseChord("Ctrl+Tab")), Cmd::NextTab);
+    KITE_EXPECT_EQ(keys.ChordText(Cmd::NextTab), std::string("Ctrl+Tab"));
+}
+
+KITE_TEST(keymap, the_display_text_lists_every_chord_in_order) {
+    KeyMap keys;
+    keys.LoadDefaults();
+    KITE_EXPECT_EQ(keys.ChordText(Cmd::Refresh), std::string("F5, Ctrl+R"));
+    KITE_EXPECT_EQ(keys.ChordText(Cmd::NewFolder), std::string("Ctrl+Shift+N"));
+    KITE_EXPECT(keys.ChordText(Cmd::ToggleLanguage).empty());
 }

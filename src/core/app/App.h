@@ -254,10 +254,15 @@ public:
 
     /// @brief ショートカットキー設定画面の状態を返す（変更可能）。
     /// @return 設定画面への参照
-    /// @note UI 層がマウス操作（行の選択、取り込みの開始）と 1 画面の行数の通知に
-    ///       使う。割り当てを変える操作は App::OnKey を通るので、keys.ini への
-    ///       保存はそちらが行う
+    /// @note UI 層がマウス操作（行の選択、和音の選択、取り込みの開始）と 1 画面の
+    ///       行数の通知に使う。割り当て表そのものを変える操作はここからは行えない
+    ///       ─ 書き出しを伴うので App::RemoveKeyBinding() を通す
     KeyEditor& keyEditor() { return keyEditor_; }
+
+    /// @brief 設定画面で選ばれている行の、和音 1 つぶんの割り当てを解除する。
+    /// @param[in] index 選択中の行の chordTexts への添字
+    /// @note UI 層が和音のクリックで呼ぶ。keys.ini への書き出しまで行う
+    void RemoveKeyBinding(int index);
 
     /// @brief 設定画面の状態を返す。
     /// @return 設定画面への参照
@@ -494,6 +499,7 @@ private:
     bool SaveWorkspaceFile();
     bool SaveSettings();
     bool WriteKeysFile();
+    void SaveKeysIfChanged();
     void CloseKeyEditor();
     void RefreshRoots();
 

@@ -109,15 +109,29 @@ KITE_TEST(keyeditor, enter_captures_the_next_chord_and_replaces_the_binding) {
     KITE_EXPECT(h.editor.dirty());
 }
 
-KITE_TEST(keyeditor, insert_adds_a_second_chord_instead_of_replacing) {
+KITE_TEST(keyeditor, ctrl_enter_adds_a_second_chord_instead_of_replacing) {
+    Harness h;
+    KITE_EXPECT(h.Select(Cmd::NewFolder));
+
+    h.Key("Ctrl+Enter");
+    KITE_EXPECT(h.editor.capturing());
+
+    h.Key("Ctrl+Alt+Shift+F9");
+    KITE_EXPECT_EQ(h.keys.ChordsFor(Cmd::NewFolder).size(), size_t{ 2 });
+    KITE_EXPECT_EQ(h.keys.Lookup(ParseChord("Ctrl+Shift+N")), Cmd::NewFolder);
+    KITE_EXPECT_EQ(h.keys.Lookup(ParseChord("Ctrl+Alt+Shift+F9")), Cmd::NewFolder);
+}
+
+// Insert did this on its own once. It is a corner of the keyboard some laptops
+// do not have, so it is no longer the one the screen names - but the fingers
+// that learned it are not sent back to the manual.
+KITE_TEST(keyeditor, insert_still_adds_as_well) {
     Harness h;
     KITE_EXPECT(h.Select(Cmd::NewFolder));
 
     h.Key("Insert");
     h.Key("Ctrl+Alt+Shift+F9");
     KITE_EXPECT_EQ(h.keys.ChordsFor(Cmd::NewFolder).size(), size_t{ 2 });
-    KITE_EXPECT_EQ(h.keys.Lookup(ParseChord("Ctrl+Shift+N")), Cmd::NewFolder);
-    KITE_EXPECT_EQ(h.keys.Lookup(ParseChord("Ctrl+Alt+Shift+F9")), Cmd::NewFolder);
 }
 
 KITE_TEST(keyeditor, capturing_a_chord_someone_else_owns_says_who_lost_it) {
@@ -166,6 +180,79 @@ KITE_TEST(keyeditor, delete_clears_every_binding_for_the_selected_command) {
     KITE_EXPECT_EQ(h.keys.ChordsFor(Cmd::NextTab).size(), size_t{ 0 });
     KITE_EXPECT_EQ(h.keys.Lookup(ParseChord("Ctrl+Tab")), Cmd::None);
     KITE_EXPECT(h.RowFor(Cmd::NextTab)->chords.empty());
+}
+
+// Windows queues the character of a key down along with it, so the "d" of a
+// freshly assigned "D" arrives after capture is already over. Left alone it
+// typed itself into the search box, and the list jumped somewhere else the
+// moment the binding was made.
+KITE_TEST(keyeditor, the_character_of_an_assigned_key_does_not_reach_the_search_box) {
+    Harness h;
+    KITE_EXPECT(h.Select(Cmd::DeleteToRecycle));
+
+    h.Key("Ctrl+Enter");
+    h.Key("D");
+    h.Type("d");
+
+    KITE_EXPECT(h.editor.filter().empty());
+    KITE_EXPECT_EQ(h.keys.Lookup(ParseChord("D")), Cmd::DeleteToRecycle);
+
+    // Only that one character. The next press is a search again.
+    h.Key("D");
+    h.Type("d");
+    KITE_EXPECT_EQ(h.editor.filter(), std::string("d"));
+}
+
+// Delete on the row clears the lot, which is no help when two chords share a
+// command and only one of them is in the way.
+KITE_TEST(keyeditor, one_chord_of_several_can_be_dropped_on_its_own) {
+    Harness h;
+    KITE_EXPECT(h.Select(Cmd::Refresh));  // F5, Ctrl+R
+    KITE_EXPECT_EQ(h.RowFor(Cmd::Refresh)->chordTexts.size(), size_t{ 2 });
+    KITE_EXPECT_EQ(h.editor.chordCursor(), -1);
+
+    h.Key("Right");
+    KITE_EXPECT_EQ(h.editor.chordCursor(), 0);
+    h.Key("Delete");
+
+    KITE_EXPECT_EQ(h.keys.Lookup(ParseChord("F5")), Cmd::None);
+    KITE_EXPECT_EQ(h.keys.Lookup(ParseChord("Ctrl+R")), Cmd::Refresh);
+    KITE_EXPECT(h.editor.dirty());
+
+    // The pick stays in the row, so a second Delete takes the next one rather
+    // than suddenly meaning "all of them".
+    KITE_EXPECT_EQ(h.editor.chordCursor(), 0);
+    h.Key("Delete");
+    KITE_EXPECT_EQ(h.keys.ChordsFor(Cmd::Refresh).size(), size_t{ 0 });
+    KITE_EXPECT_EQ(h.editor.chordCursor(), -1);
+}
+
+KITE_TEST(keyeditor, the_pick_within_a_row_is_dropped_when_the_row_changes) {
+    Harness h;
+    KITE_EXPECT(h.Select(Cmd::Refresh));
+    h.Key("Right");
+    KITE_EXPECT_EQ(h.editor.chordCursor(), 0);
+
+    h.Key("Down");
+    KITE_EXPECT_EQ(h.editor.chordCursor(), -1);
+
+    // And with nothing picked, Delete goes back to answering for the command.
+    KITE_EXPECT(h.Select(Cmd::Refresh));
+    h.Key("Delete");
+    KITE_EXPECT_EQ(h.keys.ChordsFor(Cmd::Refresh).size(), size_t{ 0 });
+}
+
+KITE_TEST(keyeditor, moving_along_a_row_stops_at_its_ends) {
+    Harness h;
+    KITE_EXPECT(h.Select(Cmd::Refresh));
+
+    h.Key("Left");  // in from the far end
+    KITE_EXPECT_EQ(h.editor.chordCursor(), 1);
+    h.Key("Right");
+    KITE_EXPECT_EQ(h.editor.chordCursor(), 1);
+    h.Key("Left");
+    h.Key("Left");
+    KITE_EXPECT_EQ(h.editor.chordCursor(), 0);
 }
 
 KITE_TEST(keyeditor, ctrl_r_puts_one_command_back_to_its_default) {
