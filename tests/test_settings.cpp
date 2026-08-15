@@ -192,6 +192,31 @@ KITE_TEST(settings, the_new_tab_position_setting_puts_a_tab_next_to_the_current_
     KITE_EXPECT(h.SettingsFile().find("new_tab_position=after_current") != std::string::npos);
 }
 
+KITE_TEST(settings, the_tab_bar_starts_above_the_list_and_can_be_moved_beside_it) {
+    Harness h;
+    KITE_EXPECT_EQ(static_cast<int>(h.app.tabBarPosition()), static_cast<int>(TabBarPosition::Top));
+
+    h.OpenAt(SettingId::TabBarPos);
+    h.app.settingsEditor().Adjust(1, h.app.strings());
+    h.app.ApplyPendingSetting();
+    KITE_EXPECT_EQ(static_cast<int>(h.app.tabBarPosition()),
+                   static_cast<int>(TabBarPosition::Left));
+    KITE_EXPECT(h.SettingsFile().find("tab_bar_position=left") != std::string::npos);
+
+    // 上下 1 つの選択肢しか無いので、戻すのも同じ 1 手。
+    h.app.settingsEditor().Adjust(-1, h.app.strings());
+    h.app.ApplyPendingSetting();
+    KITE_EXPECT_EQ(static_cast<int>(h.app.tabBarPosition()), static_cast<int>(TabBarPosition::Top));
+}
+
+KITE_TEST(settings, the_saved_tab_bar_position_is_read_back_on_the_next_run) {
+    Harness h;
+    test::FakeFiles()["C:\\home\\config\\settings.ini"] = "[ui]\ntab_bar_position=left\n";
+    h.app.Execute(Cmd::ReloadConfig);
+    KITE_EXPECT_EQ(static_cast<int>(h.app.tabBarPosition()),
+                   static_cast<int>(TabBarPosition::Left));
+}
+
 KITE_TEST(settings, the_saved_position_is_read_back_on_the_next_run) {
     Harness h;
     test::FakeFiles()["C:\\home\\config\\settings.ini"] = "[ui]\nnew_tab_position=after_current\n";

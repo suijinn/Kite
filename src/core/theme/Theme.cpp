@@ -162,6 +162,7 @@ void Theme::ApplyIni(const Ini& ini) {
     fontSize = ini.GetFloat("ui", "font_size", fontSize);
     uiScale = ini.GetFloat("ui", "scale", uiScale);
     sidebarWidth = ini.GetFloat("ui", "sidebar_width", sidebarWidth);
+    tabBarWidth = ini.GetFloat("ui", "tab_bar_width", tabBarWidth);
 
     const std::string family = ini.GetStr("ui", "font_family");
     if (!family.empty()) fontFamily = family;
@@ -184,6 +185,9 @@ void Theme::Scale(float factor) {
     statusBarHeight = std::round(statusBarHeight * factor);
     // 幅も同じ ─ 中身は「クイックアクセス」のような、縮めれば読めなくなる文字列。
     sidebarWidth = std::round(sidebarWidth * factor);
+    // 縦置きタブバーの幅も器のうち。据え置くと、行だけが高くなってタブ名は
+    // 同じところで切れたままになる。
+    tabBarWidth = std::round(tabBarWidth * factor);
 }
 
 }  // namespace kite

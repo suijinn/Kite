@@ -148,6 +148,7 @@ private:
 
     bool PointerOver(const RectF& box) const;
     bool Hovered(const RectF& box) const;
+    static bool IsTabBarHit(Hit kind);
 
     /// セッションバーに並べた 1 個ぶん。折り返した結果の行番号を持つ。
     struct Chip {
@@ -155,19 +156,24 @@ private:
         int index = 0;  ///< セッションの添字
     };
 
-    /// タブバーを折り返した結果。行の高さは Theme::tabBarHeight。
+    /// タブバーを折り返した結果。横置き・縦置きのどちらも同じ形で表す。
+    ///
+    /// 「行」は流れの折り返し単位で、横置きなら画面上の 1 行、縦置きなら 1 枚ぶんの
+    /// 段。縦置きは列を増やさない（増やせば一覧の幅が消える）ので perRow は常に 1 で、
+    /// 1 枚が 1 行になる。
     struct TabLayout {
-        float perTab = 0.0f;  ///< タブ 1 枚の幅
-        int perRow = 1;       ///< 1 行に並ぶ枚数
-        int rows = 1;         ///< 折り返して必要になった行数
-        int firstRow = 0;     ///< 画面に出る先頭の行
-        int shownRows = 1;    ///< 実際に描く行数。rows を超えない
-        float height = 0.0f;  ///< バー全体の高さ
+        bool vertical = false;   ///< 縦置き（ペインの左）か
+        float perTab = 0.0f;     ///< 流れ方向の 1 枚ぶん。横なら幅、縦なら高さ
+        float thickness = 0.0f;  ///< バーの厚み。横ならバー全体の高さ、縦なら幅
+        int perRow = 1;          ///< 1 行に並ぶ枚数。縦置きでは常に 1
+        int rows = 1;            ///< 折り返して必要になった行数
+        int firstRow = 0;        ///< 画面に出る先頭の行
+        int shownRows = 1;       ///< 実際に描く行数。rows を超えない
     };
 
     float LayoutSessionBar(Renderer& r, const RectF& area);
     void PaintSessionBar(Renderer& r, const RectF& area);
-    TabLayout LayoutTabBar(const Pane& pane, float width, float paneHeight) const;
+    TabLayout LayoutTabBar(Pane& pane, const RectF& area) const;
     void PaintSidebar(Renderer& r, const RectF& area);
     void PaintStatusBar(Renderer& r, const RectF& area);
     void PaintPromptField(Renderer& r, const RectF& field);

@@ -89,7 +89,65 @@ struct Fixture {
         Release(x, y);
     }
 
+    // One notch of the wheel. Positive is away from the user, which scrolls up.
+    void Wheel(float x, float y, float notches) {
+        ui::MouseEvent e;
+        e.type = ui::MouseEvent::Type::Wheel;
+        e.x = x;
+        e.y = y;
+        e.wheel = notches;
+        ui.OnMouse(e);
+    }
+
     Tab* tab() { return app.workspace().focusedTab(); }
+
+    Pane* pane() { return app.workspace().focusedPane(); }
+
+    // Thumbs painted inside the tab bar. The listing has a scrollbar of its own
+    // in the same colour, so the ones out in the pane do not count.
+    std::vector<RectF> TabBarThumbs() {
+        const RectF bar = { paneRect().l, paneRect().t, pane()->listArea.l, paneRect().b };
+        std::vector<RectF> out;
+        for (const test::FakeRenderer::Fill& fill : renderer.fills) {
+            if (!test::FakeRenderer::SameColor(fill.color, app.theme().scrollThumb)) continue;
+            if (fill.rect.l >= bar.l && fill.rect.r <= bar.r) out.push_back(fill.rect);
+        }
+        return out;
+    }
+
+    int ThumbsInTabBar() { return static_cast<int>(TabBarThumbs().size()); }
+
+    RectF TabBarThumb() {
+        const std::vector<RectF> thumbs = TabBarThumbs();
+        return thumbs.empty() ? RectF{} : thumbs.front();
+    }
+
+    // The focused pane's own rectangle, as the split tree recorded it last frame.
+    // Everything inside the pane is placed from this, so the tests do not have to
+    // repeat the arithmetic that puts the pane next to the sidebar.
+    RectF paneRect() {
+        Session* session = app.workspace().activeSession();
+        SplitNode* leaf = session ? session->LeafOf(app.workspace().focusedPane()) : nullptr;
+        return leaf ? leaf->rect : RectF{};
+    }
+
+    // Move the tab bar to the left of the list. Driven through the settings
+    // screen rather than the ini, so the path the user actually takes is the one
+    // under test.
+    void UseVerticalTabBar() {
+        app.Execute(Cmd::ShowSettings);
+        SettingsEditor& editor = app.settingsEditor();
+        for (size_t i = 0; i < editor.rows().size(); ++i) {
+            if (editor.rows()[i].id == SettingId::TabBarPos) {
+                editor.SelectRow(static_cast<int>(i));
+                break;
+            }
+        }
+        editor.Adjust(1, app.strings());
+        app.ApplyPendingSetting();
+        app.Execute(Cmd::ShowSettings);  // close
+        Paint();
+    }
 
     // Well below the last row: the empty part of the list, where a band starts.
     PointF EmptyPoint() const {
@@ -893,6 +951,179 @@ KITE_TEST(appui, the_session_bar_wraps_and_the_ninth_session_still_switches) {
     f.Click(chip.center().x, chip.center().y);
     test::PumpUntilSettled(f.app);
     KITE_EXPECT_EQ(f.app.workspace().active, 11);
+}
+
+// --- the vertical tab bar ---------------------------------------------------
+//
+// The same layout with the two axes swapped: tabs run down the left of the pane
+// instead of across the top of it, and everything that reads a position - the
+// hit test, the drop caret, the scroll - has to follow.
+
+KITE_TEST(appui, the_vertical_bar_takes_the_left_of_the_pane_and_nothing_above_the_list) {
+    Fixture f;
+    f.UseVerticalTabBar();
+
+    const Theme& th = f.app.theme();
+    const RectF pane = f.paneRect();
+    // The list starts past the column, and no longer below a bar: the path bar
+    // is the first thing at the top of what is left.
+    KITE_EXPECT_NEAR(f.pane()->listArea.l, pane.l + th.tabBarWidth, 0.01f);
+    KITE_EXPECT_NEAR(f.pane()->listArea.t, pane.t + th.pathBarHeight + th.headerHeight, 0.01f);
+}
+
+KITE_TEST(appui, a_tab_further_down_the_column_can_be_clicked) {
+    Fixture f;
+    f.UseVerticalTabBar();
+    for (int i = 0; i < 3; ++i) f.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    const Theme& th = f.app.theme();
+    const RectF pane = f.paneRect();
+    f.Click(pane.l + 40.0f, pane.t + th.tabBarHeight * 2.5f);
+    test::PumpUntilSettled(f.app);
+
+    KITE_EXPECT_EQ(f.pane()->active, 2);
+}
+
+KITE_TEST(appui, dragging_a_tab_up_the_column_reorders_it) {
+    Fixture f;
+    f.UseVerticalTabBar();
+    f.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(f.app);
+    f.app.OpenPath("C:\\home\\alpha", false);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+    KITE_EXPECT_EQ(f.pane()->tabs.size(), size_t{ 2 });
+    KITE_EXPECT_EQ(f.pane()->tabs[1]->path, std::string("C:\\home\\alpha"));
+
+    // Carry the second tab over the top half of the first: up and down are what
+    // "before" and "after" mean here, so the same drag that used to run left
+    // along a row now runs up a column.
+    const Theme& th = f.app.theme();
+    const RectF pane = f.paneRect();
+    const float x = pane.l + 40.0f;
+    f.Press(x, pane.t + th.tabBarHeight * 1.5f);
+    f.Drag(x, pane.t + th.tabBarHeight * 0.25f);
+    f.Release(x, pane.t + th.tabBarHeight * 0.25f);
+    test::PumpUntilSettled(f.app);
+
+    KITE_EXPECT_EQ(f.pane()->tabs[0]->path, std::string("C:\\home\\alpha"));
+}
+
+KITE_TEST(appui, the_column_scrolls_to_the_active_tab_rather_than_running_off_the_bottom) {
+    Fixture f;
+    f.UseVerticalTabBar();
+    // Far more than the column can hold, so the ones at the top are off screen.
+    for (int i = 0; i < 39; ++i) f.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+    KITE_EXPECT_EQ(f.pane()->tabs.size(), size_t{ 40 });
+    KITE_EXPECT_EQ(f.pane()->active, 39);
+
+    // The tab at the top of the column is not the first one any more - it has
+    // been scrolled down to the tab that has the keyboard.
+    const Theme& th = f.app.theme();
+    const RectF pane = f.paneRect();
+    f.Click(pane.l + 40.0f, pane.t + th.tabBarHeight * 0.5f);
+    test::PumpUntilSettled(f.app);
+    KITE_EXPECT(f.pane()->active > 0);
+    KITE_EXPECT(f.pane()->active < 39);
+}
+
+KITE_TEST(appui, the_wheel_moves_the_column_to_the_tabs_above_and_it_stays_there) {
+    Fixture f;
+    f.UseVerticalTabBar();
+    for (int i = 0; i < 39; ++i) f.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    const Theme& th = f.app.theme();
+    const RectF pane = f.paneRect();
+    const float x = pane.l + 40.0f;
+    const float top = pane.t + th.tabBarHeight * 0.5f;
+
+    // Whatever is at the top of the column before the wheel is touched.
+    f.Click(x, top);
+    test::PumpUntilSettled(f.app);
+    const int before = f.pane()->active;
+    f.Paint();
+
+    f.Wheel(x, pane.t + th.tabBarHeight * 3.0f, 1.0f);
+    // Two frames, because the point of remembering the position is that the
+    // next layout does not quietly put it back where the active tab is.
+    f.Paint();
+    f.Paint();
+
+    f.Click(x, top);
+    test::PumpUntilSettled(f.app);
+    KITE_EXPECT(f.pane()->active < before);
+}
+
+KITE_TEST(appui, switching_tabs_pulls_the_column_back_to_the_active_one) {
+    Fixture f;
+    f.UseVerticalTabBar();
+    for (int i = 0; i < 39; ++i) f.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    const Theme& th = f.app.theme();
+    const RectF pane = f.paneRect();
+    const float x = pane.l + 40.0f;
+    for (int i = 0; i < 20; ++i) f.Wheel(x, pane.t + th.tabBarHeight * 3.0f, 1.0f);
+    f.Paint();
+    // Wound right back to the first tab, with the active one off the bottom.
+    KITE_EXPECT_EQ(f.pane()->tabScroll, 0);
+    KITE_EXPECT(f.pane()->active >= f.pane()->tabRowsPerPage);
+
+    // The wheel only holds until the selection moves; a new tab is a new answer.
+    f.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+    Pane* p = f.pane();
+    KITE_EXPECT(p->tabScroll > 0);
+    KITE_EXPECT(p->active >= p->tabScroll);
+    KITE_EXPECT(p->active < p->tabScroll + p->tabRowsPerPage);
+}
+
+KITE_TEST(appui, the_column_shows_a_thumb_only_when_it_is_holding_tabs_back) {
+    Fixture f;
+    f.UseVerticalTabBar();
+    for (int i = 0; i < 3; ++i) f.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+    // Four tabs in a column that holds twenty-odd: nothing is being held back,
+    // so a thumb here would be a control for a scroll that cannot happen. (The
+    // listing has a scrollbar of its own, hence counting only inside the bar.)
+    KITE_EXPECT_EQ(f.ThumbsInTabBar(), 0);
+
+    for (int i = 0; i < 39; ++i) f.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+    KITE_EXPECT_EQ(f.ThumbsInTabBar(), 1);
+}
+
+KITE_TEST(appui, the_thumb_sits_where_the_column_is_scrolled_to) {
+    Fixture f;
+    f.UseVerticalTabBar();
+    for (int i = 0; i < 39; ++i) f.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    // The last tab is the active one, so the column is at the bottom and so is
+    // the thumb.
+    const RectF pane = f.paneRect();
+    const RectF atBottom = f.TabBarThumb();
+    KITE_EXPECT(atBottom.b > pane.t + pane.h() * 0.5f);
+
+    const Theme& th = f.app.theme();
+    for (int i = 0; i < 20; ++i) {
+        f.Wheel(pane.l + 40.0f, pane.t + th.tabBarHeight * 3.0f, 1.0f);
+    }
+    f.Paint();
+    const RectF atTop = f.TabBarThumb();
+    KITE_EXPECT(atTop.t < atBottom.t);
+    KITE_EXPECT_NEAR(atTop.t, pane.t + 3.0f, 0.01f);
 }
 
 KITE_TEST(appui, nothing_behind_the_settings_screen_is_lit) {

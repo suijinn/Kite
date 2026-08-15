@@ -64,7 +64,8 @@ struct Theme {
 
     float rowHeight = 22.0f;         ///< 一覧 1 行の高さ（DIP）
     float headerHeight = 24.0f;      ///< 列見出しの高さ（DIP）
-    float tabBarHeight = 28.0f;      ///< タブバーの高さ（DIP）
+    float tabBarHeight = 28.0f;      ///< タブバー 1 行の高さ（DIP）。縦置きではタブ 1 枚の高さ
+    float tabBarWidth = 170.0f;      ///< 縦置きタブバーの幅（DIP）。横置きでは使わない
     float pathBarHeight = 26.0f;     ///< パスバーの高さ（DIP）
     float sessionBarHeight = 26.0f;  ///< セッションバーの高さ（DIP）
     float statusBarHeight = 22.0f;   ///< ステータスバーの高さ（DIP）

@@ -22,6 +22,7 @@ const char* const kTheme[] = { "settings.theme.dark", "settings.theme.light" };
 const char* const kLanguage[] = { "settings.language.auto", "settings.language.en",
                                   "settings.language.ja" };
 const char* const kNewTabPos[] = { "settings.new_tab_pos.end", "settings.new_tab_pos.after" };
+const char* const kTabBarPos[] = { "settings.tab_bar_pos.top", "settings.tab_bar_pos.left" };
 
 // 文字サイズの刻み。Ctrl++ / Ctrl+- と同じ 0.1 きざみで、範囲も App の
 // kFontScaleMin / kFontScaleMax に合わせてある ─ 片方だけ広げると、キーでは
@@ -37,6 +38,7 @@ const Info kSettings[] = {
       nullptr },
     { SettingId::Sidebar, SettingGroup::Appearance, "settings.sidebar", 2, kOnOff },
     { SettingId::ShellIcons, SettingGroup::Appearance, "settings.shell_icons", 2, kOnOff },
+    { SettingId::TabBarPos, SettingGroup::Tabs, "settings.tab_bar_pos", 2, kTabBarPos },
     { SettingId::NewTabPos, SettingGroup::Tabs, "settings.new_tab_pos", 2, kNewTabPos },
     { SettingId::NewTabHidden, SettingGroup::NewTab, "settings.show_hidden", 2, kOnOff },
     { SettingId::NewTabDirsFirst, SettingGroup::NewTab, "settings.dirs_first", 2, kOnOff },

@@ -78,6 +78,14 @@ bool AppUi::Hovered(const RectF& box) const {
     return PointerOver(box);
 }
 
+// Everything the tab bar registers, the tabs themselves included: the wheel is
+// answering "the pointer is over the bar", and it is over the bar whether or not
+// it happens to be over a tab.
+bool AppUi::IsTabBarHit(Hit kind) {
+    return kind == Hit::TabBar || kind == Hit::TabItem || kind == Hit::TabClose ||
+           kind == Hit::TabAdd;
+}
+
 // ---------------------------------------------------------------------------
 // Paint
 // ---------------------------------------------------------------------------
@@ -524,10 +532,19 @@ void AppUi::PaintPane(Renderer& r, Pane* pane, const RectF& area) {
     r.FillRect(area, th.listBg);
 
     RectF rest = area;
-    const TabLayout tabs = LayoutTabBar(*pane, rest.w(), area.h());
-    const RectF tabBar = { rest.l, rest.t, rest.r, rest.t + tabs.height };
+    const TabLayout tabs = LayoutTabBar(*pane, area);
+    // 縦置きのバーはペインの高さいっぱいを取り、パスバーはその右から始まる。
+    // パスバーの下に潜り込ませると、タブの列だけが一覧より低い位置から始まって
+    // ペインの左上に用途の無い角ができる。
+    RectF tabBar;
+    if (tabs.vertical) {
+        tabBar = { rest.l, rest.t, rest.l + tabs.thickness, rest.b };
+        rest.l = tabBar.r;
+    } else {
+        tabBar = { rest.l, rest.t, rest.r, rest.t + tabs.thickness };
+        rest.t = tabBar.b;
+    }
     PaintTabBar(r, pane, tabBar, focused, tabs);
-    rest.t = tabBar.b;
 
     Tab* tab = pane->activeTab();
     const RectF pathBar = { rest.l, rest.t, rest.r, rest.t + th.pathBarHeight };
@@ -547,42 +564,83 @@ void AppUi::PaintPane(Renderer& r, Pane* pane, const RectF& area) {
     r.PopClip();
 }
 
-// How the tabs of one pane fold into rows, and how tall that makes the bar.
+// How the tabs of one pane fold into rows, and how thick that makes the bar.
 //
-// Tabs shrink until they hit a floor, and then wrap. Up to that floor the result
-// is exactly the single row it always was; past it, the row that used to run off
-// the right edge - taking every tab on it out of reach of the mouse - becomes a
-// second row.
+// Laid out horizontally, tabs shrink until they hit a floor, and then wrap. Up
+// to that floor the result is exactly the single row it always was; past it, the
+// row that used to run off the right edge - taking every tab on it out of reach
+// of the mouse - becomes a second row.
 //
-// The add button is why the width is measured against `avail` rather than the
-// full span: a full row can never use more than `avail`, so the last row always
-// keeps room for the plus at its end.
-AppUi::TabLayout AppUi::LayoutTabBar(const Pane& pane, float width, float paneHeight) const {
+// The add button is why the span is measured against `avail` rather than the
+// full width: a full row can never use more than `avail`, so the last row always
+// keeps room for the plus at its end. The vertical bar reserves a row for the
+// same reason and in the same way.
+//
+// Vertically there is nothing to shrink - a tab is one line of text tall - so the
+// wrapping half does not apply, and a second column is not the answer either:
+// every column costs the listing its width, which is the thing the window exists
+// to show. One column that scrolls is what is left.
+//
+// Where it is scrolled to is the pane's to keep (`tabScroll`), because the wheel
+// can move it. The active tab still has the last word, but only when it changes:
+// switching tabs scrolls the new one into view, and between those moments the
+// bar stays where the wheel left it. Pulling it back every frame instead would
+// make the wheel do nothing at all - the tabs would spring back the moment the
+// pointer stopped.
+AppUi::TabLayout AppUi::LayoutTabBar(Pane& pane, const RectF& area) const {
     const Theme& th = app_.theme();
     constexpr float kMaxTabWidth = 190.0f;
     constexpr float kMinTabWidth = 70.0f;
 
     TabLayout out;
+    out.vertical = (app_.tabBarPosition() == TabBarPosition::Left);
     const int count = static_cast<int>(pane.tabs.size());
-    const float avail = std::max(kMinTabWidth, width - 28.0f);
-    out.perTab = count == 0 ? kMaxTabWidth
-                            : std::clamp(avail / static_cast<float>(count), kMinTabWidth,
-                                         kMaxTabWidth);
-    out.perRow = std::max(1, static_cast<int>(avail / out.perTab));
-    out.rows = std::max(1, (std::max(count, 1) + out.perRow - 1) / out.perRow);
 
-    // Half the pane is the point where the tab bar stops labelling a listing and
-    // starts replacing it. Past that the rows scroll, and which ones are on
-    // screen comes from the active tab - the same rule the session bar and the
-    // completion popup follow, for the same reason: a remembered position could
-    // only disagree with the selection.
-    const int maxRows = std::max(1, static_cast<int>((paneHeight * 0.5f) / th.tabBarHeight));
-    out.shownRows = std::min(out.rows, maxRows);
-    if (out.shownRows < out.rows) {
-        const int activeRow = std::clamp(pane.active, 0, std::max(0, count - 1)) / out.perRow;
-        out.firstRow = std::clamp(activeRow - out.shownRows + 1, 0, out.rows - out.shownRows);
+    if (out.vertical) {
+        out.perTab = th.tabBarHeight;
+        // Never past half the pane: the same line the horizontal bar draws at
+        // half the height, for the same reason.
+        out.thickness = std::min(th.tabBarWidth, area.w() * 0.5f);
+        out.perRow = 1;
+        out.rows = std::max(1, count);
+        const int fit = std::max(1, static_cast<int>((area.h() - out.perTab) / out.perTab));
+        out.shownRows = std::min(out.rows, fit);
+    } else {
+        const float avail = std::max(kMinTabWidth, area.w() - 28.0f);
+        out.perTab = count == 0 ? kMaxTabWidth
+                                : std::clamp(avail / static_cast<float>(count), kMinTabWidth,
+                                             kMaxTabWidth);
+        out.perRow = std::max(1, static_cast<int>(avail / out.perTab));
+        out.rows = std::max(1, (std::max(count, 1) + out.perRow - 1) / out.perRow);
+
+        // Half the pane is the point where the tab bar stops labelling a listing
+        // and starts replacing it.
+        const int maxRows = std::max(1, static_cast<int>((area.h() * 0.5f) / th.tabBarHeight));
+        out.shownRows = std::min(out.rows, maxRows);
+        out.thickness = static_cast<float>(out.shownRows) * th.tabBarHeight;
     }
-    out.height = static_cast<float>(out.shownRows) * th.tabBarHeight;
+
+    // Switching tabs brings the new one into view; nothing else moves the bar on
+    // its own. `tabScrollFor` is what separates the two - it says which active
+    // tab the current position was already fitted to.
+    const int maxFirst = std::max(0, out.rows - out.shownRows);
+    if (pane.tabScrollFor != pane.active) {
+        const int activeRow = std::clamp(pane.active, 0, std::max(0, count - 1)) / out.perRow;
+        if (activeRow < pane.tabScroll) pane.tabScroll = activeRow;
+        if (activeRow >= pane.tabScroll + out.shownRows) {
+            pane.tabScroll = activeRow - out.shownRows + 1;
+        }
+        pane.tabScrollFor = pane.active;
+    }
+    // Closing tabs shortens the bar under a position that was valid for the
+    // longer one, so this cannot be left to whoever moves the scroll.
+    pane.tabScroll = std::clamp(pane.tabScroll, 0, maxFirst);
+    out.firstRow = pane.tabScroll;
+
+    // Written back for the wheel: it has to know how far the bar can go, and only
+    // the layout knows how many rows there are and how many of them fit.
+    pane.tabRows = out.rows;
+    pane.tabRowsPerPage = out.shownRows;
     return out;
 }
 
@@ -593,8 +651,11 @@ void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused
     // Registered first so the individual tabs, added below, win the hit test.
     Add(area, Hit::TabBar, 0, pane);
 
-    const float perTab = layout.perTab;
-    const float rowH = th.tabBarHeight;
+    // The two axes of the layout: how far one tab advances along its row, and how
+    // far one row advances across the bar. Swapping the pair is the whole of the
+    // difference between the two orientations - the indices below are the same.
+    const float rowStep = layout.vertical ? layout.perTab : th.tabBarHeight;
+    const float slotStep = layout.vertical ? layout.thickness : layout.perTab;
     float x = area.l;
     float rowTop = area.t;
 
@@ -604,21 +665,30 @@ void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused
         if (row >= layout.firstRow + layout.shownRows) break;
 
         const int column = static_cast<int>(i) % layout.perRow;
-        rowTop = area.t + static_cast<float>(row - layout.firstRow) * rowH;
-        x = area.l + static_cast<float>(column) * perTab;
+        rowTop = area.t + static_cast<float>(row - layout.firstRow) * rowStep;
+        x = area.l + static_cast<float>(column) * slotStep;
 
         const bool active = (static_cast<int>(i) == pane->active);
-        const RectF tabRect = { x, rowTop, x + perTab, rowTop + rowH };
+        const RectF tabRect = { x, rowTop, x + slotStep, rowTop + rowStep };
 
         r.FillRect(tabRect, active ? th.tabActiveBg : th.tabInactiveBg);
         if (Hovered(tabRect)) r.FillRect(tabRect, th.rowHover);
         if (active) {
             // Lit only in the pane holding the keyboard: with every pane's active
-            // tab wearing the accent, the accent stopped meaning anything.
-            r.FillRect({ tabRect.l, tabRect.t, tabRect.r, tabRect.t + 2.0f },
+            // tab wearing the accent, the accent stopped meaning anything. It
+            // goes on the edge the tabs run along - the top of a row of them, the
+            // near side of a column - so the mark reads as belonging to the
+            // strip rather than pointing out of it.
+            r.FillRect(layout.vertical
+                           ? RectF{ tabRect.l, tabRect.t, tabRect.l + 2.0f, tabRect.b }
+                           : RectF{ tabRect.l, tabRect.t, tabRect.r, tabRect.t + 2.0f },
                        FocusColor(focused));
         }
-        r.FillRect({ tabRect.r - 1.0f, tabRect.t + 5.0f, tabRect.r, tabRect.b - 5.0f }, th.border);
+        // The hairline between neighbours, laid across whichever way they touch.
+        r.FillRect(layout.vertical
+                       ? RectF{ tabRect.l + 8.0f, tabRect.b - 1.0f, tabRect.r - 8.0f, tabRect.b }
+                       : RectF{ tabRect.r - 1.0f, tabRect.t + 5.0f, tabRect.r, tabRect.b - 5.0f },
+                   th.border);
 
         const RectF close = { tabRect.r - 20.0f, tabRect.t + 6.0f, tabRect.r - 6.0f,
                               tabRect.b - 6.0f };
@@ -641,24 +711,55 @@ void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused
         x = tabRect.r;
     }
 
-    // The plus follows the last tab, on its row. When the rows are scrolled and
-    // that row is not one of the visible ones it is simply absent - Cmd::NewTab
-    // and the middle click on a folder both still make tabs.
+    // The plus follows the last tab - beside it in a row, below it in a column.
+    // When the rows are scrolled and the last tab's row is not one of the visible
+    // ones it is simply absent; Cmd::NewTab and the middle click on a folder both
+    // still make tabs.
     const int lastRow = std::max(0, static_cast<int>(pane->tabs.size()) - 1) / layout.perRow;
     if (lastRow >= layout.firstRow && lastRow < layout.firstRow + layout.shownRows) {
-        const RectF add = { x + 2.0f, rowTop + 4.0f, x + 24.0f, rowTop + rowH - 4.0f };
-        if (add.r < area.r) {
+        const float addLeft = layout.vertical ? area.l : x;
+        const float addTop =
+            (layout.vertical && !pane->tabs.empty()) ? rowTop + rowStep : rowTop;
+        const RectF add = { addLeft + 2.0f, addTop + 4.0f, addLeft + 24.0f,
+                            addTop + rowStep - 4.0f };
+        if (add.r < area.r && add.b <= area.b) {
             glyph::Plus(r, add, Hovered(add) ? th.text : th.textDim, 1.4f);
             Add(add, Hit::TabAdd, 0, pane);
         }
     }
 
-    // A line under every row, not just the bar: stacked rows of tabs run into
-    // one another otherwise, and the row a tab belongs to is what says which of
-    // its neighbours come before and after it.
-    for (int row = 0; row < layout.shownRows; ++row) {
-        const float bottom = area.t + static_cast<float>(row + 1) * rowH;
-        r.FillRect({ area.l, bottom - 1.0f, area.r, bottom }, th.border);
+    if (layout.vertical) {
+        // One line down the far side, where the bar meets the listing. The tabs
+        // already carry the lines between themselves.
+        r.FillRect({ area.r - 1.0f, area.t, area.r, area.b }, th.border);
+
+        // And, when there are tabs it is not showing, the thumb that says so.
+        // Without it the column looks the same whether it holds five tabs or
+        // fifty: the wheel moves it, and nothing on screen says there was
+        // anywhere to move to, or where in the strip the visible part sits.
+        //
+        // The thin kind, as in the shortcut editor's list rather than the wide
+        // one beside a listing - it shares its lane with the tabs, and the close
+        // cross ends 6 px in from the edge, which is what leaves room for it.
+        if (layout.rows > layout.shownRows) {
+            const RectF track = { area.r - 5.0f, area.t + 3.0f, area.r - 2.0f, area.b - 3.0f };
+            const float ratio =
+                static_cast<float>(layout.shownRows) / static_cast<float>(layout.rows);
+            const float thumbH = std::min(track.h(), std::max(24.0f, track.h() * ratio));
+            const float t = static_cast<float>(layout.firstRow) /
+                            static_cast<float>(std::max(1, layout.rows - layout.shownRows));
+            const float thumbTop = track.t + (track.h() - thumbH) * t;
+            r.FillRoundRect({ track.l, thumbTop, track.r, thumbTop + thumbH }, 1.5f,
+                            th.scrollThumb);
+        }
+    } else {
+        // A line under every row, not just the bar: stacked rows of tabs run into
+        // one another otherwise, and the row a tab belongs to is what says which
+        // of its neighbours come before and after it.
+        for (int row = 0; row < layout.shownRows; ++row) {
+            const float bottom = area.t + static_cast<float>(row + 1) * rowStep;
+            r.FillRect({ area.l, bottom - 1.0f, area.r, bottom }, th.border);
+        }
     }
 }
 
@@ -1576,8 +1677,11 @@ bool AppUi::ResolveTabDrop(float x, float y, Pane** outPane, int* outIndex) cons
 
     if (region->kind == Hit::TabItem || region->kind == Hit::TabClose) {
         index = region->index;
-        // Past the midpoint means "after this tab".
-        if (x > region->rect.center().x) ++index;
+        // Past the midpoint means "after this tab" - along whichever axis the
+        // tabs are ordered on.
+        const bool vertical = (app_.tabBarPosition() == TabBarPosition::Left);
+        const PointF middle = region->rect.center();
+        if (vertical ? (y > middle.y) : (x > middle.x)) ++index;
     }
     *outPane = pane;
     *outIndex = std::clamp(index, 0, static_cast<int>(pane->tabs.size()));
@@ -1862,17 +1966,22 @@ bool AppUi::OnMouse(const MouseEvent& e) {
                 dropTabPane_ = pane;
                 dropTabIndex_ = index;
                 // Draw the insertion caret on the boundary this slot means:
-                // the left edge of tab `index`, or the right edge of the one
-                // before it when inserting at the end.
+                // the leading edge of tab `index`, or the trailing edge of the
+                // one before it when inserting at the end. Which edge that is
+                // follows the bar's orientation.
+                const bool vertical = (app_.tabBarPosition() == TabBarPosition::Left);
                 dropTabMarker_ = {};
                 for (const Region& candidate : regions_) {
                     if (candidate.kind != Hit::TabItem || candidate.pane != pane) continue;
+                    const RectF& box = candidate.rect;
                     if (candidate.index == index) {
-                        dropTabMarker_ = { candidate.rect.l - 1.0f, candidate.rect.t,
-                                           candidate.rect.l + 2.0f, candidate.rect.b };
+                        dropTabMarker_ = vertical
+                                             ? RectF{ box.l, box.t - 1.0f, box.r, box.t + 2.0f }
+                                             : RectF{ box.l - 1.0f, box.t, box.l + 2.0f, box.b };
                     } else if (candidate.index == index - 1 && dropTabMarker_.empty()) {
-                        dropTabMarker_ = { candidate.rect.r - 2.0f, candidate.rect.t,
-                                           candidate.rect.r + 1.0f, candidate.rect.b };
+                        dropTabMarker_ = vertical
+                                             ? RectF{ box.l, box.b - 2.0f, box.r, box.b + 1.0f }
+                                             : RectF{ box.r - 2.0f, box.t, box.r + 1.0f, box.b };
                     }
                 }
             }
@@ -1982,6 +2091,25 @@ bool AppUi::OnMouse(const MouseEvent& e) {
         if (region && sidebarRect_.contains(e.x, e.y)) {
             const float maxScroll = std::max(0.0f, sidebarContent_ - sidebarRect_.h());
             sidebarScroll_ = std::clamp(sidebarScroll_ - e.wheel * 60.0f, 0.0f, maxScroll);
+            app_.host().Invalidate();
+            return true;
+        }
+        // Over the tab bar, and the bar has rows it is not showing: the wheel
+        // moves those into view rather than the listing behind it. Only then -
+        // a bar with everything on screen has nothing to answer with, so the
+        // wheel goes on doing what it has always done there and scrolls the list.
+        if (region && region->pane && IsTabBarHit(region->kind) &&
+            region->pane->tabRows > region->pane->tabRowsPerPage) {
+            Pane& pane = *region->pane;
+            // A notch is worth three tabs either way: a row of the vertical bar
+            // holds one tab, a row of the horizontal bar holds a screenful.
+            const int step = (app_.tabBarPosition() == TabBarPosition::Left) ? 3 : 1;
+            const int wanted =
+                pane.tabScroll - static_cast<int>(std::lround(e.wheel * static_cast<float>(step)));
+            pane.tabScroll = std::clamp(wanted, 0, pane.tabRows - pane.tabRowsPerPage);
+            // The wheel is an answer to "show me somewhere else", so it takes
+            // over from the active tab until that changes again.
+            pane.tabScrollFor = pane.active;
             app_.host().Invalidate();
             return true;
         }
