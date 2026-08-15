@@ -78,6 +78,11 @@ void ChevronRight(Renderer& r, const RectF& box, const Color& c) {
     r.FillTriangle({ s.l, s.t }, { s.r, s.center().y }, { s.l, s.b }, c);
 }
 
+void ChevronLeft(Renderer& r, const RectF& box, const Color& c) {
+    const RectF s = Square(box, 0.5f);
+    r.FillTriangle({ s.r, s.t }, { s.r, s.b }, { s.l, s.center().y }, c);
+}
+
 void Cross(Renderer& r, const RectF& box, const Color& c, float weight) {
     const RectF s = Square(box, 0.55f);
     r.DrawLine(s.l, s.t, s.r, s.b, c, weight);

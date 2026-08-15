@@ -110,6 +110,10 @@ private:
         CompletionRow,
         KeyPanel,
         KeyRow,
+        SettingsPanel,
+        SettingsRow,
+        SettingsPrev,
+        SettingsNext,
     };
 
     /// 左ボタンが今おこなっている操作。
@@ -145,7 +149,25 @@ private:
     bool PointerOver(const RectF& box) const;
     bool Hovered(const RectF& box) const;
 
+    /// セッションバーに並べた 1 個ぶん。折り返した結果の行番号を持つ。
+    struct Chip {
+        RectF box;      ///< 画面上の位置。折り返しとスクロールを済ませた後の値
+        int index = 0;  ///< セッションの添字
+    };
+
+    /// タブバーを折り返した結果。行の高さは Theme::tabBarHeight。
+    struct TabLayout {
+        float perTab = 0.0f;  ///< タブ 1 枚の幅
+        int perRow = 1;       ///< 1 行に並ぶ枚数
+        int rows = 1;         ///< 折り返して必要になった行数
+        int firstRow = 0;     ///< 画面に出る先頭の行
+        int shownRows = 1;    ///< 実際に描く行数。rows を超えない
+        float height = 0.0f;  ///< バー全体の高さ
+    };
+
+    float LayoutSessionBar(Renderer& r, const RectF& area);
     void PaintSessionBar(Renderer& r, const RectF& area);
+    TabLayout LayoutTabBar(const Pane& pane, float width, float paneHeight) const;
     void PaintSidebar(Renderer& r, const RectF& area);
     void PaintStatusBar(Renderer& r, const RectF& area);
     void PaintPromptField(Renderer& r, const RectF& field);
@@ -155,9 +177,12 @@ private:
     void PaintKeyHelp(Renderer& r, const RectF& area);
     void PaintKeySettings(Renderer& r, const RectF& area);
     bool HandleKeySettingsClick(const MouseEvent& e);
+    void PaintSettings(Renderer& r, const RectF& area);
+    bool HandleSettingsClick(const MouseEvent& e);
     void PaintNode(Renderer& r, SplitNode* node, const RectF& area);
     void PaintPane(Renderer& r, Pane* pane, const RectF& area);
-    void PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused);
+    void PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused,
+                     const TabLayout& layout);
     Color FocusColor(bool focused) const;
     void PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool focused);
     void PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool focused);
@@ -248,6 +273,14 @@ private:
     RectF completionRect_{};
     int completionTop_ = 0;   // first candidate on screen
     int completionRows_ = 0;  // how many fit
+
+    // The session chips, laid out before the bar is painted: the bar's height is
+    // however many rows they wrapped into, and everything below it has to be
+    // placed after that is known. Positions are absolute, so the layout pass and
+    // the paint pass cannot disagree about where a chip is.
+    std::vector<Chip> sessionChips_;
+    RectF sessionAdd_{};
+    RectF sessionBrand_{};
 
     float sidebarScroll_ = 0.0f;
     RectF sidebarRect_{};

@@ -14,6 +14,7 @@
 
 #include "core/app/Host.h"
 #include "core/app/IconProvider.h"
+#include "core/app/SettingsEditor.h"
 #include "core/base/Ini.h"
 #include "core/fs/DirectoryLoader.h"
 #include "core/fs/DirectoryWatcher.h"
@@ -258,6 +259,26 @@ public:
     ///       保存はそちらが行う
     KeyEditor& keyEditor() { return keyEditor_; }
 
+    /// @brief 設定画面の状態を返す。
+    /// @return 設定画面への参照
+    const SettingsEditor& settingsEditor() const { return settingsEditor_; }
+
+    /// @brief 設定画面の状態を返す（変更可能）。
+    /// @return 設定画面への参照
+    /// @note UI 層がマウス操作（行の選択、値の増減）に使う。値を変えたあとの反映と
+    ///       settings.ini への保存は App::ApplyPendingSetting() が行うので、値を
+    ///       動かしたら必ずそれを呼ぶこと
+    SettingsEditor& settingsEditor() { return settingsEditor_; }
+
+    /// @brief 設定画面で変わった値を反映し、settings.ini へ書き出す。
+    /// @note SettingsEditor::changed() が指す 1 項目だけを反映する。何も変わって
+    ///       いなければ何もしない。UI 層がマウスで値を動かしたあとに呼ぶ
+    void ApplyPendingSetting();
+
+    /// @brief 新しいタブを作る位置を返す。
+    /// @return 設定されている位置
+    NewTabPosition newTabPosition() const { return newTabPosition_; }
+
     /// @brief サイドバーが表示中かを返す。
     /// @return 表示中なら true
     bool sidebarVisible() const { return sidebarVisible_; }
@@ -331,6 +352,18 @@ public:
     /// @brief ペインにフォーカスを移す。
     /// @param[in] pane フォーカスするペイン。nullptr なら何もしない
     void FocusPane(Pane* pane);
+
+    /// @brief フォーカス中のペインのタブを切り替える。
+    /// @param[in] index アクティブにするタブの添字。負値なら最後のタブ
+    /// @note 一覧を解放したタブ（背面に回っていたセッションのもの）を選んだときに
+    ///       再列挙を要求するので、UI 層はタブを直接 Pane::Activate せずここを通すこと
+    void GotoTab(int index);
+
+    /// @brief セッションを切り替える。
+    /// @param[in] index アクティブにするセッションの添字。範囲外なら何もしない
+    /// @note UI 層はセッションチップのクリックでここを呼ぶ。`Cmd::Session1..8` は
+    ///       8 個しか無いので、9 個目以降のチップをコマンドに直すことはできない
+    void GotoSession(int index);
 
     /// @brief ウィンドウが OS のフォーカスを持っているかを記録する。
     /// @param[in] active 持っていれば true
@@ -446,7 +479,11 @@ private:
 
     void LoadConfig();
     void LoadSidebarSections();
+    void LoadLanguage();
     void ApplyTheme();
+    SettingsValues CollectSettings() const;
+    void ApplySetting(SettingId id, const SettingsValues& values);
+    int NewTabAt(const Pane& pane) const;
     void SetFontScale(float scale);
     void LoadWorkspace(const std::vector<std::string>& startPaths);
     bool SaveWorkspaceFile();
@@ -475,8 +512,6 @@ private:
 
     void UpdateTitle();
 
-    void GotoTab(int index);
-    void GotoSession(int index);
     void GotoBookmark(int index);
     void DoDelete(bool permanent);
     void DoPaste();
@@ -492,6 +527,7 @@ private:
     Workspace workspace_;
     KeyMap keymap_;
     KeyEditor keyEditor_;
+    SettingsEditor settingsEditor_;
     Strings strings_;
     Theme theme_;
     Ini settings_;
@@ -522,6 +558,7 @@ private:
     bool darkTheme_ = true;
     bool shellIcons_ = true;
     bool standalone_ = false;
+    NewTabPosition newTabPosition_ = NewTabPosition::End;
     std::string language_ = "auto";
     ViewState defaultView_;
 

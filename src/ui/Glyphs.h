@@ -63,6 +63,12 @@ void ChevronUp(Renderer& r, const RectF& box, const Color& c);
 /// @param[in] c 描画色
 void ChevronRight(Renderer& r, const RectF& box, const Color& c);
 
+/// @brief 左向きの三角を描く。設定画面で値を戻す側に使う。
+/// @param[in,out] r 描画先
+/// @param[in] box 収める矩形
+/// @param[in] c 描画色
+void ChevronLeft(Renderer& r, const RectF& box, const Color& c);
+
 /// @brief 閉じるボタンの × を描く。
 /// @param[in,out] r 描画先
 /// @param[in] box 収める矩形

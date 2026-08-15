@@ -36,9 +36,19 @@ SortKey SortKeyFromName(const std::string& s) {
 
 // Text-size limits. The floor is where the row height stops leaving room for an
 // icon, the ceiling where a pane stops holding enough rows to be a listing.
+// The settings screen offers the same range in the same 0.1 steps; widening one
+// side alone would leave sizes the keys can reach and the screen cannot.
 constexpr float kFontScaleMin = 0.7f;
 constexpr float kFontScaleMax = 2.0f;
 constexpr float kFontScaleStep = 0.1f;
+
+const char* NewTabPositionName(NewTabPosition p) {
+    return p == NewTabPosition::AfterCurrent ? "after_current" : "end";
+}
+
+NewTabPosition NewTabPositionFromName(const std::string& s) {
+    return s == "after_current" ? NewTabPosition::AfterCurrent : NewTabPosition::End;
+}
 
 // Move one element, taking `to` as the index it should end up at once the
 // element has been lifted out - the same convention Pane::ReorderTab uses.
@@ -272,20 +282,12 @@ void App::LoadConfig() {
     ApplyTheme();
 
     language_ = settings_.GetStr("ui", "language", "auto");
-    std::string code = language_;
-    if (code == "auto" || code.empty()) code = plat::PreferredLanguage();
-    strings_.Load(code);
-
-    // Optional user translation file, e.g. lang.ja.ini - lets a new locale ship
-    // without touching the binary.
-    Ini langIni;
-    const std::string langFile = path::Join(fs_.ConfigDir(), "lang." + strings_.code() + ".ini");
-    if (plat::ReadTextFile(langFile, text)) {
-        langIni.Parse(text);
-        strings_.ApplyOverrides(langIni);
-    }
+    LoadLanguage();
 
     sidebarVisible_ = settings_.GetBool("ui", "sidebar", true);
+    // 既定は現行動作の「末尾」。ブラウザに合わせて隣に挿す人と、開いた順に並べて
+    // おきたい人で分かれるので、どちらかを正解にせず設定にしてある。
+    newTabPosition_ = NewTabPositionFromName(settings_.GetStr("ui", "new_tab_position", "end"));
     ReadOrder(settings_, SidebarOrderSection(SidebarSection::QuickAccess), quickAccessOrder_);
     ReadOrder(settings_, SidebarOrderSection(SidebarSection::Drives), driveOrder_);
     for (size_t i = 0; i < static_cast<size_t>(SidebarSection::Count); ++i) {
@@ -336,6 +338,26 @@ void App::LoadConfig() {
                 workspace_.bookmarks.push_back({ e.key, e.value });
             }
         }
+    }
+}
+
+// The language is always loaded in the same two steps: the built-in table, then
+// the user's lang.<code>.ini on top. Anything that reloads the table without the
+// second step - the language toggle used to - silently drops every line the user
+// translated themselves.
+void App::LoadLanguage() {
+    std::string code = language_;
+    if (code == "auto" || code.empty()) code = plat::PreferredLanguage();
+    strings_.Load(code);
+
+    // Optional user translation file, e.g. lang.ja.ini - lets a new locale ship
+    // without touching the binary.
+    std::string text;
+    const std::string langFile = path::Join(fs_.ConfigDir(), "lang." + strings_.code() + ".ini");
+    if (plat::ReadTextFile(langFile, text)) {
+        Ini langIni;
+        langIni.Parse(text);
+        strings_.ApplyOverrides(langIni);
     }
 }
 
@@ -394,6 +416,80 @@ bool App::WriteKeysFile() {
     return WriteConfigFile("keys.ini", out);
 }
 
+// 設定画面に見せる現在値。実体はここにある個々のメンバで、設定画面が持つのは
+// 「選択肢の何番目か」だけ。
+SettingsValues App::CollectSettings() const {
+    SettingsValues v;
+    v.Set(SettingId::Theme, darkTheme_ ? 0 : 1);
+    v.Set(SettingId::Language, LanguageIndex(language_));
+    v.Set(SettingId::FontScale, FontScaleIndex(fontScale_));
+    v.Set(SettingId::Sidebar, sidebarVisible_ ? 1 : 0);
+    v.Set(SettingId::ShellIcons, shellIcons_ ? 1 : 0);
+    v.Set(SettingId::NewTabPos, newTabPosition_ == NewTabPosition::AfterCurrent ? 1 : 0);
+    v.Set(SettingId::NewTabHidden, defaultView_.showHidden ? 1 : 0);
+    v.Set(SettingId::NewTabDirsFirst, defaultView_.dirsFirst ? 1 : 0);
+    return v;
+}
+
+// 変わった 1 項目だけを反映する。全項目を書き戻すと、設定画面が選択肢を持たない値
+// （lang.fr.ini を置いた人の language = fr）まで先頭の選択肢で上書きされる。
+void App::ApplySetting(SettingId id, const SettingsValues& values) {
+    const int index = values.Get(id);
+    switch (id) {
+        case SettingId::Theme:
+            darkTheme_ = (index == 0);
+            ApplyTheme();
+            break;
+        case SettingId::Language:
+            language_ = LanguageCode(index);
+            LoadLanguage();
+            break;
+        case SettingId::FontScale:
+            // SetFontScale はステータス行に倍率を出すが、ここでは画面に値が出て
+            // いるので通さない。テーマの組み直しだけを借りる。
+            fontScale_ = std::clamp(FontScaleValue(index), kFontScaleMin, kFontScaleMax);
+            ApplyTheme();
+            break;
+        case SettingId::Sidebar:
+            sidebarVisible_ = (index != 0);
+            break;
+        case SettingId::ShellIcons:
+            shellIcons_ = (index != 0);
+            break;
+        case SettingId::NewTabPos:
+            newTabPosition_ = (index != 0) ? NewTabPosition::AfterCurrent : NewTabPosition::End;
+            break;
+        case SettingId::NewTabHidden:
+            defaultView_.showHidden = (index != 0);
+            break;
+        case SettingId::NewTabDirsFirst:
+            defaultView_.dirsFirst = (index != 0);
+            break;
+        default:
+            return;
+    }
+    dirty_ = true;
+    host_.Invalidate();
+}
+
+void App::ApplyPendingSetting() {
+    const SettingId id = settingsEditor_.changed();
+    if (id == SettingId::Count) return;
+    ApplySetting(id, settingsEditor_.values());
+    settingsEditor_.ClearChanged();
+    // 言語を変えると自分自身のラベルも変わる。
+    settingsEditor_.Rebuild(strings_);
+
+    // キーの設定と同じ扱いで、その場で書き出す ─ 目の前で効いた変更が、次に落ちた
+    // ときに黙って消えるほうが実害が大きい。単独ウィンドウは何も書かない
+    // （SaveAll と同じ理由。書けば後から閉じたほうが本体の設定を古い内容で潰す）。
+    if (!standalone_) SaveSettings();
+}
+
+int App::NewTabAt(const Pane& pane) const {
+    return newTabPosition_ == NewTabPosition::AfterCurrent ? pane.active + 1 : -1;
+}
+
 void App::CloseKeyEditor() {
     keyEditor_.Close();
     // Every change went to disk as it was made; this only confirms it once, on
@@ -418,6 +514,7 @@ bool App::SaveSettings() {
     }
     settings_.SetFloat("ui", "font_scale", fontScale_);
     settings_.SetBool("ui", "shell_icons", shellIcons_);
+    settings_.Set("ui", "new_tab_position", NewTabPositionName(newTabPosition_));
 
     // Rewritten whole rather than merged: a folder that has since disappeared
     // would otherwise sit in the file forever, holding a slot nothing fills.
@@ -704,7 +801,7 @@ void App::OpenPath(const std::string& p, bool newTab) {
     Pane* pane = workspace_.focusedPane();
     if (!pane) return;
     if (newTab) {
-        Tab* t = pane->AddTab(path::Normalize(p));
+        Tab* t = pane->AddTab(path::Normalize(p), NewTabAt(*pane));
         t->view = defaultView_;
         RequestLoad(*t, true);
         dirty_ = true;
@@ -1294,6 +1391,9 @@ bool App::HandlePromptKey(const Chord& chord) {
 }
 
 bool App::OnChar(uint32_t cp) {
+    // 設定画面は絞り込みを持たないが、打鍵は残らず飲み込む ─ 出しっぱなしの
+    // 画面の裏でプロンプトが文字を受け取っては困る。
+    if (settingsEditor_.visible()) return true;
     if (keyEditor_.visible()) {
         if (!keyEditor_.HandleChar(cp, strings_, keymap_)) return false;
         host_.Invalidate();
@@ -1321,6 +1421,19 @@ bool App::OnChar(uint32_t cp) {
 }
 
 bool App::OnKey(const Chord& chord) {
+    if (settingsEditor_.visible()) {
+        // 開いたキーがそのまま閉じるキーになる。ショートカットの設定へ抜ける道も
+        // 開けておく ─ 設定画面から「キーの設定」へ行けないのは不親切なだけ。
+        const Cmd c = keymap_.Lookup(chord);
+        if (c == Cmd::ShowSettings || c == Cmd::ShowKeySettings || c == Cmd::ShowKeyHelp) {
+            Execute(c);
+            return true;
+        }
+        const bool consumed = settingsEditor_.HandleKey(chord, strings_);
+        ApplyPendingSetting();
+        host_.Invalidate();
+        return consumed;
+    }
     if (keyEditor_.visible()) {
         // Its own chord still toggles it shut, so the key that opened the screen
         // is also the key that leaves it. Everything else the editor decides -
@@ -1452,14 +1565,17 @@ void App::Execute(Cmd cmd) {
             break;
         case Cmd::ToggleLanguage: {
             language_ = (strings_.code() == "ja") ? "en" : "ja";
-            strings_.Load(language_);
+            LoadLanguage();
             dirty_ = true;
             host_.Invalidate();
             break;
         }
         case Cmd::ShowKeyHelp:
             keyHelp_ = !keyHelp_;
-            if (keyHelp_) keyEditor_.Close();
+            if (keyHelp_) {
+                keyEditor_.Close();
+                settingsEditor_.Close();
+            }
             host_.Invalidate();
             break;
         case Cmd::ShowKeySettings:
@@ -1469,12 +1585,28 @@ void App::Execute(Cmd cmd) {
                 // The read-only sheet and the editor show the same table; two of
                 // them on screen at once would only be confusing.
                 keyHelp_ = false;
+                settingsEditor_.Close();
                 keyEditor_.Open(strings_, keymap_);
             }
             host_.Invalidate();
             break;
+        case Cmd::ShowSettings:
+            if (settingsEditor_.visible()) {
+                settingsEditor_.Close();
+            } else {
+                keyHelp_ = false;
+                keyEditor_.Close();
+                // 開くたびに現在値から作り直す。設定は画面の外（Ctrl+Shift+M の
+                // テーマ切り替え、Ctrl++ の文字サイズ）からも変わる。
+                settingsEditor_.Open(strings_, CollectSettings());
+                if (standalone_) SetStatus(strings_.Get("ui.settings_no_save"));
+            }
+            host_.Invalidate();
+            break;
         case Cmd::CancelOverlay:
-            if (keyEditor_.visible()) {
+            if (settingsEditor_.visible()) {
+                settingsEditor_.Close();
+            } else if (keyEditor_.visible()) {
                 CloseKeyEditor();
             } else if (keyHelp_) {
                 keyHelp_ = false;
@@ -1614,7 +1746,7 @@ void App::Execute(Cmd cmd) {
         // --- tabs ------------------------------------------------------------
         case Cmd::NewTab: {
             if (!pane) break;
-            Tab* t = pane->AddTab(tab ? tab->path : fs_.HomeDir());
+            Tab* t = pane->AddTab(tab ? tab->path : fs_.HomeDir(), NewTabAt(*pane));
             t->view = defaultView_;
             RequestLoad(*t, true);
             dirty_ = true;
@@ -1645,7 +1777,7 @@ void App::Execute(Cmd cmd) {
             if (!pane || workspace_.closedTabs.empty()) break;
             const std::string p = workspace_.closedTabs.back();
             workspace_.closedTabs.pop_back();
-            Tab* t = pane->AddTab(p);
+            Tab* t = pane->AddTab(p, NewTabAt(*pane));
             t->view = defaultView_;
             RequestLoad(*t, true);
             host_.Invalidate();

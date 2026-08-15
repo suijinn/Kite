@@ -94,6 +94,7 @@ add_library(kite_core STATIC
     src/core/app/App.cpp
     src/core/app/ConfigDir.cpp
     src/core/app/IconProvider.cpp
+    src/core/app/SettingsEditor.cpp
     src/core/base/Format.cpp
     src/core/base/Ini.cpp
     src/core/base/PathUtil.cpp
@@ -238,6 +239,7 @@ if(KITE_BUILD_TESTS)
         tests/test_strings.cpp
         tests/test_keymap.cpp
         tests/test_keyeditor.cpp
+        tests/test_settings.cpp
         tests/test_pathcomplete.cpp
         tests/test_configdir.cpp
         tests/test_iconcache.cpp
@@ -254,8 +256,8 @@ if(KITE_BUILD_TESTS)
 
     # One CTest entry per suite so a failure names the area straight away.
     set(KITE_TEST_SUITES
-        utf8 path ini format strings keymap keyeditor pathcomplete theme tab workspace session app appui drop
-        iconcache hostproto config)
+        utf8 path ini format strings keymap keyeditor settings pathcomplete theme tab workspace session
+        app appui drop iconcache hostproto config)
 
     foreach(suite IN LISTS KITE_TEST_SUITES)
         add_test(NAME ${suite} COMMAND kite_tests --filter ${suite}.)

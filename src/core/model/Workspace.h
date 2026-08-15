@@ -163,7 +163,6 @@ class Pane {
 public:
     std::vector<std::unique_ptr<Tab>> tabs;  ///< 保持しているタブ
     int active = 0;                          ///< アクティブなタブの添字
-    float tabScroll = 0.0f;                  ///< タブバーのスクロール量
 
     float listHeight = 0.0f;  ///< 一覧領域の高さ。UI 層がレイアウトごとに書き込む
     float rowHeight = 22.0f;  ///< 1 行の高さ。UI 層がレイアウトごとに書き込む
