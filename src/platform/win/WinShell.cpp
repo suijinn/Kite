@@ -240,4 +240,49 @@ bool WinShell::GetClipboardFiles(std::vector<std::string>& paths, bool* cut) {
     return ok;
 }
 
+bool WinShell::GetClipboardText(std::string& utf8) {
+    if (!::IsClipboardFormatAvailable(CF_UNICODETEXT)) return false;
+    if (!::OpenClipboard(hwnd_)) return false;
+
+    bool ok = false;
+    if (HANDLE data = ::GetClipboardData(CF_UNICODETEXT)) {
+        if (const auto* text = static_cast<const wchar_t*>(::GlobalLock(data))) {
+            utf8 = ToUtf8(text);
+            ::GlobalUnlock(data);
+            ok = true;
+        }
+    }
+    ::CloseClipboard();
+    return ok;
+}
+
+bool WinShell::ConnectNetwork(const std::string& uncRoot, std::string* err) {
+    if (uncRoot.empty()) return false;
+
+    // A share can be connected to directly; a bare server has no share to name,
+    // and IPC$ is the one every SMB server offers for exactly this - it is what
+    // carries the logon, after which the share enumeration succeeds.
+    std::string target = uncRoot;
+    while (!target.empty() && path::IsSep(target.back())) target.pop_back();
+    if (path::IsUncServer(target)) target += "\\IPC$";
+
+    std::wstring remote = ToWide(target);
+    NETRESOURCEW spec{};
+    spec.dwType = RESOURCETYPE_DISK;
+    spec.lpRemoteName = remote.data();
+
+    // No local name: the connection stays deviceless, so nothing appears as a
+    // drive letter and nothing is left behind for the next logon to restore.
+    const DWORD code = ::WNetAddConnection3W(hwnd_, &spec, nullptr, nullptr,
+                                             CONNECT_INTERACTIVE | CONNECT_PROMPT);
+    if (code == NO_ERROR || code == ERROR_ALREADY_ASSIGNED ||
+        code == ERROR_SESSION_CREDENTIAL_CONFLICT) {
+        return true;
+    }
+    // ERROR_CANCELLED is the user closing the credential dialog; there is
+    // nothing to report about a decision they just made.
+    if (err && code != ERROR_CANCELLED) *err = ErrorText(code);
+    return false;
+}
+
 }  // namespace kite::win

@@ -81,6 +81,23 @@ public:
     /// @param[out] cut 切り取りなら true が入る。不要なら nullptr
     /// @return ファイルが取得できたら true。テキストしか無い場合などは false
     virtual bool GetClipboardFiles(std::vector<std::string>& paths, bool* cut) = 0;
+
+    /// @brief クリップボードからテキストを取得する。
+    /// @param[out] utf8 取得した文字列。失敗時は書き換えない
+    /// @return テキストが取得できたら true。ファイルしか無い場合などは false
+    /// @note 入力欄の貼り付けが使う。ファイル側（GetClipboardFiles）とは別物で、
+    ///       エクスプローラーの「パスのコピー」は前者、ファイルのコピーは後者になる
+    virtual bool GetClipboardText(std::string& utf8) = 0;
+
+    /// @brief ネットワークの場所へ接続する。必要なら OS に資格情報を尋ねさせる。
+    /// @param[in] uncRoot 接続先。"\\\\server" または "\\\\server\\share"
+    /// @param[out] err 失敗理由。不要なら nullptr
+    /// @return 接続できたら true。利用者が取り消した場合も false
+    /// @note 資格情報の入力欄を出すのは OS で、Kite は受け取らないし保存もしない。
+    ///       ダイアログが閉じるまで戻らないので、利用者が明示的に呼んだときだけ
+    ///       実行すること ─ 列挙の失敗から自動で呼ぶと、アドレスバーに打鍵した
+    ///       だけでダイアログが飛び出す
+    virtual bool ConnectNetwork(const std::string& uncRoot, std::string* err) = 0;
 };
 
 /// @brief ウィンドウ自身が提供するサービス。

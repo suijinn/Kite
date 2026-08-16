@@ -69,9 +69,17 @@ public:
         dirs[dir].push_back(entry);
     }
 
+    // Folders that answer "access denied" instead of listing - what a share
+    // wanting a logon looks like from here.
+    std::vector<std::string> denied;
+
     fs::ListResult List(const std::string& dir) override {
         ++listCalls;
         fs::ListResult result;
+        if (std::find(denied.begin(), denied.end(), dir) != denied.end()) {
+            result.status = fs::Status::AccessDenied;
+            return result;
+        }
         auto it = dirs.find(dir);
         if (it == dirs.end()) {
             result.status = fs::Status::NotFound;
@@ -234,6 +242,34 @@ public:
         paths = clipboardFiles;
         if (cut) *cut = clipboardCut;
         return true;
+    }
+
+    // What a paste finds. Kept apart from clipboardText, which records what Kite
+    // put there - a test that seeds one and asserts on the other would pass
+    // without either side working.
+    std::string clipboardTextIn;
+    bool hasClipboardText = false;
+
+    bool GetClipboardText(std::string& utf8) override {
+        if (!hasClipboardText) return false;
+        utf8 = clipboardTextIn;
+        return true;
+    }
+
+    void SetIncomingText(const std::string& text) {
+        clipboardTextIn = text;
+        hasClipboardText = true;
+    }
+
+    // Places a sign-in was asked for, in order, and whether the OS said yes.
+    std::vector<std::string> connectCalls;
+    bool connectSucceeds = true;
+
+    bool ConnectNetwork(const std::string& uncRoot, std::string* err) override {
+        connectCalls.push_back(uncRoot);
+        if (connectSucceeds) return true;
+        if (err) *err = "refused";
+        return false;
     }
 };
 

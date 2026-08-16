@@ -20,8 +20,32 @@ KITE_TEST(path, parent_walks_up_to_the_root_then_stops) {
 
 KITE_TEST(path, parent_handles_unc_roots) {
     KITE_EXPECT_EQ(path::Parent("\\\\server\\share\\dir"), std::string("\\\\server\\share\\"));
-    // The share itself is a root: there is nowhere above it to go.
-    KITE_EXPECT_EQ(path::Parent("\\\\server\\share\\"), std::string(""));
+    // Above a share is the server, which lists the shares it offers.
+    KITE_EXPECT_EQ(path::Parent("\\\\server\\share\\"), std::string("\\\\server"));
+    KITE_EXPECT_EQ(path::Parent("\\\\server\\share"), std::string("\\\\server"));
+    // The server is the top; a trailing separator does not invent another level.
+    KITE_EXPECT_EQ(path::Parent("\\\\server"), std::string(""));
+    KITE_EXPECT_EQ(path::Parent("\\\\server\\"), std::string(""));
+}
+
+KITE_TEST(path, unc_server_and_share_are_told_apart) {
+    KITE_EXPECT(path::IsUncServer("\\\\192.168.1.5"));
+    KITE_EXPECT(path::IsUncServer("\\\\192.168.1.5\\"));
+    KITE_EXPECT_FALSE(path::IsUncServer("\\\\192.168.1.5\\public"));
+    KITE_EXPECT_FALSE(path::IsUncServer("C:\\a"));
+    KITE_EXPECT_FALSE(path::IsUncServer("\\\\"));
+
+    KITE_EXPECT_EQ(path::UncServerLength("\\\\nas\\pub\\a"), size_t(5));
+    KITE_EXPECT_EQ(path::UncServerLength("C:\\a"), size_t(0));
+}
+
+// What a credential prompt is aimed at: the connection, not the folder inside it.
+KITE_TEST(path, unc_root_stops_at_the_share) {
+    KITE_EXPECT_EQ(path::UncRoot("\\\\nas\\pub\\a\\b"), std::string("\\\\nas\\pub"));
+    KITE_EXPECT_EQ(path::UncRoot("\\\\nas\\pub"), std::string("\\\\nas\\pub"));
+    KITE_EXPECT_EQ(path::UncRoot("\\\\nas"), std::string("\\\\nas"));
+    KITE_EXPECT_EQ(path::UncRoot("\\\\nas\\"), std::string("\\\\nas"));
+    KITE_EXPECT_EQ(path::UncRoot("C:\\a"), std::string(""));
 }
 
 KITE_TEST(path, filename_and_stem_and_extension) {
@@ -85,6 +109,11 @@ KITE_TEST(path, normalize_collapses_and_resolves) {
     KITE_EXPECT_EQ(path::Normalize("c:\\a"), std::string("C:\\a"));
     // Walking above the root must not escape it.
     KITE_EXPECT_EQ(path::Normalize("C:\\..\\..\\a"), std::string("C:\\a"));
+    // A server keeps its own spelling: there is no share to end, so the trailing
+    // separator a drive root carries has no counterpart and is dropped.
+    KITE_EXPECT_EQ(path::Normalize("//192.168.1.5/"), std::string("\\\\192.168.1.5"));
+    KITE_EXPECT_EQ(path::Normalize("\\\\192.168.1.5"), std::string("\\\\192.168.1.5"));
+    KITE_EXPECT_EQ(path::Normalize("\\\\nas/pub/a"), std::string("\\\\nas\\pub\\a"));
 }
 
 KITE_TEST(path, display_name_trims_the_root_separator) {

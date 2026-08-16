@@ -166,7 +166,8 @@ enum class CmdGroup : uint8_t {
     X(Properties,         "shell.properties",        "cmd.properties",         Shell)            \
     X(OpenWith,           "shell.open_with",         "cmd.open_with",          Shell)            \
     X(RevealInExplorer,   "shell.reveal",            "cmd.reveal",             Shell)            \
-    X(OpenTerminal,       "shell.terminal",          "cmd.terminal",           Shell)
+    X(OpenTerminal,       "shell.terminal",          "cmd.terminal",           Shell)            \
+    X(ConnectNetwork,     "shell.connect_network",   "cmd.connect_network",    Shell)
 
 /// @brief コマンド識別子。KITE_COMMAND_LIST から生成される。
 ///

@@ -48,7 +48,15 @@ std::string Join(std::string_view a, std::string_view b) {
 std::string Parent(std::string_view p) {
     while (p.size() > RootLength(p) && IsSep(p.back())) p.remove_suffix(1);
     const size_t root = RootLength(p);
-    if (p.size() <= root) return {};  // already a root
+    if (p.size() <= root) {
+        // A share is a root as far as the filesystem is concerned, but the
+        // server above it holds the list of shares, so it is somewhere to go.
+        const size_t server = UncServerLength(p);
+        if (server > 0 && p.find_first_not_of("\\/", server) != std::string_view::npos) {
+            return std::string(p.substr(0, server));
+        }
+        return {};  // already a root
+    }
 
     size_t i = p.size();
     while (i > root && !IsSep(p[i - 1])) --i;
@@ -101,6 +109,32 @@ bool IsRoot(std::string_view p) {
     return root > 0 && p.size() <= root;
 }
 
+size_t UncServerLength(std::string_view p) {
+    if (p.size() < 3 || !IsSep(p[0]) || !IsSep(p[1])) return 0;
+    size_t i = 2;
+    while (i < p.size() && !IsSep(p[i])) ++i;
+    return i > 2 ? i : 0;
+}
+
+bool IsUncServer(std::string_view p) {
+    const size_t server = UncServerLength(p);
+    if (server == 0) return false;
+    return p.find_first_not_of("\\/", server) == std::string_view::npos;
+}
+
+std::string UncRoot(std::string_view p) {
+    const size_t server = UncServerLength(p);
+    if (server == 0) return {};
+    const size_t shareBegin = p.find_first_not_of("\\/", server);
+    if (shareBegin == std::string_view::npos) return std::string(p.substr(0, server));
+    size_t shareEnd = shareBegin;
+    while (shareEnd < p.size() && !IsSep(p[shareEnd])) ++shareEnd;
+    std::string out(p.substr(0, server));
+    out.push_back(kSep);
+    out.append(p.substr(shareBegin, shareEnd - shareBegin));
+    return out;
+}
+
 std::string Normalize(std::string_view p) {
     const size_t root = RootLength(p);
     std::string head(p.substr(0, root));
@@ -132,6 +166,13 @@ std::string Normalize(std::string_view p) {
         out.append(parts[k]);
     }
     if (out.empty()) out = head;
+    // "\\srv\" and "\\srv" name the same place, and a drive's trailing separator
+    // has no counterpart here: there is no share to end. Settling on one spelling
+    // keeps a tab from looking like it moved when it did not.
+    const size_t server = UncServerLength(out);
+    if (server > 0 && out.find_first_not_of("\\/", server) == std::string::npos) {
+        out.resize(server);
+    }
     return out;
 }
 

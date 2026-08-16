@@ -581,6 +581,148 @@ KITE_TEST(app, ctrl_and_arrows_move_a_whole_path_component) {
     KITE_EXPECT_EQ(h.app.prompt().text, std::string("C:\\home\\beta\\nested"));
 }
 
+// --- the field's own clipboard -------------------------------------------
+//
+// Ctrl+C and Ctrl+V are Cmd::Copy and Cmd::Paste to the key map, and those act
+// on the listing. While a field holds the keyboard they have to mean the field
+// instead, or the address bar is the one text box in Kite you cannot paste a
+// path into.
+
+KITE_TEST(app, ctrl_c_in_the_address_bar_copies_the_field_not_the_listing) {
+    Harness h;
+    h.app.Execute(Cmd::EditPath);  // opens with everything selected
+    KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+C")));
+    KITE_EXPECT_EQ(h.shell.clipboardText.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.shell.clipboardText.back(), std::string("C:\\home"));
+    // The listing was left alone: no files went to the clipboard.
+    KITE_EXPECT(h.shell.clipboardFiles.empty());
+
+    // With the selection collapsed there is still one obvious thing to copy.
+    h.app.OnKey(ParseChord("End"));
+    h.app.OnKey(ParseChord("Ctrl+C"));
+    KITE_EXPECT_EQ(h.shell.clipboardText.back(), std::string("C:\\home"));
+
+    // Cut is the half that can lose text, so it waits for a range to take.
+    KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+X")));
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("C:\\home"));
+    h.app.OnKey(ParseChord("Ctrl+Shift+Left"));
+    h.app.OnKey(ParseChord("Ctrl+X"));
+    KITE_EXPECT_EQ(h.shell.clipboardText.back(), std::string("home"));
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("C:\\"));
+}
+
+KITE_TEST(app, pasting_into_the_address_bar_takes_one_line_and_drops_the_quotes) {
+    Harness h;
+    // Exactly what Explorer's "Copy as path" puts on the clipboard, plus a
+    // second line to prove only the first survives.
+    h.shell.SetIncomingText("\"\\\\192.168.1.5\\pub\"\r\nC:\\other");
+
+    h.app.Execute(Cmd::EditPath);
+    KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+V")));
+    // The whole field was selected, so the paste replaced it.
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("\\\\192.168.1.5\\pub"));
+    KITE_EXPECT_EQ(h.app.prompt().caret, h.app.prompt().text.size());
+
+    // Shift+Insert is the same key in its older spelling.
+    h.app.OnKey(ParseChord("Ctrl+A"));
+    KITE_EXPECT(h.app.OnKey(ParseChord("Shift+Insert")));
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("\\\\192.168.1.5\\pub"));
+}
+
+KITE_TEST(app, pasting_falls_back_to_a_copied_file_when_there_is_no_text) {
+    Harness h;
+    h.shell.clipboardFiles = { "C:\\home\\alpha" };
+
+    h.app.Execute(Cmd::EditPath);
+    h.app.OnKey(ParseChord("Ctrl+V"));
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("C:\\home\\alpha"));
+}
+
+KITE_TEST(app, the_clipboard_keys_stay_out_of_the_confirmation_prompt) {
+    Harness h;
+    h.shell.SetIncomingText("anything");
+    h.app.Execute(Cmd::CursorDown);
+    h.app.Execute(Cmd::DeleteToRecycle);
+    const std::string shown = h.app.prompt().text;
+
+    KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+V")));
+    KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+X")));
+    KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+C")));
+    KITE_EXPECT_EQ(h.app.prompt().text, shown);
+    KITE_EXPECT(h.shell.clipboardText.empty());
+}
+
+// --- network locations -----------------------------------------------------
+
+KITE_TEST(app, a_share_walks_up_to_the_server_that_lists_it) {
+    Harness h;
+    h.files.dirs["\\\\srv"];
+    h.files.AddFile("\\\\srv", "pub", 0, 0, fs::Attr::Directory);
+    h.files.dirs["\\\\srv\\pub"];
+    h.files.AddFile("\\\\srv\\pub", "readme.txt", 10, 0);
+
+    h.app.Execute(Cmd::EditPath);
+    h.Type("\\\\srv\\pub");
+    h.app.OnKey(ParseChord("Enter"));
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string("\\\\srv\\pub"));
+    KITE_EXPECT(h.tab()->listing.status == fs::Status::Ok);
+
+    // The share used to be the top of the tree. The server above it is a real
+    // place - it holds the list of shares - so ".." has somewhere to go.
+    KITE_EXPECT(h.tab()->IsParentRow(0));
+    h.app.Execute(Cmd::GoUp);
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string("\\\\srv"));
+    KITE_EXPECT_EQ(h.tab()->ItemCount(), 1);  // "pub", and no ".." above it
+    KITE_EXPECT_FALSE(h.tab()->IsParentRow(0));
+}
+
+KITE_TEST(app, signing_in_aims_at_the_share_not_the_folder_inside_it) {
+    Harness h;
+    h.files.dirs["\\\\srv\\pub\\sub"];
+    h.app.Execute(Cmd::EditPath);
+    h.Type("\\\\srv\\pub\\sub");
+    h.app.OnKey(ParseChord("Enter"));
+    h.Settle();
+
+    h.app.Execute(Cmd::ConnectNetwork);
+    KITE_EXPECT_EQ(h.shell.connectCalls.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.shell.connectCalls.back(), std::string("\\\\srv\\pub"));
+}
+
+KITE_TEST(app, signing_in_has_nothing_to_offer_a_local_folder) {
+    Harness h;
+    h.app.Execute(Cmd::ConnectNetwork);
+    KITE_EXPECT(h.shell.connectCalls.empty());
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.not_network_path"));
+}
+
+// "Access denied" on a share is usually a question that has not been asked yet.
+KITE_TEST(app, a_denied_share_names_the_key_that_signs_in) {
+    Harness h;
+    h.files.denied.push_back("\\\\srv\\pub");
+    h.app.Execute(Cmd::EditPath);
+    h.Type("\\\\srv\\pub");
+    h.app.OnKey(ParseChord("Enter"));
+    h.Settle();
+
+    KITE_EXPECT(h.tab()->listing.status == fs::Status::AccessDenied);
+    KITE_EXPECT(h.app.statusMessage().find("Ctrl+Shift+L") != std::string::npos);
+
+    // A local folder that refuses gets no such hint - there is no one to sign
+    // in to, and the suggestion would be noise on top of a real failure.
+    test::FakeClockMs() += 60000;  // let the first message age out
+    KITE_EXPECT(h.app.statusExpired());
+    h.files.denied.push_back("C:\\home\\alpha");
+    h.app.Execute(Cmd::EditPath);
+    h.Type("C:\\home\\alpha");
+    h.app.OnKey(ParseChord("Enter"));
+    h.Settle();
+    KITE_EXPECT(h.tab()->listing.status == fs::Status::AccessDenied);
+    KITE_EXPECT(h.app.statusExpired());
+}
+
 KITE_TEST(app, moving_off_the_end_folds_the_candidate_list) {
     Harness h;
     h.EditPathAppend();
