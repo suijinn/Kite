@@ -432,7 +432,7 @@ public:
     /// @param[in] detail OS が返した補足。空でもよい
     /// @note `SetStatus(err)` を直接呼ばないこと ─ `ErrorText()` は文言を持たない
     ///       コードに空文字列を返すので、そのまま渡すと**何も出ないまま操作だけが
-    ///       失敗する**。書式は一覧のエラー行（AppUi::PaintList）と同じ
+    ///       失敗する**。書式は一覧のエラー行（`AppUi` の `PaintList`）と同じ
     void ReportFailure(const char* key, const std::string& detail);
 
     /// @brief フォーカス中のタブを再列挙する。
