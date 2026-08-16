@@ -26,6 +26,7 @@
 #include "core/input/KeyEditor.h"
 #include "core/input/KeyMap.h"
 #include "core/input/PathComplete.h"
+#include "core/input/TypeAhead.h"
 #include "core/model/Workspace.h"
 #include "core/theme/Theme.h"
 
@@ -542,6 +543,12 @@ private:
     void CancelPrompt();
     void BeginPrompt(PromptKind kind, const char* labelKey, const std::string& initial);
     bool HandlePromptKey(const Chord& chord);
+
+    /// @brief 打鍵を型入力ジャンプに渡し、当たった行へカーソルを移す。
+    /// @param[in] codepoint 入力された Unicode コードポイント
+    /// @return 型入力ジャンプが受け取ったら true
+    bool TypeAheadChar(uint32_t codepoint);
+
     void SyncCompletion(bool open);
     void RequestCompletion();
     bool MoveCompletion(int delta);
@@ -598,6 +605,13 @@ private:
 
     Prompt prompt_;
     PathComplete complete_;
+    TypeAhead typeAhead_;
+    // 直前の打鍵をコマンドが実行した、という印。TranslateMessage は
+    // DispatchMessage の前に走るので、WM_KEYDOWN を消費しても WM_CHAR は止まらない
+    // ─ 印が無いと、キーを割り当てた 1 文字がコマンドの実行後に型入力ジャンプへ
+    // 落ちて一覧が飛ぶ。次の OnKey で必ず落とすうえ、**文字を伴う和音でしか
+    // 立てない** ─ 矢印キーで立てると、印が次の打鍵まで残る。
+    bool swallowChar_ = false;
     // The listing the completion is waiting on. Kept apart from the tabs' own
     // tokens so that typing past a slow folder just drops its answer.
     uint64_t completeToken_ = 0;

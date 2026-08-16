@@ -108,6 +108,7 @@ add_library(kite_core STATIC
     src/core/input/KeyMap.cpp
     src/core/input/Keys.cpp
     src/core/input/PathComplete.cpp
+    src/core/input/TypeAhead.cpp
     src/core/model/Workspace.cpp
     src/core/theme/Theme.cpp
     src/ui/AppUi.cpp
@@ -245,6 +246,7 @@ if(KITE_BUILD_TESTS)
         tests/test_settings.cpp
         tests/test_bookmarkpicker.cpp
         tests/test_pathcomplete.cpp
+        tests/test_typeahead.cpp
         tests/test_configdir.cpp
         tests/test_iconcache.cpp
         tests/test_theme.cpp
@@ -261,7 +263,7 @@ if(KITE_BUILD_TESTS)
 
     # One CTest entry per suite so a failure names the area straight away.
     set(KITE_TEST_SUITES
-        utf8 path ini format strings keymap keyeditor settings pathcomplete theme tab workspace session
+        utf8 path ini format strings keymap keyeditor settings pathcomplete typeahead theme tab workspace session
         app appui drop iconcache hostproto config undo bookmarkpicker)
 
     foreach(suite IN LISTS KITE_TEST_SUITES)

@@ -66,3 +66,14 @@ KITE_TEST(utf8, ascii_case_folding_leaves_multibyte_alone) {
     KITE_EXPECT(utf8::EqualsIgnoreCaseAscii("Kite", "kITE"));
     KITE_EXPECT_FALSE(utf8::EqualsIgnoreCaseAscii("Kite", "Kites"));
 }
+
+KITE_TEST(utf8, prefix_matching_folds_ascii_and_compares_the_rest_byte_for_byte) {
+    KITE_EXPECT(utf8::StartsWithIgnoreCaseAscii("Kite", "ki"));
+    KITE_EXPECT(utf8::StartsWithIgnoreCaseAscii("Kite", "Kite"));
+    // Nothing is not a prefix of everything by accident: the empty string is.
+    KITE_EXPECT(utf8::StartsWithIgnoreCaseAscii("Kite", ""));
+    KITE_EXPECT_FALSE(utf8::StartsWithIgnoreCaseAscii("Kite", "Kites"));
+    KITE_EXPECT_FALSE(utf8::StartsWithIgnoreCaseAscii("", "k"));
+    // \xE8\xB3\x87 = U+8CC7, matched as bytes - there is no case to fold there.
+    KITE_EXPECT(utf8::StartsWithIgnoreCaseAscii("\xE8\xB3\x87\xE6\x96\x99", "\xE8\xB3\x87"));
+}

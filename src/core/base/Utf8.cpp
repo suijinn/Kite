@@ -98,6 +98,17 @@ bool EqualsIgnoreCaseAscii(std::string_view a, std::string_view b) {
     return true;
 }
 
+bool StartsWithIgnoreCaseAscii(std::string_view s, std::string_view prefix) {
+    if (s.size() < prefix.size()) return false;
+    for (size_t i = 0; i < prefix.size(); ++i) {
+        char cs = s[i], cp = prefix[i];
+        if (cs >= 'A' && cs <= 'Z') cs = static_cast<char>(cs + 32);
+        if (cp >= 'A' && cp <= 'Z') cp = static_cast<char>(cp + 32);
+        if (cs != cp) return false;
+    }
+    return true;
+}
+
 bool IsWide(uint32_t cp) {
     return (cp >= 0x1100 && cp <= 0x115F) ||   // Hangul Jamo
            (cp >= 0x2E80 && cp <= 0xA4CF) ||   // CJK radicals .. Yi

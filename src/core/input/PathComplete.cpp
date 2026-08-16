@@ -3,27 +3,9 @@
 #include <algorithm>
 
 #include "core/base/PathUtil.h"
+#include "core/base/Utf8.h"
 
 namespace kite {
-namespace {
-
-char Fold(char c) {
-    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c;
-}
-
-// Prefix match, case-insensitive over ASCII only. Multi-byte names compare byte
-// for byte, which is what UTF-8 gives for free as long as both sides were typed
-// with the same characters - and case folding outside ASCII would need a table
-// this project does not carry.
-bool StartsWithFold(const std::string& name, const std::string& prefix) {
-    if (name.size() < prefix.size()) return false;
-    for (size_t i = 0; i < prefix.size(); ++i) {
-        if (Fold(name[i]) != Fold(prefix[i])) return false;
-    }
-    return true;
-}
-
-}  // namespace
 
 void PathComplete::Reset() {
     *this = PathComplete{};
@@ -81,7 +63,7 @@ void PathComplete::Rebuild() {
         // hidden ones come back: the user is asking for something by name, and
         // refusing to finish a name they can see the start of is just wrong.
         if (prefix_.empty() && c.hidden) continue;
-        if (!StartsWithFold(c.name, prefix_)) continue;
+        if (!utf8::StartsWithIgnoreCaseAscii(c.name, prefix_)) continue;
         matches_.push_back(c.name);
     }
 }

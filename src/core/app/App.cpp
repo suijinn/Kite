@@ -42,6 +42,42 @@ std::string ClipboardToField(std::string_view text) {
     return out;
 }
 
+// Whether a character message is going to follow this chord.
+//
+// Only those chords set the swallow flag. Setting it for the rest would leave
+// it standing until the next keystroke, which is long enough to eat a character
+// that arrives without a key-down of its own - IME composition does exactly
+// that, since the key-down it sends first is VK_PROCESSKEY and never reaches
+// here as a chord at all.
+bool ProducesChar(const Chord& c) {
+    if ((c.mods & (kModCtrl | kModAlt)) != 0) return false;
+    const int k = static_cast<int>(c.key);
+    const auto within = [k](Key lo, Key hi) {
+        return k >= static_cast<int>(lo) && k <= static_cast<int>(hi);
+    };
+    // Enter, Tab, Escape and Backspace are left out on purpose: what follows
+    // them is below U+0020, which type-ahead refuses anyway.
+    return within(Key::A, Key::Num9) || within(Key::Minus, Key::Grave) ||
+           within(Key::NumpadAdd, Key::NumpadDiv) || c.key == Key::Space;
+}
+
+// The listing as type-ahead sees it: names only, and ".." left blank because it
+// is the way out of the folder rather than an item to land on by name.
+class TabRows : public TypeAhead::IRows {
+public:
+    explicit TabRows(const Tab& tab) : tab_(tab) {}
+
+    int Count() const override { return static_cast<int>(tab_.visible.size()); }
+
+    std::string_view NameAt(int index) const override {
+        const fs::Entry* e = tab_.EntryAt(index);
+        return e ? std::string_view(e->name) : std::string_view();
+    }
+
+private:
+    const Tab& tab_;
+};
+
 // Whether each source already has a namesake in the destination, in the order
 // the sources were given. Taken before a transfer so the same question can be
 // asked again afterwards: the shell resolves a collision either by renaming its
@@ -1600,7 +1636,16 @@ bool App::OnChar(uint32_t cp) {
         host_.Invalidate();
         return true;
     }
-    if (!prompt_.active() || prompt_.isConfirm()) return false;
+    if (!prompt_.active()) {
+        // The keystroke that ran a command is spent. Consumed rather than passed
+        // on, so a bound letter does not also beep at the window.
+        if (swallowChar_) {
+            swallowChar_ = false;
+            return true;
+        }
+        return TypeAheadChar(cp);
+    }
+    if (prompt_.isConfirm()) return false;
     if (cp < 0x20 || cp == 0x7F) return false;
 
     std::string encoded;
@@ -1621,7 +1666,37 @@ bool App::OnChar(uint32_t cp) {
     return true;
 }
 
+bool App::TypeAheadChar(uint32_t cp) {
+    Tab* t = workspace_.focusedTab();
+    if (!t || t->visible.empty()) return false;
+
+    const TabRows rows(*t);
+    const TypeAhead::Jump jump = typeAhead_.Type(cp, rows, t->cursor, plat::NowMs());
+    if (!jump.taken) return false;
+
+    // Nothing else on screen says what is being searched for: no row disappears
+    // the way the filter makes them, and a miss moves nothing at all. Without
+    // this, a mistyped letter is indistinguishable from a dead keyboard.
+    if (jump.row >= 0) {
+        MoveCursor(jump.row, false, true);
+        SetStatus(strings_.Format("ui.type_ahead", { typeAhead_.text() }));
+    } else {
+        // What was attempted, not what is kept: the letter that missed is
+        // exactly the one the user needs to see, and it is the one the buffer
+        // deliberately threw away.
+        std::string tried = typeAhead_.text();
+        utf8::Encode(cp, tried);
+        SetStatus(strings_.Format("ui.type_ahead_no_match", { tried }));
+    }
+    return true;
+}
+
 bool App::OnKey(const Chord& chord) {
+    // Whether a name is being typed right now has to be read before anything
+    // below gets the chance to clear it.
+    const bool typing = typeAhead_.active(plat::NowMs());
+    swallowChar_ = false;
+
     if (settingsEditor_.visible()) {
         // 開いたキーがそのまま閉じるキーになる。ショートカットの設定へ抜ける道も
         // 開けておく ─ 設定画面から「キーの設定」へ行けないのは不親切なだけ。
@@ -1676,12 +1751,44 @@ bool App::OnKey(const Chord& chord) {
         if (c == Cmd::ShowKeyHelp) return true;
         keyHelp_ = false;
         host_.Invalidate();
+        // The key that closed the sheet is spent on closing it: its character
+        // must not fall through and move the cursor in the list behind.
+        swallowChar_ = ProducesChar(chord);
         if (chord.key == Key::Escape) return true;
     }
     if (HandlePromptKey(chord)) return true;
 
+    // While a name is being typed, these three belong to the string being typed
+    // rather than to their commands - the same reading the prompt gives them.
+    // Space is only swallowed here: the WM_CHAR it already queued is what puts
+    // the blank into the buffer, since a space is a letter in plenty of names.
+    if (typing && chord.mods == kModNone) {
+        switch (chord.key) {
+            case Key::Space:
+                return true;
+            case Key::Backspace:
+                typeAhead_.Erase(plat::NowMs());
+                SetStatus(typeAhead_.text().empty()
+                              ? std::string()
+                              : strings_.Format("ui.type_ahead", { typeAhead_.text() }));
+                return true;
+            case Key::Escape:
+                // Escape drops what was typed first and clears the selection on
+                // the second press, the way it does everywhere else in Kite.
+                typeAhead_.Clear();
+                SetStatus({});
+                return true;
+            default:
+                break;
+        }
+    }
+
     const Cmd cmd = keymap_.Lookup(chord);
     if (cmd == Cmd::None) return false;
+    // Doing anything else ends the name being typed, and the character this
+    // chord is about to produce belongs to the command, not to the list.
+    typeAhead_.Clear();
+    swallowChar_ = ProducesChar(chord);
     Execute(cmd);
     return true;
 }
