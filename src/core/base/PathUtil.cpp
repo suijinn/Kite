@@ -176,6 +176,30 @@ std::string Normalize(std::string_view p) {
     return out;
 }
 
+std::string ToExtended(std::string_view p) {
+    // MAX_PATH is 260 including the NUL, and a directory handed to a listing
+    // grows by the "\*" pattern on top of that. Switching over a little early
+    // costs nothing; being 2 characters short of the limit costs the folder.
+    constexpr size_t kThreshold = 240;
+
+    if (p.size() < kThreshold) return std::string(p);  // bytes >= UTF-16 units
+    if (p.size() >= 4 && IsSep(p[0]) && IsSep(p[1]) && (p[2] == '?' || p[2] == '.') &&
+        IsSep(p[3])) {
+        return std::string(p);  // already extended, or a device path
+    }
+    if (utf8::Utf16Length(p) < kThreshold) return std::string(p);
+
+    // The extended form bypasses the normalization Win32 would otherwise do,
+    // so whatever this hands back has to already be in its final spelling.
+    const std::string full = Normalize(p);
+    const size_t server = UncServerLength(full);
+    if (server > 0) return "\\\\?\\UNC\\" + full.substr(2);
+    if (full.size() >= 3 && full[1] == ':' && IsSep(full[2])) return "\\\\?\\" + full;
+    // A relative path, or "\foo" with no drive: the extended form needs a full
+    // path, and this layer does not know the current directory to make one.
+    return full;
+}
+
 std::string DisplayName(std::string_view p) {
     if (p.empty()) return {};
     std::string name = FileName(p);

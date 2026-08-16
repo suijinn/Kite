@@ -6,6 +6,8 @@
 #include <shellapi.h>
 #include <shlobj.h>
 
+#include <cstdio>
+
 #include "core/app/ConfigDir.h"
 #include "core/base/PathUtil.h"
 #include "platform/win/WinPaths.h"
@@ -64,7 +66,32 @@ fs::Status TranslateError(DWORD code) {
         case ERROR_NO_NETWORK:
         case ERROR_NO_NET_OR_BAD_PATH:
         case ERROR_NETNAME_DELETED:
+        // The drive was pulled out - during the enumeration, if the listing got
+        // far enough to start one. Reported as "unavailable" rather than "gone"
+        // because the folder is fine; what is missing is the medium under it.
+        case ERROR_DEVICE_NOT_CONNECTED:
+        case ERROR_DEVICE_REMOVED:
+        case ERROR_NO_MEDIA_IN_DRIVE:
+        case ERROR_UNRECOGNIZED_VOLUME:
+        case ERROR_WRONG_DISK:
+        case ERROR_MEDIA_CHANGED:
+        case ERROR_INVALID_DRIVE:
+        // A cloud folder whose provider is asleep, offline, or still thinking.
+        // Explorer shows these as a sync error rather than an empty folder, and
+        // so must Kite: "this folder is empty" about a folder full of files is
+        // the one answer a filer must never give.
+        case ERROR_CLOUD_FILE_PROVIDER_NOT_RUNNING:
+        case ERROR_CLOUD_FILE_NETWORK_UNAVAILABLE:
+        case ERROR_CLOUD_FILE_REQUEST_TIMEOUT:
+        case ERROR_CLOUD_FILE_REQUEST_ABORTED:
+        case ERROR_CLOUD_FILE_UNSUCCESSFUL:
+        case ERROR_CLOUD_FILE_PROVIDER_TERMINATED:
+        case ERROR_CLOUD_FILE_IN_USE:
+        case ERROR_CLOUD_FILE_PINNED:
             return fs::Status::Unavailable;
+        case ERROR_CLOUD_FILE_ACCESS_DENIED:
+        case ERROR_CLOUD_FILE_AUTHENTICATION_FAILED:
+            return fs::Status::AccessDenied;
         default:
             return fs::Status::Error;
     }
@@ -159,6 +186,39 @@ std::wstring MakeDoubleNullList(const std::vector<std::string>& paths) {
     return out;
 }
 
+// What SHFileOperation returned, in words.
+//
+// Below 0x71 the value is a plain Win32 error, but from there up it is one of
+// the shell's own DE_* codes, and those collide with unrelated Win32 ones -
+// DE_ACCESSDENIEDSRC is 0x78 = 120, which FormatMessage calls "this function is
+// not supported on this system". Handing that to the user is worse than saying
+// nothing, so the shell codes are mapped to the Win32 error that means the same
+// thing (and are then worded by the OS, in the OS's language) and everything
+// left over falls back to its number.
+std::string FileOperationError(int code) {
+    DWORD win32 = 0;
+    switch (code) {
+        case 0x74:  // DE_ROOTDIR: a drive root is not something you can move
+        case 0x10074: win32 = ERROR_INVALID_PARAMETER; break;
+        case 0x78: win32 = ERROR_ACCESS_DENIED; break;         // DE_ACCESSDENIEDSRC
+        case 0x79:                                             // DE_PATHTOODEEP
+        case 0x81: win32 = ERROR_FILENAME_EXCED_RANGE; break;  // DE_FILENAMETOOLONG
+        case 0x7C: win32 = ERROR_FILE_NOT_FOUND; break;        // DE_INVALIDFILES
+        case 0x85: win32 = ERROR_FILE_TOO_LARGE; break;        // DE_FILE_TOO_LARGE
+        default: break;
+    }
+    if (win32 == 0 && code > 0 && code < 0x71) win32 = static_cast<DWORD>(code);
+    if (win32 != 0) {
+        std::string text = ErrorText(win32);
+        if (!text.empty()) return text;
+    }
+    // No wording for it. The number is at least something to search for, and
+    // hex is how the shell's own codes are written down.
+    char buffer[32];
+    std::snprintf(buffer, sizeof(buffer), "SHFileOperation 0x%X", static_cast<unsigned>(code));
+    return buffer;
+}
+
 bool RunFileOperation(UINT op, const std::vector<std::string>& from, const std::string& to,
                       FILEOP_FLAGS flags, std::string* err) {
     std::wstring fromList = MakeDoubleNullList(from);
@@ -176,8 +236,16 @@ bool RunFileOperation(UINT op, const std::vector<std::string>& from, const std::
     spec.fFlags = flags;
 
     const int result = ::SHFileOperationW(&spec);
+    // DE_OPCANCELLED and ERROR_CANCELLED are the shell reporting that the user
+    // pressed Cancel in its own dialog, which is not a failure to complain
+    // about - the same call answers with fAnyOperationsAborted when the cancel
+    // came mid-way, and both spellings have to read the same from here.
+    if (result == 0x75 || result == static_cast<int>(ERROR_CANCELLED)) {
+        if (err) err->clear();
+        return true;
+    }
     if (result != 0) {
-        if (err) *err = "SHFileOperation failed (" + std::to_string(result) + ")";
+        if (err) *err = FileOperationError(result);
         return false;
     }
     if (spec.fAnyOperationsAborted) {
@@ -270,7 +338,22 @@ fs::ListResult WinFileSystem::List(const std::string& dir) {
         result.entries.push_back(std::move(e));
     } while (::FindNextFileW(handle, &find));
 
+    // Why the walk stopped has to be asked before FindClose, which overwrites
+    // it. Anything but "that was the last one" means the medium went away under
+    // the enumeration - a USB drive pulled out, a share that dropped - and a
+    // half listing presented as whole reads as "the rest was deleted", which is
+    // the one wrong answer worth going out of the way to avoid (ListShares does
+    // the same for the same reason).
+    const DWORD stop = ::GetLastError();
     ::FindClose(handle);
+    // ERROR_SUCCESS is accepted alongside it: a driver that forgets to set the
+    // code has not said the enumeration was cut short, and throwing away a good
+    // listing on the strength of a zero would be the worse mistake.
+    if (stop != ERROR_NO_MORE_FILES && stop != ERROR_SUCCESS) {
+        result.entries.clear();
+        result.status = TranslateError(stop);
+        result.message = ErrorText(stop);
+    }
     return result;
 }
 

@@ -427,6 +427,14 @@ public:
     /// @param[in] message 表示する文字列
     void SetStatus(const std::string& message);
 
+    /// @brief 失敗をステータスバーに出す。何が失敗したかは必ず言う。
+    /// @param[in] key 何の操作が失敗したかを言う文字列キー（"ui.rename_failed" など）
+    /// @param[in] detail OS が返した補足。空でもよい
+    /// @note `SetStatus(err)` を直接呼ばないこと ─ `ErrorText()` は文言を持たない
+    ///       コードに空文字列を返すので、そのまま渡すと**何も出ないまま操作だけが
+    ///       失敗する**。書式は一覧のエラー行（AppUi::PaintList）と同じ
+    void ReportFailure(const char* key, const std::string& detail);
+
     /// @brief フォーカス中のタブを再列挙する。
     void RefreshFocused();
 

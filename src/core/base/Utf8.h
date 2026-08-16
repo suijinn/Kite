@@ -49,6 +49,13 @@ size_t NextBoundary(std::string_view s, size_t i);
 /// @return コードポイントの個数。バイト数ではない
 size_t CharCount(std::string_view s);
 
+/// @brief UTF-16 に変換したときの符号単位数を数える。
+/// @param[in] s 対象の UTF-8 文字列
+/// @return UTF-16 の符号単位数。BMP 外の文字はサロゲート対で 2 と数える
+/// @note Windows の MAX_PATH はこの単位で決まる。バイト数で測ると、日本語の
+///       フォルダ名で 3 倍に見積もって不要な長パス変換を掛けることになる
+size_t Utf16Length(std::string_view s);
+
 /// @brief ASCII 範囲だけを小文字化する。
 /// @param[in] s 変換元の文字列
 /// @return 変換後の文字列。マルチバイト文字はそのまま

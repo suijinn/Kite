@@ -77,3 +77,19 @@ KITE_TEST(utf8, prefix_matching_folds_ascii_and_compares_the_rest_byte_for_byte)
     // \xE8\xB3\x87 = U+8CC7, matched as bytes - there is no case to fold there.
     KITE_EXPECT(utf8::StartsWithIgnoreCaseAscii("\xE8\xB3\x87\xE6\x96\x99", "\xE8\xB3\x87"));
 }
+
+KITE_TEST(utf8, utf16_length_counts_what_windows_counts) {
+    // MAX_PATH is measured in UTF-16 units, so this is what decides whether a
+    // path needs the extended form - not the byte count, which is 3x for
+    // Japanese names and would extend paths that fit perfectly well.
+    KITE_EXPECT_EQ(utf8::Utf16Length(""), size_t{ 0 });
+    KITE_EXPECT_EQ(utf8::Utf16Length("abc"), size_t{ 3 });
+    // U+3042 U+3044 - 3 bytes each, 1 unit each.
+    KITE_EXPECT_EQ(utf8::Utf16Length("\xE3\x81\x82\xE3\x81\x84"), size_t{ 2 });
+    // U+1F600 - 4 bytes, and a surrogate pair is 2 units.
+    KITE_EXPECT_EQ(utf8::Utf16Length("\xF0\x9F\x98\x80"), size_t{ 2 });
+    // Never more than the byte count, which is what lets the byte length stand
+    // in as a cheap early-out.
+    const std::string mixed = "C:\\\xE8\xB3\x87\xE6\x96\x99\\a";
+    KITE_EXPECT(utf8::Utf16Length(mixed) <= mixed.size());
+}

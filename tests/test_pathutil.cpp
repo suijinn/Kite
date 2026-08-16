@@ -150,3 +150,73 @@ KITE_TEST(path, token_escaping_round_trips_awkward_paths) {
     KITE_EXPECT(escaped.find('|') == std::string::npos);
     KITE_EXPECT_EQ(path::UnescapeToken(escaped), nasty);
 }
+
+// A path long enough to need the extended form, laid out under `head`.
+static std::string LongPath(const std::string& head, size_t length) {
+    std::string out = head;
+    while (out.size() < length) out += "abcdefghij\\";
+    out.resize(length);
+    return out;
+}
+
+KITE_TEST(path, short_paths_are_left_exactly_as_they_are) {
+    // Win32 normalizes these itself, and the extended form takes that away, so
+    // anything that fits inside the limit has to come back untouched.
+    KITE_EXPECT_EQ(path::ToExtended("C:\\Users\\hiroki"), std::string("C:\\Users\\hiroki"));
+    KITE_EXPECT_EQ(path::ToExtended("C:/a/../b"), std::string("C:/a/../b"));
+    KITE_EXPECT_EQ(path::ToExtended(""), std::string(""));
+}
+
+KITE_TEST(path, long_drive_paths_get_the_extended_prefix) {
+    const std::string p = LongPath("C:\\", 300);
+    const std::string got = path::ToExtended(p);
+    KITE_EXPECT_EQ(got.compare(0, 4, "\\\\?\\"), 0);
+    // Normalize()d, not verbatim: the trailing separator this one ends on has
+    // no meaning below a root, and nothing behind the prefix would strip it.
+    KITE_EXPECT_EQ(got.substr(4), path::Normalize(p));
+}
+
+KITE_TEST(path, long_unc_paths_get_the_unc_spelling) {
+    // \\server\share\... -> \\?\UNC\server\share\...  The plain prefix in front
+    // of "\\server" names a device rather than a share and finds nothing.
+    const std::string p = LongPath("\\\\nas\\share\\", 300);
+    const std::string got = path::ToExtended(p);
+    KITE_EXPECT_EQ(got.compare(0, 8, "\\\\?\\UNC\\"), 0);
+    KITE_EXPECT_EQ(got.substr(8), path::Normalize(p).substr(2));
+}
+
+KITE_TEST(path, extending_settles_the_spelling_first) {
+    // Nothing normalizes a path behind the prefix, so '/' and ".." have to be
+    // gone before it goes on - otherwise a folder that opened fine at 200
+    // characters stops opening at 300, which is the hardest kind of bug to see.
+    const std::string p = LongPath("C:/a/b/../", 300) + "/./x";
+    const std::string got = path::ToExtended(p);
+    KITE_EXPECT_EQ(got.compare(0, 4, "\\\\?\\"), 0);
+    KITE_EXPECT(got.find('/') == std::string::npos);
+    KITE_EXPECT(got.find("\\..\\") == std::string::npos);
+    KITE_EXPECT(got.find("\\.\\") == std::string::npos);
+}
+
+KITE_TEST(path, already_extended_paths_are_not_extended_twice) {
+    const std::string p = LongPath("\\\\?\\C:\\", 300);
+    KITE_EXPECT_EQ(path::ToExtended(p), p);
+    // "\\.\" is the device namespace, and it is not a path to be rewritten either.
+    const std::string device = LongPath("\\\\.\\PhysicalDrive0\\", 300);
+    KITE_EXPECT_EQ(path::ToExtended(device), device);
+}
+
+KITE_TEST(path, relative_paths_cannot_be_extended) {
+    // The extended form needs a full path, and this layer has no idea what the
+    // current directory is. Handing the input back is the only honest answer.
+    const std::string p = LongPath("relative\\", 300);
+    KITE_EXPECT(path::ToExtended(p).compare(0, 4, "\\\\?\\") != 0);
+}
+
+KITE_TEST(path, the_threshold_is_measured_in_utf16_units) {
+    // 100 Japanese characters are 300 bytes but only 100 units, which sits well
+    // inside MAX_PATH: measuring bytes here would extend a path that fits.
+    std::string p = "C:\\";
+    for (int i = 0; i < 100; ++i) p += "\xE8\xB3\x87";
+    KITE_EXPECT(p.size() > 240);
+    KITE_EXPECT_EQ(path::ToExtended(p), p);
+}

@@ -1045,7 +1045,7 @@ bool App::PerformDrop(const std::vector<std::string>& paths, const std::string& 
 
     std::string err;
     if (!fs_.CopyTo(sources, destDir, move, &err)) {
-        if (!err.empty()) SetStatus(err);
+        ReportFailure(move ? "ui.move_failed" : "ui.copy_failed", err);
         return false;
     }
     RecordTransfer(sources, destDir, existedBefore, move);
@@ -1134,6 +1134,12 @@ void App::SetStatus(const std::string& message) {
     // until an unrelated keystroke happened to redraw. The expiry timer has the
     // same dependency: the window only arms it while painting.
     host_.Invalidate();
+}
+
+void App::ReportFailure(const char* key, const std::string& detail) {
+    std::string message = strings_.Get(key);
+    if (!detail.empty()) message += "  (" + detail + ")";
+    SetStatus(message);
 }
 
 bool App::statusExpired() const { return plat::NowMs() > statusUntilMs_; }
@@ -1363,7 +1369,7 @@ void App::ApplyPrompt() {
             const std::string from = path::Join(t->path, e->name);
             const std::string to = path::Join(t->path, text);
             if (!fs_.Rename(from, to, &err)) {
-                SetStatus(err);
+                ReportFailure("ui.rename_failed", err);
             } else {
                 undo_.Push({ UndoKind::Rename, { to }, { from } });
                 RefreshFocused();
@@ -1375,7 +1381,7 @@ void App::ApplyPrompt() {
             if (!t || text.empty()) break;
             const std::string created = path::Join(t->path, text);
             if (!fs_.MakeDirectory(created, &err)) {
-                SetStatus(err);
+                ReportFailure("ui.create_failed", err);
             } else {
                 undo_.Push({ UndoKind::Create, { created }, {} });
                 RefreshFocused();
@@ -1387,7 +1393,7 @@ void App::ApplyPrompt() {
             if (!t || text.empty()) break;
             const std::string created = path::Join(t->path, text);
             if (!fs_.MakeFile(created, &err)) {
-                SetStatus(err);
+                ReportFailure("ui.create_failed", err);
             } else {
                 undo_.Push({ UndoKind::Create, { created }, {} });
                 RefreshFocused();
@@ -1407,7 +1413,7 @@ void App::ApplyPrompt() {
         case PromptKind::ConfirmDeletePermanent: {
             const bool recycle = (kind == PromptKind::ConfirmDelete);
             if (!fs_.Delete(pending, recycle, &err)) {
-                SetStatus(err);
+                ReportFailure("ui.delete_failed", err);
             } else {
                 // 削除を戻す道はまだ無い（ごみ箱は仮想フォルダの側の話で、
                 // ROADMAP P2-1 と一緒に入る）。だからこそ印を積む ─ 積まずに
@@ -1864,7 +1870,7 @@ void App::DoPaste() {
 
     std::string err;
     if (!fs_.CopyTo(paths, dest, cut, &err)) {
-        SetStatus(err);
+        ReportFailure(cut ? "ui.move_failed" : "ui.copy_failed", err);
     } else {
         RecordTransfer(paths, dest, existedBefore, cut);
     }
@@ -1990,8 +1996,13 @@ void App::DoUndo() {
     for (const std::string& dir : refresh) RefreshTabsShowing(dir);
     // The entry is spent either way - an undo that cannot be applied is not one
     // that gets more applicable by being tried again.
-    SetStatus(acted ? strings_.Get(messageKey)
-                    : (err.empty() ? strings_.Get("ui.undo_stale") : err));
+    if (acted) {
+        SetStatus(strings_.Get(messageKey));
+    } else if (err.empty()) {
+        SetStatus(strings_.Get("ui.undo_stale"));  // the disk moved on; nothing to undo
+    } else {
+        ReportFailure("ui.undo_failed", err);
+    }
     host_.Invalidate();
 }
 

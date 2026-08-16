@@ -102,6 +102,17 @@ std::string UncRoot(std::string_view p);
 /// @note ルートより上には遡らない。シンボリックリンクは解決しない
 std::string Normalize(std::string_view p);
 
+/// @brief 長すぎるパスを "\\\\?\\" 付きの形（拡張パス）に直す。
+/// @param[in] p 対象のパス
+/// @return 260 文字（UTF-16 換算）の制限に掛かる長さなら拡張パス、それ以外は
+///         `p` のまま。相対パスや既に拡張形のパスもそのまま返す
+/// @note 規則そのものは OS を呼ばないのでここに置く（`config::Choose()` と同じ
+///       理由 ─ Windows 実装の中に埋めるとテストできない）。実際に UTF-16 へ
+///       変換するのは platform/win/ の `ToExtendedPath()`
+/// @note **拡張パスに OS の正規化は掛からない。** '/' も "." も ".." も解決
+///       されないまま渡るので、付けるときに `Normalize()` を通す
+std::string ToExtended(std::string_view p);
+
 /// @brief タブ見出しに適した短い表示名を返す。
 /// @param[in] p 対象のパス
 /// @return 末尾の構成要素。ルートの場合は末尾の区切りを落とした形（"C:"）
