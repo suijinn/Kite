@@ -60,6 +60,15 @@ std::string ToLowerAscii(std::string_view s);
 /// @return 等しければ true
 bool EqualsIgnoreCaseAscii(std::string_view a, std::string_view b);
 
+/// @brief ASCII 範囲のみ大文字小文字を無視して前方一致を判定する。
+/// @param[in] s 走査対象の文字列
+/// @param[in] prefix 前方一致させる文字列。空なら常に true
+/// @return `s` が `prefix` で始まっていれば true
+/// @note ASCII の外はバイト列のまま比較する。同じ文字を打った UTF-8 どうしなら
+///       それで一致するし、ASCII の外の大文字小文字を畳むには本プロジェクトが
+///       持たない変換表が要る
+bool StartsWithIgnoreCaseAscii(std::string_view s, std::string_view prefix);
+
 /// @brief 東アジアの全角文字かどうかを判定する。
 /// @param[in] cp 判定するコードポイント
 /// @return 全角なら true

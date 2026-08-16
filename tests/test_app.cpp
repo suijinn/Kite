@@ -1664,3 +1664,115 @@ KITE_TEST(app, folding_a_sidebar_section_is_a_toggle_and_asks_for_a_repaint) {
     h.app.ToggleSidebarSection(SidebarSection::Bookmarks);
     KITE_EXPECT_FALSE(h.app.sidebarCollapsed(SidebarSection::Bookmarks));
 }
+
+// --- type-ahead -------------------------------------------------------------
+
+KITE_TEST(app, a_letter_jumps_to_the_item_it_starts) {
+    Harness h;
+    h.Type("b");
+    KITE_EXPECT_EQ(h.CursorName(), std::string("beta"));
+    // Unlike Ctrl+F, nothing is hidden and nothing is selected on the way.
+    KITE_EXPECT_EQ(h.tab()->ItemCount(), 5);
+    KITE_EXPECT(h.tab()->filter.empty());
+    KITE_EXPECT_EQ(h.tab()->MarkedCount(), 0);
+    KITE_EXPECT_EQ(h.app.statusMessage(), std::string("Jump: b"));
+}
+
+KITE_TEST(app, the_same_letter_twice_walks_to_the_next_one) {
+    Harness h;
+    h.Type("i");
+    KITE_EXPECT_EQ(h.CursorName(), std::string("image2.png"));
+    h.Type("i");
+    KITE_EXPECT_EQ(h.CursorName(), std::string("image10.png"));
+}
+
+KITE_TEST(app, a_letter_that_matches_nothing_says_so_and_stays_put) {
+    Harness h;
+    h.Type("q");
+    KITE_EXPECT_EQ(h.CursorName(), std::string("alpha"));
+    KITE_EXPECT_EQ(h.app.statusMessage(), std::string("Jump: q  (no match)"));
+}
+
+KITE_TEST(app, space_still_toggles_the_selection_when_no_name_is_being_typed) {
+    Harness h;
+    // The window sends both: consuming WM_KEYDOWN does not stop the WM_CHAR
+    // TranslateMessage has already queued.
+    h.app.OnKey(ParseChord("Space"));
+    h.app.OnChar(' ');
+    KITE_EXPECT_EQ(h.tab()->MarkedCount(), 1);
+    KITE_EXPECT_EQ(h.CursorName(), std::string("beta"));
+}
+
+KITE_TEST(app, space_joins_the_name_while_one_is_being_typed) {
+    Harness h;
+    h.Type("n");
+    KITE_EXPECT_EQ(h.CursorName(), std::string("notes.txt"));
+
+    h.app.OnKey(ParseChord("Space"));
+    h.app.OnChar(' ');
+    // The toggle did not fire: a blank is a letter in plenty of file names, and
+    // marking rows halfway through a name is not what was asked for.
+    KITE_EXPECT_EQ(h.tab()->MarkedCount(), 0);
+    KITE_EXPECT_EQ(h.CursorName(), std::string("notes.txt"));
+    KITE_EXPECT_EQ(h.app.statusMessage(), std::string("Jump: n   (no match)"));
+}
+
+KITE_TEST(app, backspace_shortens_the_name_before_it_leaves_the_folder) {
+    Harness h;
+    h.app.OpenPath("C:\\home\\alpha", false);
+    h.Settle();
+
+    h.Type("i");
+    KITE_EXPECT_EQ(h.CursorName(), std::string("inner.md"));
+    h.app.OnKey(ParseChord("Backspace"));
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home\\alpha"));
+
+    // Once the typed name has expired, Backspace is Go up again.
+    test::FakeClockMs() += TypeAhead::kTimeoutMs + 1;
+    h.app.OnKey(ParseChord("Backspace"));
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home"));
+}
+
+KITE_TEST(app, escape_drops_the_typed_name_before_the_selection) {
+    Harness h;
+    h.app.OnKey(ParseChord("Space"));  // marks alpha and steps on
+    h.app.OnChar(' ');
+    h.Type("i");
+    KITE_EXPECT_EQ(h.tab()->MarkedCount(), 1);
+
+    h.app.OnKey(ParseChord("Escape"));
+    KITE_EXPECT_EQ(h.tab()->MarkedCount(), 1);
+    h.app.OnKey(ParseChord("Escape"));
+    KITE_EXPECT_EQ(h.tab()->MarkedCount(), 0);
+}
+
+KITE_TEST(app, any_other_command_ends_the_name_being_typed) {
+    Harness h;
+    h.Type("i");
+    KITE_EXPECT_EQ(h.CursorName(), std::string("image2.png"));
+
+    h.app.OnKey(ParseChord("Down"));
+    KITE_EXPECT_EQ(h.CursorName(), std::string("image10.png"));
+
+    // Had "i" survived, "im" would still be matching image10.png. It does not:
+    // moving the cursor by hand is a different question from the one being
+    // typed, and "m" on its own matches nothing here.
+    h.Type("m");
+    KITE_EXPECT_EQ(h.app.statusMessage(), std::string("Jump: m  (no match)"));
+}
+
+KITE_TEST(app, a_bound_letter_runs_its_command_without_also_jumping) {
+    Harness h;
+    // Space is the one default binding that produces a character, so it is what
+    // this can be seen with: the toggle fires, and the blank it queues must not
+    // start a search.
+    h.app.OnKey(ParseChord("Space"));
+    h.app.OnChar(' ');
+    KITE_EXPECT(h.app.statusMessage().find("Jump") == std::string::npos);
+
+    // The mark is still what happened, and the list never moved off beta.
+    KITE_EXPECT_EQ(h.tab()->MarkedCount(), 1);
+    KITE_EXPECT_EQ(h.CursorName(), std::string("beta"));
+}
