@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include "platform/win/WinPaths.h"
 #include "platform/win/WinUtf.h"
 
 namespace kite::win {

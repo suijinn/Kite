@@ -5,6 +5,7 @@
 
 #include "core/base/PathUtil.h"
 #include "core/base/Platform.h"
+#include "platform/win/WinPaths.h"
 #include "platform/win/WinUtf.h"
 
 namespace kite::plat {

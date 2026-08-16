@@ -79,6 +79,15 @@ size_t CharCount(std::string_view s) {
     return n;
 }
 
+size_t Utf16Length(std::string_view s) {
+    size_t n = 0;
+    size_t i = 0;
+    while (i < s.size()) {
+        n += Decode(s, i) >= 0x10000 ? 2 : 1;
+    }
+    return n;
+}
+
 std::string ToLowerAscii(std::string_view s) {
     std::string out(s);
     for (char& c : out) {

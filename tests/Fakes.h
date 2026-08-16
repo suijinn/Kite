@@ -73,6 +73,25 @@ public:
     // wanting a logon looks like from here.
     std::vector<std::string> denied;
 
+    // Paths every write refuses to touch: what a file another process holds
+    // open, or one on a drive that was pulled out, looks like from here.
+    std::vector<std::string> locked;
+
+    // What the OS said about it. Left empty on purpose in some tests: ErrorText()
+    // has no wording for every code, so "failed with nothing to say" is a real
+    // state the status line has to survive.
+    std::string lockedMessage;
+
+    bool Locked(const std::string& path) const {
+        return std::find(locked.begin(), locked.end(), path) != locked.end();
+    }
+
+    bool Refuse(const std::string& path, std::string* err) const {
+        if (!Locked(path)) return false;
+        if (err) *err = lockedMessage;
+        return true;
+    }
+
     fs::ListResult List(const std::string& dir) override {
         ++listCalls;
         fs::ListResult result;
@@ -139,17 +158,20 @@ public:
         return out;
     }
 
-    bool MakeDirectory(const std::string& path, std::string*) override {
+    bool MakeDirectory(const std::string& path, std::string* err) override {
+        if (Refuse(path, err)) return false;
         AddDir(path);
         return true;
     }
 
-    bool MakeFile(const std::string& path, std::string*) override {
+    bool MakeFile(const std::string& path, std::string* err) override {
+        if (Refuse(path, err)) return false;
         AddFile(kite::path::Parent(path), kite::path::FileName(path));
         return true;
     }
 
-    bool Rename(const std::string& from, const std::string& to, std::string*) override {
+    bool Rename(const std::string& from, const std::string& to, std::string* err) override {
+        if (Refuse(from, err)) return false;
         const std::string parent = kite::path::Parent(from);
         auto it = dirs.find(parent);
         if (it == dirs.end()) return false;
@@ -173,7 +195,11 @@ public:
         dirs.erase(path);
     }
 
-    bool Delete(const std::vector<std::string>& paths, bool toRecycleBin, std::string*) override {
+    bool Delete(const std::vector<std::string>& paths, bool toRecycleBin,
+                std::string* err) override {
+        for (const std::string& p : paths) {
+            if (Refuse(p, err)) return false;
+        }
         deleteCalls.push_back(paths);
         deleteRecycle.push_back(toRecycleBin);
         for (const std::string& p : paths) Remove(p);
@@ -184,7 +210,11 @@ public:
     // "what is at the destination afterwards" is a question worth asking here -
     // undo decides what it may touch by asking it before and after.
     bool CopyTo(const std::vector<std::string>& paths, const std::string& destDir, bool move,
-                std::string*) override {
+                std::string* err) override {
+        if (Refuse(destDir, err)) return false;
+        for (const std::string& p : paths) {
+            if (Refuse(p, err)) return false;
+        }
         copyCalls.push_back({ paths, destDir, move });
         for (const std::string& p : paths) {
             const std::string leaf = kite::path::FileName(p);

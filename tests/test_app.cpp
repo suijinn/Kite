@@ -1776,3 +1776,165 @@ KITE_TEST(app, a_bound_letter_runs_its_command_without_also_jumping) {
     KITE_EXPECT_EQ(h.tab()->MarkedCount(), 1);
     KITE_EXPECT_EQ(h.CursorName(), std::string("beta"));
 }
+
+// ---------------------------------------------------------------------------
+// Failures (ROADMAP P1-4)
+//
+// What these check throughout is that a refused operation says so. ErrorText()
+// has no wording for every error code, so a bare SetStatus(err) can leave the
+// screen exactly as it was - the operation silently did nothing, which reads as
+// "that key does not work" rather than "the file is locked".
+// ---------------------------------------------------------------------------
+
+KITE_TEST(app, a_rename_that_fails_says_so_even_when_the_os_says_nothing) {
+    Harness h;
+    h.files.locked.push_back("C:\\home\\notes.txt");
+    h.app.Execute(Cmd::CursorBottom);  // notes.txt
+    KITE_EXPECT_EQ(h.CursorName(), std::string("notes.txt"));
+
+    h.app.Execute(Cmd::Rename);
+    h.app.OnKey(ParseChord("Ctrl+A"));
+    h.Type("renamed.txt");
+    h.app.OnKey(ParseChord("Enter"));
+    h.Settle();
+
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.rename_failed"));
+    KITE_EXPECT_EQ(h.CursorName(), std::string("notes.txt"));
+    // Nothing happened, so there is nothing to take back either.
+    h.app.Execute(Cmd::Undo);
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.undo_empty"));
+}
+
+KITE_TEST(app, what_the_os_said_is_kept_alongside_what_failed) {
+    Harness h;
+    h.files.locked.push_back("C:\\home\\notes.txt");
+    h.files.lockedMessage = "The file is in use";
+    h.app.Execute(Cmd::CursorBottom);
+    h.app.Execute(Cmd::Rename);
+    h.app.OnKey(ParseChord("Ctrl+A"));
+    h.Type("renamed.txt");
+    h.app.OnKey(ParseChord("Enter"));
+    h.Settle();
+
+    // Both halves: the OS knows why, and only Kite knows what was attempted.
+    KITE_EXPECT(h.app.statusMessage().find("The file is in use") != std::string::npos);
+    KITE_EXPECT_EQ(h.app.statusMessage().find(h.app.strings().Get("ui.rename_failed")),
+                   size_t{ 0 });
+}
+
+KITE_TEST(app, a_folder_that_cannot_be_created_says_so) {
+    Harness h;
+    h.files.locked.push_back("C:\\home\\gamma");
+    h.app.Execute(Cmd::NewFolder);
+    h.Type("gamma");
+    h.app.OnKey(ParseChord("Enter"));
+    h.Settle();
+
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.create_failed"));
+    KITE_EXPECT(h.files.dirs.count("C:\\home\\gamma") == 0);
+    h.app.Execute(Cmd::Undo);
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.undo_empty"));
+}
+
+KITE_TEST(app, a_delete_that_fails_says_so_instead_of_reporting_done) {
+    Harness h;
+    h.files.locked.push_back("C:\\home\\notes.txt");
+    h.app.Execute(Cmd::CursorBottom);
+    h.app.Execute(Cmd::DeleteToRecycle);
+    h.app.OnKey(ParseChord("Enter"));
+    h.Settle();
+
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.delete_failed"));
+    KITE_EXPECT(h.files.Exists("C:\\home\\notes.txt"));
+    // And no "deleting cannot be undone" marker: nothing was deleted, so the
+    // next Ctrl+Z has to still reach whatever came before.
+    h.app.Execute(Cmd::Undo);
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.undo_empty"));
+}
+
+KITE_TEST(app, a_paste_that_fails_names_the_operation_that_failed) {
+    // A cut and a copy have to read differently even when they fail the same
+    // way: one of the two may already have vacated the source.
+    for (int pass = 0; pass < 2; ++pass) {
+        const bool cut = pass == 1;
+        Harness h;
+        h.app.Execute(Cmd::CursorBottom);  // notes.txt
+        h.app.Execute(cut ? Cmd::Cut : Cmd::Copy);
+        h.app.Execute(Cmd::CursorTop);
+        h.app.Execute(Cmd::CursorDown);  // alpha
+        h.app.Execute(Cmd::OpenSelected);
+        h.Settle();
+        KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home\\alpha"));
+
+        h.files.locked.push_back("C:\\home\\alpha");
+        h.app.Execute(Cmd::Paste);
+        h.Settle();
+        KITE_EXPECT_EQ(h.app.statusMessage(),
+                       h.app.strings().Get(cut ? "ui.move_failed" : "ui.copy_failed"));
+        KITE_EXPECT(h.files.Exists("C:\\home\\notes.txt"));
+    }
+}
+
+KITE_TEST(app, an_undo_the_disk_refuses_is_not_reported_as_stale) {
+    Harness h;
+    h.app.Execute(Cmd::CursorBottom);  // notes.txt
+    h.app.Execute(Cmd::Rename);
+    h.app.OnKey(ParseChord("Ctrl+A"));
+    h.Type("renamed.txt");
+    h.app.OnKey(ParseChord("Enter"));
+    h.Settle();
+    KITE_EXPECT(h.files.Exists("C:\\home\\renamed.txt"));
+
+    // Locked between the rename and the undo: the entry still describes the
+    // disk, the disk just will not have it. That is a different answer from
+    // "the item has changed since", which says there is nothing left to do.
+    h.files.locked.push_back("C:\\home\\renamed.txt");
+    h.files.lockedMessage = "The file is in use";
+    h.app.Execute(Cmd::Undo);
+
+    KITE_EXPECT_EQ(h.app.statusMessage().find(h.app.strings().Get("ui.undo_failed")), size_t{ 0 });
+    KITE_EXPECT(h.app.statusMessage().find("The file is in use") != std::string::npos);
+    // Spent either way: an undo the disk refused does not get more applicable
+    // by being tried again.
+    h.app.Execute(Cmd::Undo);
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.undo_empty"));
+}
+
+KITE_TEST(app, a_folder_that_cannot_be_read_keeps_its_error_and_offers_no_rows) {
+    Harness h;
+    h.files.denied.push_back("C:\\home\\alpha");
+    h.app.Execute(Cmd::CursorTop);
+    h.app.Execute(Cmd::CursorDown);  // alpha
+    h.app.Execute(Cmd::OpenSelected);
+    h.Settle();
+
+    KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home\\alpha"));
+    KITE_EXPECT(h.tab()->listing.status == fs::Status::AccessDenied);
+    KITE_EXPECT_EQ(h.tab()->ItemCount(), 0);
+    // No ".." either: the screen shows the error in place of the list, and a row
+    // that is drawn nowhere cannot be walked onto.
+    KITE_EXPECT_FALSE(h.tab()->IsParentRow(0));
+    // Leaving still works - that is what Alt+Up is for.
+    h.app.Execute(Cmd::GoUp);
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home"));
+    KITE_EXPECT(h.tab()->listing.status == fs::Status::Ok);
+}
+
+KITE_TEST(app, a_folder_that_goes_away_under_the_cursor_drops_its_rows) {
+    Harness h;
+    h.app.Execute(Cmd::CursorTop);
+    h.app.Execute(Cmd::CursorDown);  // alpha
+    h.app.Execute(Cmd::OpenSelected);
+    h.Settle();
+    KITE_EXPECT(h.tab()->ItemCount() > 0);
+
+    // The drive was pulled out, or the folder deleted from elsewhere. The
+    // refresh has to replace the rows rather than leave the old ones standing:
+    // rows that point at nothing are worse than an error message.
+    h.files.dirs.erase("C:\\home\\alpha");
+    h.app.Execute(Cmd::Refresh);
+    h.Settle();
+    KITE_EXPECT(h.tab()->listing.status == fs::Status::NotFound);
+    KITE_EXPECT_EQ(h.tab()->ItemCount(), 0);
+}

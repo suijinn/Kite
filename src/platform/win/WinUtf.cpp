@@ -2,8 +2,6 @@
 
 #include <windows.h>
 
-#include "core/base/PathUtil.h"
-
 namespace kite::win {
 
 std::wstring ToWide(std::string_view utf8) {
@@ -46,17 +44,6 @@ std::string ErrorText(unsigned long code) {
     }
     if (buffer) ::LocalFree(buffer);
     return out;
-}
-
-std::wstring ToExtendedPath(std::string_view utf8) {
-    std::wstring w = ToWide(utf8);
-    if (w.size() < 240) return w;
-    if (w.compare(0, 4, L"\\\\?\\") == 0) return w;
-    if (w.size() >= 2 && w[0] == L'\\' && w[1] == L'\\') {
-        return L"\\\\?\\UNC\\" + w.substr(2);  // \\server\share -> \\?\UNC\server\share
-    }
-    if (w.size() >= 3 && w[1] == L':') return L"\\\\?\\" + w;
-    return w;
 }
 
 }  // namespace kite::win

@@ -33,10 +33,4 @@ std::string ToUtf8(const wchar_t* wide);
 ///       \<windows.h\> から切り離しておくため（実体は同じ型）
 std::string ErrorText(unsigned long code);
 
-/// @brief 必要なら "\\\\?\\" を付けた UTF-16 パスを返す。
-/// @param[in] utf8 変換元のパス（UTF-8）
-/// @return Win32 API に渡せるワイドパス。260 文字制限を超える深い階層や、
-///         名前の長いクラウドフォルダでも列挙できるようにする
-std::wstring ToExtendedPath(std::string_view utf8);
-
 }  // namespace kite::win

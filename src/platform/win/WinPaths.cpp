@@ -2,6 +2,9 @@
 
 #include <windows.h>
 
+#include "core/base/PathUtil.h"
+#include "platform/win/WinUtf.h"
+
 namespace kite::win {
 
 std::wstring ModuleFilePath() {
@@ -27,5 +30,7 @@ std::wstring ModuleDirectory() {
     path.resize(slash);
     return path;
 }
+
+std::wstring ToExtendedPath(std::string_view utf8) { return ToWide(path::ToExtended(utf8)); }
 
 }  // namespace kite::win
