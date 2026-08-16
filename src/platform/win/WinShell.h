@@ -60,6 +60,16 @@ public:
     /// @copydoc IShellIntegration::GetClipboardFiles
     bool GetClipboardFiles(std::vector<std::string>& paths, bool* cut) override;
 
+    /// @copydoc IShellIntegration::GetClipboardText
+    bool GetClipboardText(std::string& utf8) override;
+
+    /// @copydoc IShellIntegration::ConnectNetwork
+    /// @note `WNetAddConnection3W` にドライブ文字を渡さないので、割り当ては
+    ///       残らない。サーバーだけを渡された場合は `IPC$` を相手にする ─
+    ///       共有名の分からない相手に認証を通す唯一の道で、エクスプローラーも
+    ///       同じことをしている
+    bool ConnectNetwork(const std::string& uncRoot, std::string* err) override;
+
 private:
     HWND hwnd_ = nullptr;
     ShellHostClient menuHost_;

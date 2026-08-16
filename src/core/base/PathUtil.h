@@ -29,6 +29,9 @@ std::string Join(std::string_view a, std::string_view b);
 /// @brief 親ディレクトリを返す。
 /// @param[in] p 対象のパス
 /// @return 親ディレクトリ。`p` がすでにルートなら空文字列
+/// @note 共有（"\\\\server\\share"）の親はサーバー（"\\\\server"）─ サーバーは
+///       その共有一覧を持つ実在の場所で、そこで止めると `..` も `Alt+↑` も
+///       共有名を打ち直す以外に辿り着けなくなる。サーバー自身が最上位
 std::string Parent(std::string_view p);
 
 /// @brief 最後の構成要素を返す。
@@ -72,6 +75,26 @@ bool IsAbsolute(std::string_view p);
 /// @param[in] p 対象のパス
 /// @return "C:\\" や "\\\\server\\share\\" のようなルートなら true
 bool IsRoot(std::string_view p);
+
+/// @brief UNC パスのサーバー部分（"\\\\server"）の長さを返す。
+/// @param[in] p 対象のパス
+/// @return "\\\\" に続く名前の末尾までのバイト数。UNC でない、または名前が
+///         空（"\\\\" だけ）なら 0
+size_t UncServerLength(std::string_view p);
+
+/// @brief 共有名を持たない UNC サーバー自身かを判定する。
+/// @param[in] p 対象のパス
+/// @return "\\\\192.168.1.5" や "\\\\nas\\" のようにサーバーだけなら true
+/// @note ここが true のパスは通常のディレクトリ列挙では読めない。共有の一覧を
+///       返せるのは OS のネットワーク列挙だけで、Windows 実装はこの判定で
+///       `FindFirstFile` と `WNetOpenEnum` を振り分けている
+bool IsUncServer(std::string_view p);
+
+/// @brief UNC パスの接続単位（"\\\\server\\share"）を返す。
+/// @param[in] p 対象のパス
+/// @return 共有まで含むルート。共有名が無ければ "\\\\server"。UNC でなければ空文字列
+/// @note 資格情報を渡す相手はサーバーと共有であって、その下のフォルダではない
+std::string UncRoot(std::string_view p);
 
 /// @brief 区切りの重複を畳み、"." と ".." を文字列上で解決する。
 /// @param[in] p 対象のパス

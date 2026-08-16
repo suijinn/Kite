@@ -18,6 +18,30 @@ constexpr uint64_t kStatusDurationMs = 4000;
 // under the item's icon rather than out on the pane border.
 constexpr float kMenuAnchorIndent = 8.0f;
 
+// Clipboard text on its way into a one-line field.
+//
+// Only the first line survives: the field holds one path, and a multi-line
+// paste would otherwise arrive as one run-on string with the newlines invisible.
+// Surrounding quotes go too - Explorer's "Copy as path" wraps its answer in
+// them, and pasting that verbatim gives a path no filesystem has ever heard of.
+std::string ClipboardToField(std::string_view text) {
+    size_t begin = 0;
+    size_t end = text.find_first_of("\r\n");
+    if (end == std::string_view::npos) end = text.size();
+    while (begin < end && (text[begin] == ' ' || text[begin] == '\t')) ++begin;
+    while (end > begin && (text[end - 1] == ' ' || text[end - 1] == '\t')) --end;
+    if (end - begin >= 2 && text[begin] == '"' && text[end - 1] == '"') {
+        ++begin;
+        --end;
+    }
+    std::string out(text.substr(begin, end - begin));
+    // Anything left below space would draw as a blank the caret walks through.
+    out.erase(std::remove_if(out.begin(), out.end(),
+                             [](char c) { return static_cast<unsigned char>(c) < 0x20; }),
+              out.end());
+    return out;
+}
+
 const char* SortKeyName(SortKey k) {
     switch (k) {
         case SortKey::Ext: return "ext";
@@ -756,6 +780,17 @@ void App::PumpLoader() {
                     t->loaded = true;
                     t->marked.assign(t->listing.entries.size(), 0);
                     t->Rebuild();
+                    // "Access denied" on a share is usually not a verdict but a
+                    // question that has not been asked yet. The listing itself
+                    // cannot ask it - a credential dialog raised from a worker
+                    // thread would also fire while the address bar is being
+                    // typed into - so name the key that does.
+                    if (t.get() == workspace_.focusedTab() &&
+                        t->listing.status == fs::Status::AccessDenied &&
+                        !path::UncRoot(t->path).empty()) {
+                        SetStatus(strings_.Format("ui.network_auth_hint",
+                                                  { keymap_.ChordText(Cmd::ConnectNetwork) }));
+                    }
                 }
             }
         }
@@ -1315,6 +1350,50 @@ bool App::HandlePromptKey(const Chord& chord) {
         }
     };
 
+    // The field is a text field, so it answers the clipboard keys itself. Left
+    // to the keymap they would reach Cmd::Copy and Cmd::Paste instead and act on
+    // the listing behind the field - copying files while the caret sits in a
+    // half-typed path is never what the keystroke meant.
+    auto copyField = [&](bool cut) {
+        // Nothing selected still leaves an obvious thing to copy - the whole
+        // line - and copying cannot lose anything. Cut can, so it stays out of
+        // the way until there is a range to take.
+        std::string text;
+        if (prompt_.hasSelection()) {
+            text = prompt_.text.substr(prompt_.selBegin(), prompt_.selEnd() - prompt_.selBegin());
+        } else if (!cut) {
+            text = prompt_.text;
+        }
+        if (text.empty()) return;
+        if (!shell_.SetClipboardText(text)) return;
+        if (cut) {
+            prompt_.DeleteSelection();
+            syncFilter();
+            SyncCompletion(true);
+        }
+        host_.Invalidate();
+    };
+
+    auto pasteField = [&] {
+        std::string text;
+        std::vector<std::string> files;
+        // Files come second: a path copied as text is the common case, and the
+        // shell hands back both formats when Explorer copied a file, so asking
+        // for text first is what keeps "Copy as path" pasting as itself.
+        if (!shell_.GetClipboardText(text)) {
+            if (!shell_.GetClipboardFiles(files, nullptr) || files.empty()) return;
+            text = files.front();
+        }
+        const std::string insert = ClipboardToField(text);
+        if (insert.empty()) return;
+        prompt_.DeleteSelection();
+        prompt_.text.insert(prompt_.caret, insert);
+        prompt_.SetCaret(prompt_.caret + insert.size());
+        syncFilter();
+        SyncCompletion(true);
+        host_.Invalidate();
+    };
+
     switch (chord.key) {
         case Key::Escape:
             // The candidate list goes first. Its whole point is to be dismissed
@@ -1355,6 +1434,12 @@ bool App::HandlePromptKey(const Chord& chord) {
         }
         case Key::Delete: {
             if (prompt_.isConfirm()) return true;
+            // Shift+Delete is the other spelling of cut, the way Shift+Insert is
+            // the other spelling of paste.
+            if ((chord.mods & kModShift) != 0) {
+                copyField(true);
+                return true;
+            }
             if (prompt_.DeleteSelection()) {
                 syncFilter();
                 SyncCompletion(true);
@@ -1373,6 +1458,23 @@ bool App::HandlePromptKey(const Chord& chord) {
             if (chord.mods != kModCtrl || prompt_.isConfirm()) break;
             prompt_.SelectAll();
             host_.Invalidate();
+            return true;
+        case Key::C:
+        case Key::X:
+            if (chord.mods != kModCtrl || prompt_.isConfirm()) break;
+            copyField(chord.key == Key::X);
+            return true;
+        case Key::V:
+            if (chord.mods != kModCtrl || prompt_.isConfirm()) break;
+            pasteField();
+            return true;
+        case Key::Insert:
+            if (prompt_.isConfirm()) break;
+            if (chord.mods == kModCtrl) {
+                copyField(false);
+            } else if (chord.mods == kModShift) {
+                pasteField();
+            }
             return true;
         case Key::Left:
         case Key::Right: {
@@ -2181,6 +2283,26 @@ void App::Execute(Cmd cmd) {
         case Cmd::OpenTerminal:
             if (tab) shell_.OpenTerminal(tab->path);
             break;
+        case Cmd::ConnectNetwork: {
+            if (!tab) break;
+            // The connection is to the server or the share, never to a folder
+            // inside it - that is the unit credentials are checked against.
+            const std::string target = path::UncRoot(tab->path);
+            if (target.empty()) {
+                SetStatus(strings_.Get("ui.not_network_path"));
+                break;
+            }
+            std::string err;
+            if (!shell_.ConnectNetwork(target, &err)) {
+                // An empty message means the user closed the dialog; they know
+                // what happened, and saying it again reads as a failure report.
+                if (!err.empty()) SetStatus(err);
+                break;
+            }
+            SetStatus(strings_.Format("ui.network_connected", { target }));
+            RefreshFocused();
+            break;
+        }
 
         case Cmd::None:
         case Cmd::Count:

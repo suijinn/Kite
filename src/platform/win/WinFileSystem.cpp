@@ -45,36 +45,99 @@ fs::Status TranslateError(DWORD code) {
         case ERROR_FILE_NOT_FOUND:
         case ERROR_PATH_NOT_FOUND:
         case ERROR_INVALID_NAME:
+        case ERROR_BAD_NET_NAME:
             return fs::Status::NotFound;
         case ERROR_ACCESS_DENIED:
         case ERROR_SHARING_VIOLATION:
+        // A share that wants a logon reports one of these. They are the ones
+        // Cmd::ConnectNetwork answers, so they must not be filed as "gone".
+        case ERROR_LOGON_FAILURE:
+        case ERROR_INVALID_PASSWORD:
+        case ERROR_NO_SUCH_USER:
+        case ERROR_SESSION_CREDENTIAL_CONFLICT:
             return fs::Status::AccessDenied;
         case ERROR_NOT_READY:
         case ERROR_BAD_NETPATH:
         case ERROR_NETWORK_UNREACHABLE:
         case ERROR_UNEXP_NET_ERR:
         case ERROR_DEV_NOT_EXIST:
+        case ERROR_NO_NETWORK:
+        case ERROR_NO_NET_OR_BAD_PATH:
+        case ERROR_NETNAME_DELETED:
             return fs::Status::Unavailable;
         default:
             return fs::Status::Error;
     }
 }
 
-std::string ErrorText(DWORD code) {
-    wchar_t* buffer = nullptr;
-    const DWORD length = ::FormatMessageW(
-        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-        nullptr, code, 0, reinterpret_cast<wchar_t*>(&buffer), 0, nullptr);
-    std::string out;
-    if (length && buffer) {
-        std::wstring w(buffer, length);
-        while (!w.empty() && (w.back() == L'\r' || w.back() == L'\n' || w.back() == L' ')) {
-            w.pop_back();
-        }
-        out = ToUtf8(w);
+// The shares a server offers. FindFirstFile cannot answer this - "\\srv\*" is
+// not a pattern the filesystem knows - so the enumeration has to come from the
+// network provider instead. Called on a loader worker like every other listing:
+// an unreachable host takes its full TCP timeout to say so.
+fs::ListResult ListShares(const std::string& server) {
+    fs::ListResult result;
+
+    std::wstring remote = ToWide(server);
+    while (!remote.empty() && (remote.back() == L'\\' || remote.back() == L'/')) remote.pop_back();
+
+    NETRESOURCEW spec{};
+    spec.dwScope = RESOURCE_GLOBALNET;
+    spec.dwType = RESOURCETYPE_DISK;
+    spec.dwDisplayType = RESOURCEDISPLAYTYPE_SERVER;
+    spec.dwUsage = RESOURCEUSAGE_CONTAINER;
+    spec.lpRemoteName = remote.data();
+
+    HANDLE handle = nullptr;
+    DWORD code = ::WNetOpenEnumW(RESOURCE_GLOBALNET, RESOURCETYPE_DISK, 0, &spec, &handle);
+    if (code != NO_ERROR) {
+        result.status = TranslateError(code);
+        result.message = ErrorText(code);
+        return result;
     }
-    if (buffer) ::LocalFree(buffer);
-    return out;
+
+    std::vector<char> buffer(16 * 1024);
+    for (;;) {
+        DWORD count = 0xFFFFFFFF;  // as many as fit
+        DWORD bytes = static_cast<DWORD>(buffer.size());
+        code = ::WNetEnumResourceW(handle, &count, buffer.data(), &bytes);
+        if (code == ERROR_MORE_DATA) {
+            // Not even one entry fit. `bytes` now says how much would - but a
+            // provider that asks for no more than it was given would spin this
+            // loop forever, on a worker thread, with no way to interrupt it.
+            if (bytes <= buffer.size()) break;
+            buffer.resize(bytes);
+            continue;
+        }
+        if (code != NO_ERROR) break;
+
+        const auto* items = reinterpret_cast<const NETRESOURCEW*>(buffer.data());
+        for (DWORD i = 0; i < count; ++i) {
+            if (!items[i].lpRemoteName) continue;
+            const std::string full = ToUtf8(items[i].lpRemoteName);
+            // Not path::FileName: a share is a root, so that would hand back the
+            // whole "\\server\share" rather than the leaf.
+            const size_t serverLen = path::UncServerLength(full);
+            if (serverLen == 0 || full.size() <= serverLen + 1) continue;
+            fs::Entry e;
+            e.name = full.substr(serverLen + 1);
+            while (!e.name.empty() && path::IsSep(e.name.back())) e.name.pop_back();
+            if (e.name.empty()) continue;
+            e.attrs = fs::Attr::Directory;
+            // ADMIN$, C$, IPC$ - the shares Explorer keeps out of sight too.
+            if (e.name.back() == '$') e.attrs |= fs::Attr::Hidden;
+            result.entries.push_back(std::move(e));
+        }
+    }
+    ::WNetCloseEnum(handle);
+
+    // Anything but "that was the last one" means the walk was cut short, and a
+    // half-listing presented as whole is worse than saying nothing worked.
+    if (code != ERROR_NO_MORE_ITEMS) {
+        result.entries.clear();
+        result.status = TranslateError(code);
+        result.message = ErrorText(code);
+    }
+    return result;
 }
 
 std::string KnownFolder(REFKNOWNFOLDERID id) {
@@ -170,6 +233,7 @@ fs::ListResult WinFileSystem::List(const std::string& dir) {
         result.status = fs::Status::NotFound;
         return result;
     }
+    if (path::IsUncServer(dir)) return ListShares(dir);
 
     std::wstring pattern = ToExtendedPath(dir);
     if (!pattern.empty() && pattern.back() != L'\\' && pattern.back() != L'/') {

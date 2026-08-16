@@ -180,6 +180,9 @@ const DefaultBinding kDefaults[] = {
     { Cmd::RevealInExplorer,    "Ctrl+Shift+E" },
     { Cmd::OpenTerminal,        "Ctrl+Grave" },
     { Cmd::OpenTerminal,        "Alt+T" },
+    // Next to the address bar's own key: typing \\192.168.1.5 there is what
+    // leads here, and signing in is the step that makes the same typing work.
+    { Cmd::ConnectNetwork,      "Ctrl+Shift+L" },
 };
 
 }  // namespace

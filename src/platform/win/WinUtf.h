@@ -25,6 +25,14 @@ std::string ToUtf8(std::wstring_view wide);
 /// @return 変換後の文字列。nullptr の場合は空文字列
 std::string ToUtf8(const wchar_t* wide);
 
+/// @brief Win32 のエラーコードを利用者に見せる文言へ変換する。
+/// @param[in] code `GetLastError()` などが返した値
+/// @return OS のロケールで書かれた説明。末尾の改行は落としてある。文言を
+///         用意していないコードでは空文字列
+/// @note 引数が `DWORD` ではなく `unsigned long` なのは、このヘッダより上を
+///       \<windows.h\> から切り離しておくため（実体は同じ型）
+std::string ErrorText(unsigned long code);
+
 /// @brief 必要なら "\\\\?\\" を付けた UTF-16 パスを返す。
 /// @param[in] utf8 変換元のパス（UTF-8）
 /// @return Win32 API に渡せるワイドパス。260 文字制限を超える深い階層や、

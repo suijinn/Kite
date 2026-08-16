@@ -131,6 +131,7 @@ const Row kEn[] = {
     { "cmd.open_with", "Open with..." },
     { "cmd.reveal", "Show in Explorer" },
     { "cmd.terminal", "Open terminal here" },
+    { "cmd.connect_network", "Sign in to this network location" },
 
     // --- interface ---
     { "ui.name", "Name" },
@@ -212,6 +213,9 @@ const Row kEn[] = {
     { "ui.cloud_marker", "cloud" },
     { "ui.copied", "Copied to clipboard" },
     { "ui.clipboard_empty", "Clipboard holds no files" },
+    { "ui.not_network_path", "This is not a network location" },
+    { "ui.network_connected", "Connected to {0}" },
+    { "ui.network_auth_hint", "{0} signs in to this network location" },
     { "ui.done", "Done" },
     { "ui.saved", "Workspace saved" },
     { "ui.config_reloaded", "Configuration reloaded" },
@@ -347,6 +351,7 @@ const Row kJa[] = {
     { "cmd.open_with", "プログラムから開く" },
     { "cmd.reveal", "エクスプローラーで表示" },
     { "cmd.terminal", "ここでターミナルを開く" },
+    { "cmd.connect_network", "このネットワークの場所にサインイン" },
 
     { "ui.name", "名前" },
     { "ui.ext", "拡張子" },
@@ -424,6 +429,9 @@ const Row kJa[] = {
     { "ui.cloud_marker", "クラウド" },
     { "ui.copied", "クリップボードにコピーしました" },
     { "ui.clipboard_empty", "クリップボードにファイルがありません" },
+    { "ui.not_network_path", "ここはネットワークの場所ではありません" },
+    { "ui.network_connected", "{0} に接続しました" },
+    { "ui.network_auth_hint", "資格情報が要る場合は {0} でサインインします" },
     { "ui.done", "完了" },
     { "ui.saved", "ワークスペースを保存しました" },
     { "ui.config_reloaded", "設定を再読み込みしました" },
