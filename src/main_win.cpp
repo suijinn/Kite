@@ -15,9 +15,19 @@
 #include "platform/win/WinFileSystem.h"
 #include "platform/win/WinIconProvider.h"
 #include "platform/win/WinShell.h"
+#include "platform/win/WinSingleInstance.h"
 #include "platform/win/WinUtf.h"
 #include "platform/win/WinWindow.h"
 #include "ui/AppUi.h"
+
+namespace {
+
+// How long a second launch waits for the first one's window to exist. The mutex
+// appears before the window does, so a launch that lands inside that gap has to
+// give the other process a moment rather than deciding it is not there.
+constexpr unsigned kExistingWindowWaitMs = 2000;
+
+}  // namespace
 
 int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     // Per-monitor v2 so Direct2D coordinates stay in DIPs across mixed-DPI
@@ -37,6 +47,25 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
             startPaths.push_back(std::move(arg));
         }
         ::LocalFree(argv);
+    }
+
+    // A second launch normally becomes tabs in the window that already exists.
+    // --new-window is what says otherwise, and it is now the only way to ask for
+    // a genuinely separate window.
+    HANDLE instanceMutex = nullptr;
+    if (!standalone) {
+        bool alreadyRunning = false;
+        instanceMutex = kite::win::AcquireInstanceMutex(alreadyRunning);
+        if (alreadyRunning) {
+            HWND existing = kite::win::FindExistingWindow(kExistingWindowWaitMs);
+            if (existing && kite::win::ForwardPaths(existing, startPaths)) {
+                if (instanceMutex) ::CloseHandle(instanceMutex);
+                return 0;
+            }
+            // Nothing answered - the other process is wedged, or gone without
+            // releasing the name. Opening a window of our own is worse than
+            // ideal; a double-click that does nothing at all is worse still.
+        }
     }
 
     kite::win::WinFileSystem filesystem;
@@ -64,5 +93,9 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     // Listings that completed before the window existed are still queued.
     app.PumpLoader();
 
-    return window.Run();
+    const int code = window.Run();
+    // Held until here on purpose: releasing the name earlier would let a launch
+    // during shutdown decide no instance exists and start a second full one.
+    if (instanceMutex) ::CloseHandle(instanceMutex);
+    return code;
 }

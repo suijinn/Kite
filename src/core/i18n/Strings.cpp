@@ -122,6 +122,7 @@ const Row kEn[] = {
     { "cmd.paste", "Paste" },
     { "cmd.copy_path", "Copy full path" },
     { "cmd.copy_name", "Copy name" },
+    { "cmd.undo", "Undo" },
 
     { "cmd.context_menu", "Context menu" },
     { "cmd.context_menu_ext", "Extended context menu" },
@@ -212,6 +213,9 @@ const Row kEn[] = {
     { "ui.parent_dir", ".." },
     { "ui.cloud_marker", "cloud" },
     { "ui.copied", "Copied to clipboard" },
+    { "ui.copied_files", "Copied" },
+    { "ui.cut_files", "Cut" },
+    { "ui.clipboard_failed", "The clipboard could not be written" },
     { "ui.clipboard_empty", "Clipboard holds no files" },
     { "ui.not_network_path", "This is not a network location" },
     { "ui.network_connected", "Connected to {0}" },
@@ -230,6 +234,13 @@ const Row kEn[] = {
     { "ui.shell_menu_failed", "The shell menu could not be shown" },
     { "ui.new_window_failed", "A new window could not be opened" },
     { "ui.standalone_no_save", "This window does not save its workspace" },
+    { "ui.undo_empty", "Nothing to undo" },
+    { "ui.undo_no_delete", "Deleting cannot be undone - restore from the Recycle Bin" },
+    { "ui.undo_stale", "The item has changed since; nothing was undone" },
+    { "ui.undone_rename", "Rename undone" },
+    { "ui.undone_create", "Creation undone" },
+    { "ui.undone_move", "Move undone" },
+    { "ui.undone_copy", "Copy undone - the copies went to the Recycle Bin" },
 };
 
 const Row kJa[] = {
@@ -342,6 +353,7 @@ const Row kJa[] = {
     { "cmd.paste", "貼り付け" },
     { "cmd.copy_path", "フルパスをコピー" },
     { "cmd.copy_name", "名前をコピー" },
+    { "cmd.undo", "元に戻す" },
 
     { "cmd.context_menu", "コンテキストメニュー" },
     { "cmd.context_menu_ext", "拡張コンテキストメニュー" },
@@ -428,6 +440,9 @@ const Row kJa[] = {
     { "ui.parent_dir", ".." },
     { "ui.cloud_marker", "クラウド" },
     { "ui.copied", "クリップボードにコピーしました" },
+    { "ui.copied_files", "コピーしました" },
+    { "ui.cut_files", "切り取りました" },
+    { "ui.clipboard_failed", "クリップボードに入れられませんでした" },
     { "ui.clipboard_empty", "クリップボードにファイルがありません" },
     { "ui.not_network_path", "ここはネットワークの場所ではありません" },
     { "ui.network_connected", "{0} に接続しました" },
@@ -446,6 +461,13 @@ const Row kJa[] = {
     { "ui.shell_menu_failed", "シェルメニューを表示できませんでした" },
     { "ui.new_window_failed", "新しいウィンドウを開けませんでした" },
     { "ui.standalone_no_save", "このウィンドウはワークスペースを保存しません" },
+    { "ui.undo_empty", "元に戻せる操作がありません" },
+    { "ui.undo_no_delete", "削除は元に戻せません ─ ごみ箱から復元してください" },
+    { "ui.undo_stale", "対象が変わっているため元に戻せませんでした" },
+    { "ui.undone_rename", "名前の変更を元に戻しました" },
+    { "ui.undone_create", "新規作成を元に戻しました" },
+    { "ui.undone_move", "移動を元に戻しました" },
+    { "ui.undone_copy", "コピーを元に戻しました ─ 複製はごみ箱へ入れました" },
 };
 
 }  // namespace

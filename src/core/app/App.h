@@ -15,6 +15,7 @@
 #include "core/app/Host.h"
 #include "core/app/IconProvider.h"
 #include "core/app/SettingsEditor.h"
+#include "core/app/UndoStack.h"
 #include "core/base/Ini.h"
 #include "core/fs/DirectoryLoader.h"
 #include "core/fs/DirectoryWatcher.h"
@@ -477,6 +478,17 @@ public:
     /// @return 組み立てたフルパス
     std::string ConfigPath(const char* file) const;
 
+    /// @brief 別プロセスから渡されたパスを、このウィンドウの新しいタブで開く。
+    /// @param[in] paths 開くパス列。空なら何もしない
+    /// @note 単一インスタンス化（ROADMAP P1-3）の受け口。渡されるのは 2 つ目の
+    ///       起動のコマンドライン引数そのものなので、`[ui] new_tab_position` には
+    ///       従わず**渡された順に末尾へ並べる** ─ 起動時の引数と同じ扱い
+    void OpenForwardedPaths(const std::vector<std::string>& paths);
+
+    /// @brief 元に戻せる操作の履歴を返す。
+    /// @return 履歴への参照
+    const UndoStack& undoStack() const { return undo_; }
+
 private:
     /// @brief 設定フォルダへ 1 ファイル書き、失敗をステータス行に出す。
     /// @param[in] file 設定フォルダ内のファイル名
@@ -526,7 +538,20 @@ private:
     void GotoBookmark(int index);
     void DoDelete(bool permanent);
     void DoPaste();
+    void DoUndo();
     void RebuildFocused();
+
+    /// @brief 転送先に「実際にこの操作が作ったもの」だけを拾って履歴に積む。
+    /// @param[in] sources 転送元のパス列
+    /// @param[in] destDir 転送先ディレクトリ
+    /// @param[in] existedBefore sources と同じ長さ。転送前に転送先が在ったか
+    /// @param[in] move true なら移動として積む。false ならコピー
+    /// @note 競合したときシェルは別名を付けるか上書きするかで、どちらの場合も
+    ///       転送先の名前は「元の名前」とは限らない。**操作の前に無く、後に在る**
+    ///       ものだけが確実にこの操作の産物で、それ以外に触れれば元から在った
+    ///       ファイルを消すことになる
+    void RecordTransfer(const std::vector<std::string>& sources, const std::string& destDir,
+                        const std::vector<bool>& existedBefore, bool move);
 
     fs::IFileSystem& fs_;
     IShellIntegration& shell_;
@@ -550,6 +575,8 @@ private:
     // OS の順で返ってくるので、覚えていないと次の RefreshRoots() で元に戻る。
     std::vector<std::string> quickAccessOrder_;
     std::vector<std::string> driveOrder_;
+
+    UndoStack undo_;
 
     Prompt prompt_;
     PathComplete complete_;
