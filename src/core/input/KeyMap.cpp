@@ -164,6 +164,7 @@ const DefaultBinding kDefaults[] = {
     { Cmd::Paste,               "Ctrl+V" },
     { Cmd::CopyPath,            "Ctrl+Shift+C" },
     { Cmd::CopyName,            "Ctrl+Alt+Shift+C" },
+    { Cmd::Undo,                "Ctrl+Z" },
 
     // Shell
     // Shift adds the extended verbs, the way it does in Explorer. Kite used to

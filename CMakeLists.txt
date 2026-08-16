@@ -95,6 +95,7 @@ add_library(kite_core STATIC
     src/core/app/ConfigDir.cpp
     src/core/app/IconProvider.cpp
     src/core/app/SettingsEditor.cpp
+    src/core/app/UndoStack.cpp
     src/core/base/Format.cpp
     src/core/base/Ini.cpp
     src/core/base/PathUtil.cpp
@@ -135,6 +136,7 @@ add_executable(kite WIN32
     src/platform/win/WinPaths.cpp
     src/platform/win/WinPlatform.cpp
     src/platform/win/WinShell.cpp
+    src/platform/win/WinSingleInstance.cpp
     src/platform/win/WinUtf.cpp
     src/platform/win/WinWindow.cpp
     ${KITE_APP_RC}
@@ -250,6 +252,7 @@ if(KITE_BUILD_TESTS)
         tests/test_app.cpp
         tests/test_appui.cpp
         tests/test_dropcheck.cpp
+        tests/test_undo.cpp
         tests/test_hostproto.cpp
     )
     target_link_libraries(kite_tests PRIVATE kite_core)
@@ -257,7 +260,7 @@ if(KITE_BUILD_TESTS)
     # One CTest entry per suite so a failure names the area straight away.
     set(KITE_TEST_SUITES
         utf8 path ini format strings keymap keyeditor settings pathcomplete theme tab workspace session
-        app appui drop iconcache hostproto config)
+        app appui drop iconcache hostproto config undo)
 
     foreach(suite IN LISTS KITE_TEST_SUITES)
         add_test(NAME ${suite} COMMAND kite_tests --filter ${suite}.)

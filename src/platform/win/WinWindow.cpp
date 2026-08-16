@@ -10,12 +10,12 @@
 #include "platform/win/Resources.h"
 #include "platform/win/WinPaths.h"
 #include "platform/win/WinShell.h"
+#include "platform/win/WinSingleInstance.h"
 #include "platform/win/WinUtf.h"
 
 namespace kite::win {
 namespace {
 
-constexpr wchar_t kClassName[] = L"KiteMainWindow";
 constexpr UINT WM_KITE_WAKE = WM_APP + 1;
 constexpr UINT WM_KITE_DROP = WM_APP + 2;
 constexpr UINT_PTR kStatusTimerId = 1;
@@ -135,7 +135,12 @@ bool WinWindow::Create(const WindowPlacement& placement) {
     wc.hInstance = instance;
     wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = nullptr;  // Direct2D paints every pixel
-    wc.lpszClassName = kClassName;
+    // Derived from the exe's own path, so a second copy unpacked elsewhere is a
+    // separate instance rather than a stranger's window to hand paths to. A
+    // standalone window answers to a different name again: it is not the one a
+    // forwarded launch should land in, because it saves nothing.
+    const wchar_t* className = InstanceClassName(!app_ || !app_->standalone());
+    wc.lpszClassName = className;
     // From our own resources, not the shell default. LoadIconW picks the large
     // size for the class icon and hIconSmall the 16 px one; leaving hIconSmall
     // unset makes Windows shrink the 256 px image for the caption and the
@@ -152,7 +157,7 @@ bool WinWindow::Create(const WindowPlacement& placement) {
     // App::Init settles the caption before there is a window to carry it, so the
     // stored one goes on at creation. Setting it afterwards would show the bare
     // fallback for a frame first.
-    hwnd_ = ::CreateWindowExW(0, kClassName, title_.empty() ? L"Kite" : title_.c_str(),
+    hwnd_ = ::CreateWindowExW(0, className, title_.empty() ? L"Kite" : title_.c_str(),
                               WS_OVERLAPPEDWINDOW, x, y, placement.w, placement.h, nullptr,
                               nullptr, wc.hInstance, this);
     if (!hwnd_) return false;
@@ -199,9 +204,8 @@ bool WinWindow::OpenNewWindow(const std::string& dir) {
 
     // The flag is not decoration: it says "a second window was asked for", which
     // is what tells the new process to start on the folder it was given instead
-    // of restoring the saved sessions - and what will have to survive the single
-    // instance work (ROADMAP P1-3), where a bare path means "open a tab in the
-    // window that already exists".
+    // of restoring the saved sessions - and, since P1-3, what keeps it from
+    // handing that folder to this window as a tab and exiting.
     std::wstring commandLine = L"\"" + exe + L"\" " + ToWide(kNewWindowFlag);
     if (!dir.empty()) commandLine += L" " + QuoteArgument(ToWide(dir));
 
@@ -466,6 +470,21 @@ LRESULT WinWindow::Handle(UINT message, WPARAM wparam, LPARAM lparam) {
         case WM_KITE_DROP:
             RunPendingDrop();
             return 0;
+
+        // A second launch handed its command line over instead of opening a
+        // window of its own (ROADMAP P1-3). Anything else that arrives here is
+        // some other program's message and is left alone.
+        case WM_COPYDATA: {
+            const auto* data = reinterpret_cast<const COPYDATASTRUCT*>(lparam);
+            if (!app_ || !data || data->dwData != kForwardPathsId) break;
+            app_->OpenForwardedPaths(ParseForwardedPaths(data->lpData, data->cbData));
+            // Raising the window is the point even when no path came with it:
+            // launching Kite while Kite is running has to put it in front of the
+            // caller, or the launch looks like it did nothing at all.
+            if (::IsIconic(hwnd_)) ::ShowWindow(hwnd_, SW_RESTORE);
+            ::SetForegroundWindow(hwnd_);
+            return TRUE;
+        }
 
         case WM_TIMER:
             if (wparam == kStatusTimerId) {

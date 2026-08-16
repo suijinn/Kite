@@ -89,7 +89,7 @@ public:
         return result;
     }
 
-    bool Exists(const std::string& path, bool* isDir) override {
+    bool Exists(const std::string& path, bool* isDir = nullptr) override {
         if (dirs.count(path)) {
             if (isDir) *isDir = true;
             return true;
@@ -162,26 +162,41 @@ public:
         return false;
     }
 
-    bool Delete(const std::vector<std::string>& paths, bool toRecycleBin, std::string*) override {
-        deleteCalls.push_back(paths);
-        deleteRecycle.push_back(toRecycleBin);
-        for (const std::string& p : paths) {
-            auto it = dirs.find(kite::path::Parent(p));
-            if (it == dirs.end()) continue;
-            const std::string leaf = kite::path::FileName(p);
+    void Remove(const std::string& path) {
+        auto it = dirs.find(kite::path::Parent(path));
+        if (it != dirs.end()) {
+            const std::string leaf = kite::path::FileName(path);
             it->second.erase(std::remove_if(it->second.begin(), it->second.end(),
                                             [&](const fs::Entry& e) { return e.name == leaf; }),
                              it->second.end());
-            dirs.erase(p);
         }
+        dirs.erase(path);
+    }
+
+    bool Delete(const std::vector<std::string>& paths, bool toRecycleBin, std::string*) override {
+        deleteCalls.push_back(paths);
+        deleteRecycle.push_back(toRecycleBin);
+        for (const std::string& p : paths) Remove(p);
         return true;
     }
 
+    // A move really vacates the source and a collision really replaces, so
+    // "what is at the destination afterwards" is a question worth asking here -
+    // undo decides what it may touch by asking it before and after.
     bool CopyTo(const std::vector<std::string>& paths, const std::string& destDir, bool move,
                 std::string*) override {
         copyCalls.push_back({ paths, destDir, move });
         for (const std::string& p : paths) {
-            AddFile(destDir, kite::path::FileName(p));
+            const std::string leaf = kite::path::FileName(p);
+            bool isDir = false;
+            const bool sourceIsDir = Exists(p, &isDir) && isDir;
+            Remove(kite::path::Join(destDir, leaf));
+            if (sourceIsDir) {
+                AddDir(kite::path::Join(destDir, leaf));
+            } else {
+                AddFile(destDir, leaf);
+            }
+            if (move) Remove(p);
         }
         return true;
     }

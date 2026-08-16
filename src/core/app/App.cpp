@@ -42,6 +42,20 @@ std::string ClipboardToField(std::string_view text) {
     return out;
 }
 
+// Whether each source already has a namesake in the destination, in the order
+// the sources were given. Taken before a transfer so the same question can be
+// asked again afterwards: the shell resolves a collision either by renaming its
+// copy or by overwriting, and neither outcome is visible from the return value.
+std::vector<bool> DestinationsExist(fs::IFileSystem& fs, const std::vector<std::string>& sources,
+                                    const std::string& destDir) {
+    std::vector<bool> out;
+    out.reserve(sources.size());
+    for (const std::string& s : sources) {
+        out.push_back(fs.Exists(path::Join(destDir, path::FileName(s))));
+    }
+    return out;
+}
+
 const char* SortKeyName(SortKey k) {
     switch (k) {
         case SortKey::Ext: return "ext";
@@ -879,6 +893,31 @@ void App::OpenPath(const std::string& p, bool newTab) {
     }
 }
 
+void App::OpenForwardedPaths(const std::vector<std::string>& paths) {
+    if (paths.empty()) return;
+    Pane* pane = workspace_.focusedPane();
+    if (!pane) return;
+
+    // Appended in the order they arrived, ignoring [ui] new_tab_position: these
+    // are the second launch's command-line arguments, and someone who asked for
+    // three folders side by side asked for that order. AfterCurrent would stack
+    // them backwards, each one landing in front of the last.
+    Tab* last = nullptr;
+    for (const std::string& p : paths) {
+        if (p.empty()) continue;
+        last = pane->AddTab(path::Normalize(p));
+        last->view = defaultView_;
+        RequestLoad(*last, true);
+    }
+    if (!last) return;
+
+    pane->Activate(static_cast<int>(pane->tabs.size()) - 1);
+    dirty_ = true;
+    SyncWatches();
+    UpdateTitle();
+    host_.Invalidate();
+}
+
 void App::NavigateToParent(bool newTab) {
     Tab* t = workspace_.focusedTab();
     if (!t) return;
@@ -964,11 +1003,14 @@ bool App::PerformDrop(const std::vector<std::string>& paths, const std::string& 
     }
     if (sources.empty()) return false;
 
+    const std::vector<bool> existedBefore = DestinationsExist(fs_, sources, destDir);
+
     std::string err;
     if (!fs_.CopyTo(sources, destDir, move, &err)) {
         if (!err.empty()) SetStatus(err);
         return false;
     }
+    RecordTransfer(sources, destDir, existedBefore, move);
 
     // The watcher normally picks this up, but a folder that could not be
     // watched still has to refresh.
@@ -1278,6 +1320,7 @@ void App::ApplyPrompt() {
             if (!fs_.Rename(from, to, &err)) {
                 SetStatus(err);
             } else {
+                undo_.Push({ UndoKind::Rename, { to }, { from } });
                 RefreshFocused();
             }
             break;
@@ -1285,9 +1328,11 @@ void App::ApplyPrompt() {
 
         case PromptKind::NewFolder: {
             if (!t || text.empty()) break;
-            if (!fs_.MakeDirectory(path::Join(t->path, text), &err)) {
+            const std::string created = path::Join(t->path, text);
+            if (!fs_.MakeDirectory(created, &err)) {
                 SetStatus(err);
             } else {
+                undo_.Push({ UndoKind::Create, { created }, {} });
                 RefreshFocused();
             }
             break;
@@ -1295,9 +1340,11 @@ void App::ApplyPrompt() {
 
         case PromptKind::NewFile: {
             if (!t || text.empty()) break;
-            if (!fs_.MakeFile(path::Join(t->path, text), &err)) {
+            const std::string created = path::Join(t->path, text);
+            if (!fs_.MakeFile(created, &err)) {
                 SetStatus(err);
             } else {
+                undo_.Push({ UndoKind::Create, { created }, {} });
                 RefreshFocused();
             }
             break;
@@ -1317,6 +1364,11 @@ void App::ApplyPrompt() {
             if (!fs_.Delete(pending, recycle, &err)) {
                 SetStatus(err);
             } else {
+                // 削除を戻す道はまだ無い（ごみ箱は仮想フォルダの側の話で、
+                // ROADMAP P2-1 と一緒に入る）。だからこそ印を積む ─ 積まずに
+                // 黙っていると、次の Ctrl+Z が削除を飛び越えて、消えたファイルは
+                // そのままにその前の名前変更だけを巻き戻す。
+                undo_.Push({ UndoKind::Delete, {}, {} });
                 SetStatus(strings_.Get("ui.done"));
             }
             RefreshFocused();
@@ -1652,11 +1704,140 @@ void App::DoPaste() {
         SetStatus(strings_.Get("ui.clipboard_empty"));
         return;
     }
+    const std::string dest = t->path;
+    const std::vector<bool> existedBefore = DestinationsExist(fs_, paths, dest);
+
     std::string err;
-    if (!fs_.CopyTo(paths, t->path, cut, &err)) {
+    if (!fs_.CopyTo(paths, dest, cut, &err)) {
         SetStatus(err);
+    } else {
+        RecordTransfer(paths, dest, existedBefore, cut);
     }
     RefreshFocused();
+}
+
+void App::RecordTransfer(const std::vector<std::string>& sources, const std::string& destDir,
+                         const std::vector<bool>& existedBefore, bool move) {
+    UndoAction action;
+    action.kind = move ? UndoKind::Move : UndoKind::Copy;
+    for (size_t i = 0; i < sources.size(); ++i) {
+        // Already there before, so whatever sits at that name now is either the
+        // file that was always there or one the shell overwrote - not something
+        // this operation is entitled to move away or throw out.
+        if (i < existedBefore.size() && existedBefore[i]) continue;
+        const std::string dest = path::Join(destDir, path::FileName(sources[i]));
+        if (!fs_.Exists(dest)) continue;
+        action.targets.push_back(dest);
+        action.origins.push_back(sources[i]);
+    }
+    if (action.targets.empty()) return;
+    if (!move) action.origins.clear();  // a copy has nowhere to go back to
+    undo_.Push(std::move(action));
+}
+
+void App::DoUndo() {
+    const UndoAction* next = undo_.top();
+    if (!next) {
+        SetStatus(strings_.Get("ui.undo_empty"));
+        return;
+    }
+    if (next->kind == UndoKind::Delete) {
+        // The mark stays put rather than being popped: everything under it was
+        // dropped when it went on, so stepping past it would reach nothing, and
+        // saying so every time is the only honest answer left.
+        SetStatus(strings_.Get("ui.undo_no_delete"));
+        return;
+    }
+
+    const UndoAction action = *next;
+    undo_.Pop();
+
+    std::vector<std::string> refresh;
+    auto note = [&refresh](const std::string& dir) {
+        if (dir.empty()) return;
+        for (const std::string& d : refresh) {
+            if (utf8::EqualsIgnoreCaseAscii(d, dir)) return;
+        }
+        refresh.push_back(dir);
+    };
+
+    std::string err;
+    bool acted = false;
+    const char* messageKey = "ui.undone_move";
+
+    switch (action.kind) {
+        case UndoKind::Rename: {
+            messageKey = "ui.undone_rename";
+            if (action.targets.empty() || action.origins.empty()) break;
+            // Renamed again from somewhere else, or the old name taken back in
+            // the meantime: this entry no longer describes the disk.
+            if (!fs_.Exists(action.targets[0]) || fs_.Exists(action.origins[0])) break;
+            if (!fs_.Rename(action.targets[0], action.origins[0], &err)) break;
+            note(path::Parent(action.origins[0]));
+            note(path::Parent(action.targets[0]));
+            acted = true;
+            break;
+        }
+
+        case UndoKind::Create:
+        case UndoKind::Copy: {
+            messageKey = action.kind == UndoKind::Create ? "ui.undone_create" : "ui.undone_copy";
+            std::vector<std::string> alive;
+            for (const std::string& p : action.targets) {
+                if (fs_.Exists(p)) alive.push_back(p);
+            }
+            if (alive.empty()) break;
+            // To the Recycle Bin, never permanently. A folder created an hour
+            // ago can have been filled since, and undo is not a delete key.
+            if (!fs_.Delete(alive, true, &err)) break;
+            for (const std::string& p : alive) note(path::Parent(p));
+            acted = true;
+            break;
+        }
+
+        case UndoKind::Move: {
+            // Grouped by the folder each item came from: one call per folder,
+            // not per file, or the shell's progress dialog opens and closes once
+            // for every item that was moved.
+            std::vector<std::pair<std::string, std::vector<std::string>>> groups;
+            for (size_t i = 0; i < action.targets.size() && i < action.origins.size(); ++i) {
+                if (!fs_.Exists(action.targets[i])) continue;
+                const std::string parent = path::Parent(action.origins[i]);
+                if (parent.empty()) continue;
+                auto it = groups.begin();
+                for (; it != groups.end(); ++it) {
+                    if (utf8::EqualsIgnoreCaseAscii(it->first, parent)) break;
+                }
+                if (it == groups.end()) {
+                    groups.push_back({ parent, {} });
+                    it = groups.end() - 1;
+                }
+                it->second.push_back(action.targets[i]);
+                note(path::Parent(action.targets[i]));
+                note(parent);
+            }
+            // All of them or none of the message: a half-moved undo that reports
+            // success leaves the user believing the folders are back as they
+            // were, which is the one thing they must not believe.
+            acted = !groups.empty();
+            for (const auto& group : groups) {
+                if (fs_.CopyTo(group.second, group.first, true, &err)) continue;
+                acted = false;
+                break;
+            }
+            break;
+        }
+
+        case UndoKind::Delete:
+            break;  // handled above
+    }
+
+    for (const std::string& dir : refresh) RefreshTabsShowing(dir);
+    // The entry is spent either way - an undo that cannot be applied is not one
+    // that gets more applicable by being tried again.
+    SetStatus(acted ? strings_.Get(messageKey)
+                    : (err.empty() ? strings_.Get("ui.undo_stale") : err));
+    host_.Invalidate();
 }
 
 void App::Execute(Cmd cmd) {
@@ -2212,12 +2393,22 @@ void App::Execute(Cmd cmd) {
                 SetStatus(strings_.Get("ui.no_selection"));
                 break;
             }
-            shell_.SetClipboardFiles(paths, cmd == Cmd::Cut);
-            SetStatus(strings_.Get("ui.copied"));
+            // Say which of the two happened, and say it at all: the clipboard
+            // gives no sign of having been written, so a copy that silently
+            // failed and one that worked look exactly alike from here.
+            const bool cut = (cmd == Cmd::Cut);
+            if (!shell_.SetClipboardFiles(paths, cut)) {
+                SetStatus(strings_.Get("ui.clipboard_failed"));
+                break;
+            }
+            SetStatus(strings_.Get(cut ? "ui.cut_files" : "ui.copied_files"));
             break;
         }
         case Cmd::Paste:
             DoPaste();
+            break;
+        case Cmd::Undo:
+            DoUndo();
             break;
         case Cmd::CopyPath: {
             if (!tab) break;
@@ -2228,8 +2419,8 @@ void App::Execute(Cmd cmd) {
                 joined += paths[i];
             }
             if (joined.empty()) joined = tab->path;
-            shell_.SetClipboardText(joined);
-            SetStatus(strings_.Get("ui.copied"));
+            SetStatus(strings_.Get(shell_.SetClipboardText(joined) ? "ui.copied"
+                                                                  : "ui.clipboard_failed"));
             break;
         }
         case Cmd::CopyName: {
@@ -2240,8 +2431,8 @@ void App::Execute(Cmd cmd) {
                 if (i) joined += "\r\n";
                 joined += path::FileName(paths[i]);
             }
-            shell_.SetClipboardText(joined);
-            SetStatus(strings_.Get("ui.copied"));
+            SetStatus(strings_.Get(shell_.SetClipboardText(joined) ? "ui.copied"
+                                                                  : "ui.clipboard_failed"));
             break;
         }
 

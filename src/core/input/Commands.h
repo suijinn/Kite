@@ -157,6 +157,7 @@ enum class CmdGroup : uint8_t {
     X(Paste,              "file.paste",              "cmd.paste",              File)             \
     X(CopyPath,           "file.copy_path",          "cmd.copy_path",          File)             \
     X(CopyName,           "file.copy_name",          "cmd.copy_name",          File)             \
+    X(Undo,               "file.undo",               "cmd.undo",               File)             \
     /* --- shell ------------------------------------------------------------- */               \
     X(ContextMenu,        "shell.context_menu",      "cmd.context_menu",       Shell)            \
     X(ExtendedContextMenu,"shell.context_menu_ext",  "cmd.context_menu_ext",   Shell)            \
