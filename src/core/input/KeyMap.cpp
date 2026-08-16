@@ -141,6 +141,12 @@ const DefaultBinding kDefaults[] = {
     // Bookmarks
     { Cmd::AddBookmark,         "Ctrl+D" },
     { Cmd::RemoveBookmark,      "Ctrl+Shift+D" },
+    // 番号が尽きた先。9 個目以降のブックマークにキーボードで届く道はこれだけなので、
+    // 数字の列（Alt+Shift+<桁>）に揃えるより打ちやすさを取って修飾を 1 つにしてある。
+    // Ctrl+B のほうがブラウザ流だが、あちらは既にサイドバーの表示切り替え ─ 既定を
+    // 移すと、その行を持つ既存の keys.ini と 1 つの和音を取り合う。
+    // 文字キー単独と Shift+<文字> は空けたまま残す（ROADMAP P3-4 の型入力ジャンプ）。
+    { Cmd::ShowBookmarks,       "Alt+B" },
     { Cmd::Bookmark1,           "Alt+Shift+1" },
     { Cmd::Bookmark2,           "Alt+Shift+2" },
     { Cmd::Bookmark3,           "Alt+Shift+3" },

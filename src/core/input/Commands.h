@@ -138,6 +138,7 @@ enum class CmdGroup : uint8_t {
     /* --- bookmarks --------------------------------------------------------- */               \
     X(AddBookmark,        "bookmark.add",            "cmd.add_bookmark",       Bookmark)         \
     X(RemoveBookmark,     "bookmark.remove",         "cmd.remove_bookmark",    Bookmark)         \
+    X(ShowBookmarks,      "bookmark.list",           "cmd.show_bookmarks",     Bookmark)         \
     X(Bookmark1,          "bookmark.goto_1",         "cmd.goto_bookmark_1",    Bookmark)         \
     X(Bookmark2,          "bookmark.goto_2",         "cmd.goto_bookmark_2",    Bookmark)         \
     X(Bookmark3,          "bookmark.goto_3",         "cmd.goto_bookmark_3",    Bookmark)         \

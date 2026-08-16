@@ -116,6 +116,8 @@ private:
         SettingsRow,
         SettingsPrev,
         SettingsNext,
+        BookmarkPanel,
+        BookmarkRow,
     };
 
     /// 左ボタンが今おこなっている操作。
@@ -187,6 +189,8 @@ private:
     bool HandleKeySettingsClick(const MouseEvent& e);
     void PaintSettings(Renderer& r, const RectF& area);
     bool HandleSettingsClick(const MouseEvent& e);
+    void PaintBookmarks(Renderer& r, const RectF& area);
+    bool HandleBookmarkClick(const MouseEvent& e);
     void PaintNode(Renderer& r, SplitNode* node, const RectF& area);
     void PaintPane(Renderer& r, Pane* pane, const RectF& area);
     void PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused,
