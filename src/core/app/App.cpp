@@ -1089,6 +1089,13 @@ void App::MoveCursor(int delta, bool extend, bool absolute) {
 void App::SetStatus(const std::string& message) {
     statusMessage_ = message;
     statusUntilMs_ = plat::NowMs() + kStatusDurationMs;
+    // A message nobody asked to be drawn is not a message. Most callers move
+    // something else as well and would repaint anyway, but the ones that answer
+    // without touching the listing - Ctrl+C, Ctrl+X, an empty undo - leave the
+    // screen exactly as it was, so their answer used to sit there invisible
+    // until an unrelated keystroke happened to redraw. The expiry timer has the
+    // same dependency: the window only arms it while painting.
+    host_.Invalidate();
 }
 
 bool App::statusExpired() const { return plat::NowMs() > statusUntilMs_; }

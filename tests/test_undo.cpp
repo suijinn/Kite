@@ -306,6 +306,19 @@ KITE_TEST(undo, copy_and_cut_report_which_one_happened) {
     KITE_EXPECT_NE(h.Text("ui.copied_files"), h.Text("ui.cut_files"));
 }
 
+KITE_TEST(undo, a_status_message_asks_for_the_repaint_that_shows_it) {
+    Harness h;
+    h.app.Execute(Cmd::CursorBottom);
+
+    // Copy moves nothing on screen, so nothing else in the command will ask for
+    // a frame. Without one the answer waits for an unrelated keystroke - and so
+    // does the expiry timer, which the window only arms while painting.
+    const int before = h.host.invalidateCount;
+    h.app.Execute(Cmd::Copy);
+    KITE_EXPECT(h.host.invalidateCount > before);
+    KITE_EXPECT_EQ(h.Status(), h.Text("ui.copied_files"));
+}
+
 KITE_TEST(undo, copying_nothing_reports_the_empty_selection_not_success) {
     Harness h;
     h.app.Execute(Cmd::CursorTop);  // the ".." row has nothing to offer
