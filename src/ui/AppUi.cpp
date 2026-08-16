@@ -68,7 +68,8 @@ bool AppUi::PointerOver(const RectF& box) const {
 // As above, for everything that an overlay covers. The shortcut sheet and the
 // key editor take every click, so nothing behind them may look pointable.
 bool AppUi::Hovered(const RectF& box) const {
-    if (app_.keyHelpVisible() || app_.keyEditor().visible() || app_.settingsEditor().visible()) {
+    if (app_.keyHelpVisible() || app_.keyEditor().visible() || app_.settingsEditor().visible() ||
+        app_.bookmarkPicker().visible()) {
         return false;
     }
     // The completion popup covers only part of the window, so it is not an
@@ -151,6 +152,7 @@ void AppUi::Paint(Renderer& r) {
     }
     if (app_.keyEditor().visible()) PaintKeySettings(r, full);
     if (app_.settingsEditor().visible()) PaintSettings(r, full);
+    if (app_.bookmarkPicker().visible()) PaintBookmarks(r, full);
 }
 
 void AppUi::PaintDragOverlay(Renderer& r) {
@@ -1648,6 +1650,159 @@ bool AppUi::HandleSettingsClick(const MouseEvent& e) {
     return true;
 }
 
+// The bookmark list.
+//
+// A third sibling of the shortcut editor and the settings screen: same panel,
+// same row rhythm, same modal manners. It exists because the numbered shortcuts
+// stop at eight - past that, this is the only way to a bookmark without the
+// mouse. A row holds a name, where it goes, and the number key that would have
+// reached it.
+void AppUi::PaintBookmarks(Renderer& r, const RectF& area) {
+    const Theme& th = app_.theme();
+    const Strings& str = app_.strings();
+    BookmarkPicker& picker = app_.bookmarkPicker();
+
+    r.FillRect(area, th.overlayScrim);
+
+    const std::vector<BookmarkPicker::Row>& rows = picker.rows();
+    const float rowH = th.rowHeight;
+    const float chrome = 38.0f + 20.0f + 8.0f + 26.0f + 12.0f;  // title, note, rule, footer, pad
+    // At least one row's worth of body even when the filter matches nothing, so
+    // the panel does not collapse around the "nothing matches" line.
+    const float wanted = chrome + rowH * static_cast<float>(std::max<size_t>(rows.size(), 1));
+
+    const float width = std::clamp(area.w() - 48.0f, 200.0f, 620.0f);
+    const float height = std::min(wanted, std::max(120.0f, area.h() - 48.0f));
+    const float left = std::round(area.center().x - width * 0.5f);
+    const float top = std::round(area.center().y - height * 0.5f);
+    const RectF panel = { left, top, left + width, top + height };
+
+    r.FillRoundRect(panel, 8.0f, th.overlayBg);
+    r.StrokeRect(panel, th.border, 1.0f);
+    Add(panel, Hit::BookmarkPanel);
+
+    // Title on the left, what is being searched for on the right - and the search
+    // only gets what the title leaves, dropping out rather than landing on top of
+    // it when the window is narrow.
+    const RectF titleBox = { panel.l + 20.0f, panel.t + 8.0f, panel.r - 20.0f, panel.t + 38.0f };
+    const std::string title = str.Get("ui.bookmark_list_title");
+    const float titleW = r.MeasureText(title, FontRole::UiBold) + kPad * 2.0f;
+    r.DrawText(title, { titleBox.l, titleBox.t, titleBox.l + titleW, titleBox.b }, th.text,
+               FontRole::UiBold, TextAlign::Left);
+
+    const std::string search =
+        picker.filter().empty() ? str.Get("ui.bookmark_list_search_hint")
+                                : str.Format("ui.bookmark_list_filter", { picker.filter() });
+    if (titleW + r.MeasureText(search, FontRole::UiSmall) <= titleBox.w()) {
+        r.DrawText(search, { titleBox.l + titleW, titleBox.t, titleBox.r, titleBox.b },
+                   picker.filter().empty() ? th.textDim.alpha(0.6f) : th.text, FontRole::UiSmall,
+                   TextAlign::Right);
+    }
+
+    // How many are on screen out of how many there are. With a filter typed, this
+    // is the only thing that says the rest are still there.
+    const RectF countBox = { panel.l + 20.0f, titleBox.b, panel.r - 20.0f, titleBox.b + 20.0f };
+    r.DrawText(str.Format("ui.bookmark_list_count",
+                          { std::to_string(rows.size()) + " / " + std::to_string(picker.total()) }),
+               countBox, th.textDim.alpha(0.7f), FontRole::UiSmall, TextAlign::Left);
+
+    const RectF footer = { panel.l + 20.0f, panel.b - 26.0f, panel.r - 20.0f, panel.b - 6.0f };
+    r.DrawText(str.Get("ui.bookmark_list_hint"), footer, th.textDim, FontRole::UiSmall,
+               TextAlign::Left);
+
+    const RectF body = { panel.l + 12.0f, countBox.b + 4.0f, panel.r - 12.0f, footer.t - 4.0f };
+    r.FillRect({ body.l, body.t, body.r, body.t + 1.0f }, th.border);
+
+    const int pageRows = std::max(1, static_cast<int>((body.h() - 4.0f) / rowH));
+    // Told every frame: the panel is sized from the window, so the number of rows
+    // a PageDown should cover is only known here.
+    picker.SetPageRows(pageRows);
+
+    if (rows.empty()) {
+        r.DrawText(str.Get("ui.bookmark_list_empty"), body.inset(10.0f, 8.0f),
+                   th.textDim.alpha(0.7f), FontRole::Ui, TextAlign::Left);
+        return;
+    }
+
+    const int first = picker.scroll();
+    const int last = std::min(static_cast<int>(rows.size()) - 1, first + pageRows - 1);
+
+    r.PushClip(body);
+    for (int i = first; i <= last; ++i) {
+        const BookmarkPicker::Row& row = rows[i];
+        const float y = body.t + 3.0f + static_cast<float>(i - first) * rowH;
+        const RectF box = { body.l + 4.0f, y, body.r - 6.0f, y + rowH };
+
+        const bool selected = (i == picker.cursor());
+        if (selected) r.FillRoundRect(box, 4.0f, th.rowSelected);
+        // PointerOver, not Hovered: this panel is the overlay Hovered() blocks.
+        else if (PointerOver(box)) r.FillRoundRect(box, 4.0f, th.rowHover);
+
+        // The number key that also reaches this row, on the eight that have one.
+        // A wide enough row only: on a narrow one the name is what was come for,
+        // and the shortcut is the piece that can be looked up elsewhere.
+        float right = box.r - 10.0f;
+        if (!row.chords.empty() && box.w() > 300.0f) {
+            const float w = std::min(150.0f, r.MeasureText(row.chords, FontRole::Mono));
+            r.DrawText(row.chords, { right - w, box.t, right, box.b },
+                       selected ? th.rowSelectedText : th.textDim, FontRole::Mono,
+                       TextAlign::Right);
+            right -= w + 12.0f;
+        }
+
+        const float nameLeft = box.l + 10.0f;
+        const float nameW = std::min(r.MeasureText(row.name, FontRole::Ui) + 2.0f,
+                                     std::max(0.0f, (right - nameLeft) * 0.6f));
+        r.DrawText(row.name, { nameLeft, box.t, nameLeft + nameW, box.b },
+                   selected ? th.rowSelectedText : th.text, FontRole::Ui, TextAlign::Left);
+
+        // Only what the name left over, and gone entirely when that is too little
+        // to read - two strings sharing one rectangle overlap, they do not shrink.
+        // Right-aligned so a long path shows its tail, which is the half that says
+        // which of two same-named folders this is.
+        const RectF pathBox = { nameLeft + nameW + 10.0f, box.t, right, box.b };
+        if (pathBox.w() >= 60.0f) {
+            r.DrawText(row.path, pathBox, th.textDim.alpha(selected ? 0.9f : 0.7f),
+                       FontRole::UiSmall, TextAlign::Right);
+        }
+
+        Add(box, Hit::BookmarkRow, i);
+    }
+    r.PopClip();
+
+    if (static_cast<int>(rows.size()) > pageRows) {
+        const RectF track = { body.r - 4.0f, body.t + 3.0f, body.r - 1.0f, body.b - 3.0f };
+        const float ratio = static_cast<float>(pageRows) / static_cast<float>(rows.size());
+        const float thumbH = std::max(24.0f, track.h() * ratio);
+        const float t = static_cast<float>(first) /
+                        static_cast<float>(std::max(1, static_cast<int>(rows.size()) - pageRows));
+        const float thumbTop = track.t + (track.h() - thumbH) * t;
+        r.FillRoundRect({ track.l, thumbTop, track.r, thumbTop + thumbH }, 1.5f, th.scrollThumb);
+    }
+}
+
+// Clicks while the bookmark list is up. Nothing behind it is reachable, the same
+// as the other two overlays.
+bool AppUi::HandleBookmarkClick(const MouseEvent& e) {
+    const Region* region = Pick(e.x, e.y);
+    if (region && region->kind == Hit::BookmarkRow) {
+        app_.bookmarkPicker().SelectRow(region->index);
+        // One click goes, unlike the shortcut editor's rows: there is nothing here
+        // for a first click to disambiguate, and someone who pressed a bookmark
+        // has already decided. Ctrl reads as it does in the listing - a new tab.
+        if (e.button == 0) app_.ChooseBookmark((e.mods & kModCtrl) != 0);
+        app_.host().Invalidate();
+        return true;
+    }
+    if (region && region->kind == Hit::BookmarkPanel) {
+        app_.host().Invalidate();
+        return true;
+    }
+    // Outside the panel: same as pressing Escape.
+    app_.Execute(Cmd::ShowBookmarks);
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Mouse
 // ---------------------------------------------------------------------------
@@ -2248,6 +2403,11 @@ bool AppUi::OnMouse(const MouseEvent& e) {
         // The settings panel holds every row it has, so there is nothing to
         // scroll - but the list behind it must not scroll either.
         if (app_.settingsEditor().visible()) return true;
+        if (app_.bookmarkPicker().visible()) {
+            app_.bookmarkPicker().Scroll(static_cast<int>(-e.wheel * 3.0f));
+            app_.host().Invalidate();
+            return true;
+        }
         if (app_.keyEditor().visible()) {
             app_.keyEditor().Scroll(static_cast<int>(-e.wheel * 3.0f));
             app_.host().Invalidate();
@@ -2297,6 +2457,7 @@ bool AppUi::OnMouse(const MouseEvent& e) {
 
     if (app_.settingsEditor().visible()) return HandleSettingsClick(e);
     if (app_.keyEditor().visible()) return HandleKeySettingsClick(e);
+    if (app_.bookmarkPicker().visible()) return HandleBookmarkClick(e);
 
     if (app_.keyHelpVisible()) {
         app_.Execute(Cmd::ShowKeyHelp);

@@ -375,6 +375,8 @@ void App::LoadConfig() {
         WriteKeysFile();
     }
     keyEditor_.Close();
+    // The rows hold positions in the bookmark list that is about to be replaced.
+    bookmarkPicker_.Close();
 
     workspace_.bookmarks.clear();
     Ini bookmarksIni;
@@ -1588,6 +1590,11 @@ bool App::OnChar(uint32_t cp) {
     // 設定画面は絞り込みを持たないが、打鍵は残らず飲み込む ─ 出しっぱなしの
     // 画面の裏でプロンプトが文字を受け取っては困る。
     if (settingsEditor_.visible()) return true;
+    if (bookmarkPicker_.visible()) {
+        if (!bookmarkPicker_.HandleChar(cp)) return false;
+        host_.Invalidate();
+        return true;
+    }
     if (keyEditor_.visible()) {
         if (!keyEditor_.HandleChar(cp, strings_, keymap_)) return false;
         host_.Invalidate();
@@ -1645,6 +1652,24 @@ bool App::OnKey(const Chord& chord) {
         host_.Invalidate();
         return consumed;
     }
+    if (bookmarkPicker_.visible()) {
+        // Its own chord still toggles it shut, so the key that opened the list is
+        // also the key that leaves it - the same exit the other overlays have.
+        if (keymap_.Lookup(chord) == Cmd::ShowBookmarks) {
+            Execute(Cmd::ShowBookmarks);
+            return true;
+        }
+        switch (bookmarkPicker_.HandleKey(chord)) {
+            case BookmarkPicker::Action::Open: ChooseBookmark(false); break;
+            case BookmarkPicker::Action::OpenNewTab: ChooseBookmark(true); break;
+            case BookmarkPicker::Action::Close: bookmarkPicker_.Close(); break;
+            case BookmarkPicker::Action::None: break;
+        }
+        // Everything reaching here was swallowed: picking a folder is not a state
+        // to fire unrelated shortcuts from.
+        host_.Invalidate();
+        return true;
+    }
     if (keyHelp_) {
         // Any key closes the cheat sheet except the one that re-opens it.
         const Cmd c = keymap_.Lookup(chord);
@@ -1686,6 +1711,22 @@ void App::GotoSession(int index) {
 void App::GotoBookmark(int index) {
     if (index < 0 || index >= static_cast<int>(workspace_.bookmarks.size())) return;
     NavigateFocused(workspace_.bookmarks[index].path);
+}
+
+void App::ChooseBookmark(bool newTab) {
+    const int index = bookmarkPicker_.selectedIndex();
+    // The path is taken before the screen goes, because the screen is what holds
+    // the answer to "which one".
+    const std::string target =
+        (index >= 0 && index < static_cast<int>(workspace_.bookmarks.size()))
+            ? workspace_.bookmarks[index].path
+            : std::string();
+    // Closed first: the folder that is about to load may have something to say in
+    // the status line, and a panel still covering the list would be answering a
+    // question the user has already finished asking.
+    bookmarkPicker_.Close();
+    if (!target.empty()) OpenPath(target, newTab);
+    host_.Invalidate();
 }
 
 void App::DoDelete(bool permanent) {
@@ -1891,6 +1932,7 @@ void App::Execute(Cmd cmd) {
             if (keyHelp_) {
                 keyEditor_.Close();
                 settingsEditor_.Close();
+                bookmarkPicker_.Close();
             }
             host_.Invalidate();
             break;
@@ -1902,6 +1944,7 @@ void App::Execute(Cmd cmd) {
                 // them on screen at once would only be confusing.
                 keyHelp_ = false;
                 settingsEditor_.Close();
+                bookmarkPicker_.Close();
                 keyEditor_.Open(strings_, keymap_);
             }
             host_.Invalidate();
@@ -1912,6 +1955,7 @@ void App::Execute(Cmd cmd) {
             } else {
                 keyHelp_ = false;
                 keyEditor_.Close();
+                bookmarkPicker_.Close();
                 // 開くたびに現在値から作り直す。設定は画面の外（Ctrl+Shift+M の
                 // テーマ切り替え、Ctrl++ の文字サイズ）からも変わる。
                 settingsEditor_.Open(strings_, CollectSettings());
@@ -1920,7 +1964,9 @@ void App::Execute(Cmd cmd) {
             host_.Invalidate();
             break;
         case Cmd::CancelOverlay:
-            if (settingsEditor_.visible()) {
+            if (bookmarkPicker_.visible()) {
+                bookmarkPicker_.Close();
+            } else if (settingsEditor_.visible()) {
                 settingsEditor_.Close();
             } else if (keyEditor_.visible()) {
                 CloseKeyEditor();
@@ -2364,6 +2410,22 @@ void App::Execute(Cmd cmd) {
                 ToggleBookmark(tab->path);
                 dirty_ = true;
             }
+            break;
+        case Cmd::ShowBookmarks:
+            if (bookmarkPicker_.visible()) {
+                bookmarkPicker_.Close();
+            } else if (workspace_.bookmarks.empty()) {
+                // An empty panel is the same as a key that does nothing, except it
+                // also has to be dismissed. Say what is missing and how to add it.
+                SetStatus(strings_.Get("ui.no_bookmarks"));
+            } else {
+                keyHelp_ = false;
+                keyEditor_.Close();
+                settingsEditor_.Close();
+                bookmarkPicker_.Open(workspace_.bookmarks, keymap_,
+                                     tab ? tab->path : std::string());
+            }
+            host_.Invalidate();
             break;
         case Cmd::Bookmark1: GotoBookmark(0); break;
         case Cmd::Bookmark2: GotoBookmark(1); break;

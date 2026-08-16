@@ -1348,3 +1348,127 @@ KITE_TEST(appui, the_shortcut_sheet_survives_a_window_with_no_room_in_it) {
         KITE_EXPECT(t.ink.b >= t.ink.t);
     }
 }
+
+// --- the bookmark list -------------------------------------------------------
+
+namespace {
+
+// Long names and long paths, which is what makes the three-things-on-one-row
+// layout of this panel worth checking.
+void GiveBookmarks(App& app) {
+    app.workspace().bookmarks.clear();
+    app.workspace().bookmarks.push_back({ "alpha", "C:\\home\\alpha" });
+    app.workspace().bookmarks.push_back({ "beta", "C:\\home\\beta" });
+    app.workspace().bookmarks.push_back(
+        { "a rather long bookmark name", "C:\\home\\alpha\\nested" });
+    for (int i = 4; i <= 12; ++i) {
+        app.workspace().bookmarks.push_back(
+            { "mark" + std::to_string(i), "C:\\a\\deep\\path\\that\\keeps\\going\\p" +
+                                              std::to_string(i) });
+    }
+}
+
+}  // namespace
+
+// A row carries three things - the name, where it goes, and the number key that
+// also reaches it - and each of them used to be handed a rect running to the far
+// edge. Rects that overlap put the text on top of each other; nothing shrinks.
+KITE_TEST(appui, nothing_on_the_bookmark_list_is_drawn_on_top_of_anything_else) {
+    Fixture f;
+    GiveBookmarks(f.app);
+    f.renderer.size = { 560.0f, 420.0f };
+    f.app.Execute(Cmd::ShowBookmarks);
+    f.Paint();
+
+    const std::vector<test::FakeRenderer::Text> panel =
+        f.renderer.TextsAfterFill(f.app.theme().overlayScrim);
+    KITE_EXPECT(panel.size() > 5);
+
+    for (size_t i = 0; i < panel.size(); ++i) {
+        for (size_t j = i + 1; j < panel.size(); ++j) {
+            if (test::FakeRenderer::Overlaps(panel[i].ink, panel[j].ink)) {
+                KITE_FAIL("\"" + panel[i].text + "\" and \"" + panel[j].text + "\" overlap");
+            }
+        }
+    }
+}
+
+// Narrow enough that the path and the shortcut cannot both fit: what does not
+// fit is dropped, not stacked.
+KITE_TEST(appui, the_bookmark_list_survives_a_window_with_no_room_in_it) {
+    Fixture f;
+    GiveBookmarks(f.app);
+    f.renderer.size = { 240.0f, 160.0f };
+    f.app.Execute(Cmd::ShowBookmarks);
+    f.Paint();
+
+    const std::vector<test::FakeRenderer::Text> panel =
+        f.renderer.TextsAfterFill(f.app.theme().overlayScrim);
+    for (size_t i = 0; i < panel.size(); ++i) {
+        KITE_EXPECT(panel[i].ink.r >= panel[i].ink.l);
+        for (size_t j = i + 1; j < panel.size(); ++j) {
+            if (test::FakeRenderer::Overlaps(panel[i].ink, panel[j].ink)) {
+                KITE_FAIL("\"" + panel[i].text + "\" and \"" + panel[j].text + "\" overlap");
+            }
+        }
+    }
+}
+
+// One click goes, unlike the shortcut editor's rows: whoever pressed a bookmark
+// has already decided which one they want.
+KITE_TEST(appui, pressing_a_bookmark_row_goes_there_and_closes_the_panel) {
+    Fixture f;
+    GiveBookmarks(f.app);
+    f.renderer.size = { 900.0f, 640.0f };
+    f.app.Execute(Cmd::ShowBookmarks);
+    f.Paint();
+
+    // Down the middle of the panel, which is rows all the way. Pressing outside
+    // would also close it, so the proof is that the folder actually changed to
+    // one of the bookmarks - C:\home, where this started, is not among them.
+    f.Press(450.0f, 320.0f);
+    test::PumpUntilSettled(f.app);
+
+    KITE_EXPECT_FALSE(f.app.bookmarkPicker().visible());
+    bool landed = false;
+    for (const Bookmark& b : f.app.workspace().bookmarks) {
+        if (b.path == f.tab()->path) landed = true;
+    }
+    KITE_EXPECT(landed);
+}
+
+// Pressing outside is the same as Escape, and the list behind the panel takes
+// nothing from that press.
+KITE_TEST(appui, pressing_outside_the_bookmark_list_closes_it) {
+    Fixture f;
+    GiveBookmarks(f.app);
+    f.renderer.size = { 900.0f, 640.0f };
+    f.app.Execute(Cmd::ShowBookmarks);
+    f.Paint();
+
+    const std::string before = f.tab()->path;
+    f.Press(6.0f, 630.0f);
+    test::PumpUntilSettled(f.app);
+
+    KITE_EXPECT_FALSE(f.app.bookmarkPicker().visible());
+    KITE_EXPECT_EQ(f.tab()->path, before);
+}
+
+// The wheel belongs to the panel while it is up, exactly as it does for the
+// shortcut editor.
+KITE_TEST(appui, the_wheel_moves_the_bookmark_list_and_not_the_list_behind_it) {
+    Fixture f;
+    GiveBookmarks(f.app);
+    f.renderer.size = { 560.0f, 300.0f };
+    f.app.Execute(Cmd::ShowBookmarks);
+    f.Paint();
+
+    const float listScroll = f.tab()->scroll;
+    KITE_EXPECT_EQ(f.app.bookmarkPicker().scroll(), 0);
+
+    f.Wheel(280.0f, 150.0f, -3.0f);
+    f.Paint();
+
+    KITE_EXPECT_NEAR(f.tab()->scroll, listScroll, 0.01f);
+    KITE_EXPECT(f.app.bookmarkPicker().scroll() > 0);
+}

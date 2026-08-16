@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "core/app/BookmarkPicker.h"
 #include "core/app/Host.h"
 #include "core/app/IconProvider.h"
 #include "core/app/SettingsEditor.h"
@@ -275,6 +276,22 @@ public:
     ///       settings.ini への保存は App::ApplyPendingSetting() が行うので、値を
     ///       動かしたら必ずそれを呼ぶこと
     SettingsEditor& settingsEditor() { return settingsEditor_; }
+
+    /// @brief ブックマーク一覧の状態を返す。
+    /// @return ブックマーク一覧への参照
+    const BookmarkPicker& bookmarkPicker() const { return bookmarkPicker_; }
+
+    /// @brief ブックマーク一覧の状態を返す（変更可能）。
+    /// @return ブックマーク一覧への参照
+    /// @note UI 層がマウス操作（行の選択、ホイール）と 1 画面の行数の通知に使う。
+    ///       行を選んで実際に移動するのは App::ChooseBookmark() ─ 移動は
+    ///       ワークスペースを動かすので、画面の側に持たせない
+    BookmarkPicker& bookmarkPicker() { return bookmarkPicker_; }
+
+    /// @brief ブックマーク一覧で選ばれている行へ移動し、一覧を閉じる。
+    /// @param[in] newTab true なら新しいタブで開く
+    /// @note UI 層が行のクリックで呼ぶ。キーボードは Enter / Ctrl+Enter で同じ道を通る
+    void ChooseBookmark(bool newTab);
 
     /// @brief 設定画面で変わった値を反映し、settings.ini へ書き出す。
     /// @note SettingsEditor::changed() が指す 1 項目だけを反映する。何も変わって
@@ -564,6 +581,7 @@ private:
     KeyMap keymap_;
     KeyEditor keyEditor_;
     SettingsEditor settingsEditor_;
+    BookmarkPicker bookmarkPicker_;
     Strings strings_;
     Theme theme_;
     Ini settings_;

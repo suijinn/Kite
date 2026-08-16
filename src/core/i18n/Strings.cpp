@@ -110,6 +110,7 @@ const Row kEn[] = {
 
     { "cmd.add_bookmark", "Add bookmark" },
     { "cmd.remove_bookmark", "Remove bookmark" },
+    { "cmd.show_bookmarks", "Show all bookmarks" },
     { "cmd.goto_bookmark_n", "Go to bookmark {n}" },
 
     { "cmd.new_folder", "New folder" },
@@ -180,6 +181,13 @@ const Row kEn[] = {
     { "ui.key_settings_reset_all", "Every shortcut restored to its default" },
     { "ui.key_settings_cancelled", "Left unchanged" },
     { "ui.key_settings_saved", "Shortcuts saved to keys.ini" },
+    { "ui.bookmark_list_title", "Bookmarks" },
+    { "ui.bookmark_list_hint", "Enter: go   Ctrl+Enter: new tab   Esc: close" },
+    { "ui.bookmark_list_filter", "Search: {0}" },
+    { "ui.bookmark_list_search_hint", "Type to search" },
+    { "ui.bookmark_list_count", "{0} bookmarks" },
+    { "ui.bookmark_list_empty", "Nothing matches that" },
+    { "ui.no_bookmarks", "No bookmarks yet. Ctrl+D adds this folder." },
     { "ui.settings_title", "Settings" },
     { "ui.settings_hint", "Left/Right or Enter: change   Ctrl+F1: shortcuts   Esc: close" },
     { "ui.settings_file", "Changes are written to settings.ini straight away" },
@@ -341,6 +349,7 @@ const Row kJa[] = {
 
     { "cmd.add_bookmark", "ブックマークに追加" },
     { "cmd.remove_bookmark", "ブックマークから削除" },
+    { "cmd.show_bookmarks", "ブックマークの一覧" },
     { "cmd.goto_bookmark_n", "ブックマーク {n} へ" },
 
     { "cmd.new_folder", "新しいフォルダ" },
@@ -410,6 +419,13 @@ const Row kJa[] = {
     { "ui.key_settings_reset_all", "すべてのショートカットを既定に戻しました" },
     { "ui.key_settings_cancelled", "変更しませんでした" },
     { "ui.key_settings_saved", "keys.ini に保存しました" },
+    { "ui.bookmark_list_title", "ブックマーク" },
+    { "ui.bookmark_list_hint", "Enter: 移動   Ctrl+Enter: 新しいタブ   Esc: 閉じる" },
+    { "ui.bookmark_list_filter", "検索: {0}" },
+    { "ui.bookmark_list_search_hint", "文字を入力すると絞り込めます" },
+    { "ui.bookmark_list_count", "{0} 件" },
+    { "ui.bookmark_list_empty", "該当するものがありません" },
+    { "ui.no_bookmarks", "ブックマークがありません。Ctrl+D でこのフォルダを追加できます" },
     { "ui.settings_title", "設定" },
     { "ui.settings_hint", "←→ または Enter: 変更   Ctrl+F1: ショートカットキー   Esc: 閉じる" },
     { "ui.settings_file", "変更はすぐ settings.ini に保存されます" },
