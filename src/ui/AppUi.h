@@ -107,6 +107,7 @@ private:
         ListBackground,
         Splitter,
         AddressBar,
+        PromptField,  ///< 対象の上で開いている入力欄。外を押すと畳まれるので要る
         CompletionRow,
         KeyPanel,
         KeyRow,
@@ -175,12 +176,15 @@ private:
         int shownRows = 1;       ///< 実際に描く行数。rows を超えない
     };
 
+    bool SessionChipEditing(int index) const;
     float LayoutSessionBar(Renderer& r, const RectF& area);
     void PaintSessionBar(Renderer& r, const RectF& area);
     TabLayout LayoutTabBar(Pane& pane, const RectF& area) const;
     void PaintSidebar(Renderer& r, const RectF& area);
     void PaintStatusBar(Renderer& r, const RectF& area);
-    void PaintPromptField(Renderer& r, const RectF& field);
+    void PaintPromptField(Renderer& r, const RectF& field, FontRole role = FontRole::Ui);
+    void PaintInlineField(Renderer& r, const RectF& box, FontRole role = FontRole::Ui,
+                          float indent = 0.0f);
     void PaintPrompt(Renderer& r, const RectF& area);
     void LayoutCompletion(Renderer& r, const RectF& promptArea);
     void PaintCompletion(Renderer& r);

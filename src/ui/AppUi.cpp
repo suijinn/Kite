@@ -114,14 +114,16 @@ void AppUi::Paint(Renderer& r) {
 
     completionRect_ = {};
 
-    // The address is edited in the breadcrumb bar of the focused pane - see
-    // PaintPathBar. Nothing is reserved for it here: the bar it takes over is
-    // already on screen, so Ctrl+L moves nothing.
+    // Every field that edits one nameable thing is drawn on that thing: the path
+    // in the breadcrumb bar (PaintPathBar), a name in its list row, a session
+    // name in its chip (PaintList / PaintSessionBar). Nothing is reserved for
+    // them here - the row they take over is already on screen, so opening one
+    // moves nothing.
     //
-    // The other prompts stay at the bottom. They are about the list, and moving
-    // the list down to ask "rename to what?" would push the row being renamed
-    // out from under the pointer.
-    if (app_.prompt().active() && app_.prompt().kind != PromptKind::Path) {
+    // What is left at the bottom is what has no single place to sit: the filter
+    // is about the whole listing, and the delete confirmation is a question
+    // rather than a name.
+    if (app_.prompt().active() && !app_.prompt().isInline()) {
         const RectF promptBar = { rest.l, rest.b - (th.statusBarHeight + 6.0f), rest.r, rest.b };
         PaintPrompt(r, promptBar);
         rest.b = promptBar.t;
@@ -206,6 +208,16 @@ void AppUi::PaintDragOverlay(Renderer& r) {
 // is open - one that silently stops listing after the sixth session is worse
 // than no bar at all.
 //
+// Which chip holds the name being typed, if any. Asked by both the layout and
+// the paint pass: sizing one chip to the field while drawing the field into
+// another is how a name ends up clipped by the box that was measured for the old
+// one. Renaming answers about the active session (App::ApplyPrompt reads
+// activeSession()), so that is the chip that opens.
+bool AppUi::SessionChipEditing(int index) const {
+    return app_.prompt().kind == PromptKind::SessionName &&
+           index == app_.workspace().active;
+}
+
 // Returns the height of the bar, in whole rows.
 float AppUi::LayoutSessionBar(Renderer& r, const RectF& area) {
     const Theme& th = app_.theme();
@@ -242,8 +254,15 @@ float AppUi::LayoutSessionBar(Renderer& r, const RectF& area) {
     int row = 0;
     float x = kPad;
     for (size_t i = 0; i < ws.sessions.size(); ++i) {
-        const std::string label = std::to_string(i + 1) + "  " + ws.sessions[i]->name;
-        const float w = r.MeasureText(label, FontRole::UiSmall) + kPad * 2.0f;
+        // While the name is being typed the chip is sized to what is in the field,
+        // not to the name on file - a chip that kept its old width would clip the
+        // very text being entered. The slack is for the caret standing past the
+        // last letter, and keeps an emptied field from collapsing to nothing.
+        const bool editing = SessionChipEditing(static_cast<int>(i));
+        const std::string label = std::to_string(i + 1) + "  " +
+                                  (editing ? app_.prompt().text : ws.sessions[i]->name);
+        float w = r.MeasureText(label, FontRole::UiSmall) + kPad * 2.0f;
+        if (editing) w += 24.0f;
         // The first chip on a row is placed whatever its width: a name long
         // enough to overflow the window on its own still gets a row, and the
         // text is clipped, rather than the loop wrapping for ever.
@@ -306,8 +325,21 @@ void AppUi::PaintSessionBar(Renderer& r, const RectF& area) {
     for (const Chip& chip : sessionChips_) {
         if (chip.index >= static_cast<int>(ws.sessions.size())) continue;
         const bool active = (chip.index == ws.active);
+        const std::string number = std::to_string(chip.index + 1) + "  ";
+
+        if (SessionChipEditing(chip.index)) {
+            // The number stays: it is which Alt+<digit> comes here, and a chip
+            // that shed its number while being typed into reads as a different
+            // chip. Drawn after the field, which fills the whole box.
+            const float numberW = r.MeasureText(number, FontRole::UiSmall);
+            PaintInlineField(r, chip.box, FontRole::UiSmall, numberW);
+            r.DrawText(number, chip.box.inset(3.0f, 0.0f), th.textDim, FontRole::UiSmall,
+                       TextAlign::Left);
+            continue;
+        }
+
         const std::string label =
-            std::to_string(chip.index + 1) + "  " + ws.sessions[static_cast<size_t>(chip.index)]->name;
+            number + ws.sessions[static_cast<size_t>(chip.index)]->name;
 
         if (active) r.FillRoundRect(chip.box, 4.0f, th.sessionActiveBg);
         if (Hovered(chip.box)) r.FillRoundRect(chip.box, 4.0f, th.rowHover);
@@ -386,15 +418,21 @@ void AppUi::PaintSidebar(Renderer& r, const RectF& area) {
 
             const RectF icon = { row.l + 6.0f, row.t, row.l + 6.0f + iconCell, row.b };
             const Color iconColor = selected ? th.rowSelectedText : th.textFolder;
-            // Bookmarks keep the star: it says "you pinned this", which no icon
-            // the shell can supply would.
-            const uint32_t shellIcon = glyphKind == 2 ? 0u : app_.IconFor(fullPath);
+            // Every row asks the shell, bookmarks included. They used to keep a
+            // star on the grounds that it says "you pinned this" - but that is
+            // what the heading above them says, and the star said nothing about
+            // *what* was pinned. The shell icon does, and it carries the overlay
+            // with it: which bookmark is a synced OneDrive folder, which is under
+            // version control, which is a network share nobody can reach. Those
+            // are the questions a row of identical stars could not answer.
+            const uint32_t shellIcon = app_.IconFor(fullPath);
             if (shellIcon) {
                 r.DrawIcon(shellIcon, icon.inset(1.0f));
             } else {
+                // Until it lands - and for good under [ui] shell_icons = false -
+                // the drawn glyph holds the space, so rows never shift.
                 switch (glyphKind) {
                     case 1: glyph::Drive(r, icon, iconColor); break;
-                    case 2: glyph::Star(r, icon, th.accent); break;
                     case 3: glyph::Cloud(r, icon, iconColor); break;
                     default: glyph::Folder(r, icon, iconColor); break;
                 }
@@ -435,8 +473,10 @@ void AppUi::PaintSidebar(Renderer& r, const RectF& area) {
                     const std::vector<Bookmark>& marks =
                         const_cast<App&>(app_).workspace().bookmarks;
                     for (size_t i = 0; i < marks.size(); ++i) {
+                        // A bookmark is a folder, so it falls back to one - the
+                        // same placeholder quick access uses, for the same reason.
                         item(SidebarSection::Bookmarks, static_cast<int>(i), marks[i].name,
-                             marks[i].path, 2);
+                             marks[i].path, 0);
                     }
                 }
                 break;
@@ -917,35 +957,81 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
         r.DrawText(message, body.inset(kPad, 8.0f), th.textError, FontRole::Ui, TextAlign::Left);
         return;
     }
-    if (tab->visible.empty()) {
+    // A name being created has no row of its own yet - the file does not exist
+    // until Enter - so one is borrowed: an extra slot directly below the cursor,
+    // pushing the rows under it down. Below rather than on top of the cursor so
+    // that nothing already read moves, and next to the cursor rather than at
+    // either end because that is where the eye already is. Where the finished
+    // item actually lands is the sort order's answer, and cannot be known before
+    // the name is typed.
+    const PromptKind promptKind = app_.prompt().kind;
+    const bool creating =
+        focused && (promptKind == PromptKind::NewFolder || promptKind == PromptKind::NewFile);
+    const int phantom =
+        creating ? std::clamp(tab->cursor + 1, 0, static_cast<int>(tab->visible.size())) : -1;
+    const bool renaming = focused && promptKind == PromptKind::Rename;
+
+    if (tab->visible.empty() && phantom < 0) {
         r.DrawText(str.Get(tab->filter.empty() ? "ui.empty" : "ui.no_match"),
                    body.inset(kPad, 8.0f), th.textDim, FontRole::Ui, TextAlign::Left);
         return;
     }
 
     const float rowH = th.rowHeight;
-    const float maxScroll =
-        std::max(0.0f, static_cast<float>(tab->visible.size()) * rowH - body.h());
+    // Slots, not entries: the borrowed row takes up one of them, so everything
+    // that measures the list in rows - the scroll range, which rows are on
+    // screen, the striping - counts slots.
+    const int slots = static_cast<int>(tab->visible.size()) + (phantom >= 0 ? 1 : 0);
+    const float maxScroll = std::max(0.0f, static_cast<float>(slots) * rowH - body.h());
     tab->scroll = std::clamp(tab->scroll, 0.0f, maxScroll);
 
+    // The borrowed row is one past the cursor, which can itself be the last row
+    // in view - and a field nobody can see is worse than the bar at the bottom
+    // it replaced. Scrolled here rather than when the prompt opens because only
+    // this function knows how tall the list came out.
+    if (phantom >= 0) {
+        const float top = static_cast<float>(phantom) * rowH;
+        if (top + rowH > tab->scroll + body.h()) tab->scroll = top + rowH - body.h();
+        if (top < tab->scroll) tab->scroll = top;
+        tab->scroll = std::clamp(tab->scroll, 0.0f, maxScroll);
+    }
+
     const int first = std::max(0, static_cast<int>(tab->scroll / rowH));
-    const int last = std::min(static_cast<int>(tab->visible.size()) - 1,
-                              first + static_cast<int>(body.h() / rowH) + 1);
+    const int last = std::min(slots - 1, first + static_cast<int>(body.h() / rowH) + 1);
 
     // Asked once for the whole list: the last row's rectangle can hang below the
     // list, and the pointer being down there is not the pointer being on it.
     const bool pointerInList = Hovered(body);
 
     r.PushClip(body);
-    for (int i = first; i <= last; ++i) {
-        const float top = body.t + static_cast<float>(i) * rowH - tab->scroll;
+    for (int slot = first; slot <= last; ++slot) {
+        const float top = body.t + static_cast<float>(slot) * rowH - tab->scroll;
         const RectF row = { body.l, top, body.r - kScrollbarWidth, top + rowH };
+
+        if (slot == phantom) {
+            // Striped along with the rest so the borrowed row reads as one of
+            // them rather than as a panel dropped over the list.
+            if (slot % 2 == 1) r.FillRect(row, th.listBgAlt);
+            const RectF icon = { row.l + 6.0f, row.t, row.l + 6.0f + IconCell(th), row.b };
+            // The glyph is what the label at the bottom used to say: a folder is
+            // being made, or a file is. Nothing else on the row can tell them
+            // apart while the name is still empty.
+            if (promptKind == PromptKind::NewFolder) {
+                glyph::Folder(r, icon, th.textFolder);
+            } else {
+                glyph::File(r, icon, th.text.alpha(0.85f));
+            }
+            PaintInlineField(r, { icon.r + 3.0f, row.t + 2.0f, colName.r, row.b - 2.0f });
+            continue;
+        }
+        // Past the borrowed row every slot names the entry one before it.
+        const int i = (phantom >= 0 && slot > phantom) ? slot - 1 : slot;
 
         const fs::Entry* entry = tab->EntryAt(i);
         const bool marked = entry && tab->marked[tab->visible[i]] != 0;
         const bool isCursor = (i == tab->cursor);
 
-        if (i % 2 == 1) r.FillRect(row, th.listBgAlt);
+        if (slot % 2 == 1) r.FillRect(row, th.listBgAlt);
         if (marked) r.FillRect(row, th.rowSelected);
         // Over the selection rather than under it: a marked row still has to
         // answer "is this the one I am about to click".
@@ -1008,7 +1094,11 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
             glyph::File(r, icon, nameColor.alpha(nameColor.a * 0.85f));
         }
 
-        r.DrawText(e.name, nameBox, nameColor, FontRole::Ui, TextAlign::Left);
+        // The field replaces the name it is editing rather than covering it: two
+        // spellings of the same name, one under the other, is what the bar at the
+        // bottom looked like.
+        const bool editingRow = renaming && isCursor;
+        if (!editingRow) r.DrawText(e.name, nameBox, nameColor, FontRole::Ui, TextAlign::Left);
 
         if (wide && colExt.w() > 0.0f) {
             const std::string ext = e.isDir() ? std::string() : path::Extension(e.name);
@@ -1029,12 +1119,20 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
         }
 
         Add(row, Hit::ListRow, i, pane);
+        // After the row, so the field wins the hit test over it: Pick answers
+        // from the back, and a click inside the field must not also move the
+        // cursor - which is what decides who gets renamed.
+        if (editingRow) {
+            PaintInlineField(r, { nameBox.l - 3.0f, row.t + 2.0f, colName.r, row.b - 2.0f });
+        }
     }
     r.PopClip();
 
     // A folder holding nothing still lists ".."; say so under it rather than
-    // leaving the pane looking like it failed to load.
-    if (tab->ItemCount() == 0) {
+    // leaving the pane looking like it failed to load. Not while a name is being
+    // typed: the borrowed row is sitting in exactly that space, and "this folder
+    // is empty" is about to stop being true anyway.
+    if (tab->ItemCount() == 0 && phantom < 0) {
         const float top = body.t + rowH;
         r.DrawText(str.Get(tab->filter.empty() ? "ui.empty" : "ui.no_match"),
                    { body.l + kPad, top + 8.0f, body.r - kPad, body.b }, th.textDim, FontRole::Ui,
@@ -1044,7 +1142,7 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
     // --- scrollbar ---
     if (maxScroll > 0.0f) {
         const RectF track = { body.r - kScrollbarWidth, body.t, body.r, body.b };
-        const float ratio = body.h() / (static_cast<float>(tab->visible.size()) * rowH);
+        const float ratio = body.h() / (static_cast<float>(slots) * rowH);
         const float thumbH = std::max(24.0f, track.h() * ratio);
         const float t = tab->scroll / maxScroll;
         const float thumbTop = track.t + (track.h() - thumbH) * t;
@@ -1076,8 +1174,16 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
     r.DrawText(left, { area.l + kPad, area.t, area.r * 0.6f, area.b }, th.textDim, FontRole::UiSmall,
                TextAlign::Left);
 
+    // A field drawn in place says what it is renaming by where it sits, but not
+    // what it is being asked for - and an empty box on a borrowed row says least
+    // of all. So the heading the bottom bar used to carry moves here, where it
+    // costs the field no width. It outranks the cursor's name: that row is what
+    // the field is already sitting on.
     std::string right;
-    if (!app_.statusMessage().empty() && !app_.statusExpired()) {
+    const Prompt& p = app_.prompt();
+    if (p.isInline() && p.kind != PromptKind::Path && !p.labelKey.empty()) {
+        right = str.Get(p.labelKey);
+    } else if (!app_.statusMessage().empty() && !app_.statusExpired()) {
         right = app_.statusMessage();
     } else if (tab) {
         const fs::Entry* e = tab->CursorEntry();
@@ -1088,7 +1194,11 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
 }
 
 // Text, selection and caret for one editable field.
-void AppUi::PaintPromptField(Renderer& r, const RectF& field) {
+//
+// The font is a parameter because the field takes the place of whatever it is
+// editing: a session chip is set in the small face, so a field measured in the
+// normal one would size its chip to a width the text never fills.
+void AppUi::PaintPromptField(Renderer& r, const RectF& field, FontRole role) {
     const Theme& th = app_.theme();
     const Prompt& p = app_.prompt();
 
@@ -1098,22 +1208,39 @@ void AppUi::PaintPromptField(Renderer& r, const RectF& field) {
     // the whole once kerning is involved.
     if (p.hasSelection()) {
         const float from =
-            r.MeasureText(std::string_view(p.text).substr(0, p.selBegin()), FontRole::Ui);
-        const float to =
-            r.MeasureText(std::string_view(p.text).substr(0, p.selEnd()), FontRole::Ui);
+            r.MeasureText(std::string_view(p.text).substr(0, p.selBegin()), role);
+        const float to = r.MeasureText(std::string_view(p.text).substr(0, p.selEnd()), role);
         r.FillRect({ field.l + from, field.t + 3.0f, field.l + to, field.b - 3.0f },
                    th.textSelection);
     }
 
-    r.DrawText(p.text, field, th.text, FontRole::Ui, TextAlign::Left);
+    r.DrawText(p.text, field, th.text, role, TextAlign::Left);
 
     // The caret is the text colour, not the accent: it is a letter-shaped mark
     // in a run of letters, and every field on the desktop draws it that way.
     // The accent says where the keyboard is; the bar's own border already does.
     const float caretX =
-        field.l + r.MeasureText(std::string_view(p.text).substr(0, p.caret), FontRole::Ui);
+        field.l + r.MeasureText(std::string_view(p.text).substr(0, p.caret), role);
     r.FillRect({ caretX, field.t + 4.0f, caretX + 1.5f, field.b - 4.0f }, th.text);
     caret_ = { caretX, field.t };
+}
+
+// A field drawn over the thing it is editing - a list row, or a session chip.
+//
+// The same vocabulary the bar at the bottom uses (panel fill, accent edge), just
+// boxed instead of spanning the window: what is being renamed is said by where
+// the box is, which is the whole reason for editing in place. The region is
+// registered so that a click inside the field is told apart from a click
+// anywhere else, which folds it away.
+//
+// `indent` leaves room at the left for something drawn inside the same box but
+// outside the text - the session chip's number.
+void AppUi::PaintInlineField(Renderer& r, const RectF& box, FontRole role, float indent) {
+    const Theme& th = app_.theme();
+    r.FillRect(box, th.overlayBg);
+    r.StrokeRect(box, th.accent, 1.0f);
+    PaintPromptField(r, { box.l + 3.0f + indent, box.t, box.r - 3.0f, box.b }, role);
+    Add(box, Hit::PromptField);
 }
 
 void AppUi::PaintPrompt(Renderer& r, const RectF& area) {
@@ -2464,17 +2591,24 @@ bool AppUi::OnMouse(const MouseEvent& e) {
         return true;
     }
 
-    // A press anywhere but the field itself puts the address bar away. Clicking
-    // elsewhere is already an answer to something else, and a half-typed path
-    // has no business staying open across it. The click then goes on to do
-    // whatever it was going to do - including opening the bar of another pane,
-    // which is why this runs before the dispatch below rather than inside it.
-    if (app_.prompt().kind == PromptKind::Path) {
+    // A press anywhere but the field itself puts an in-place field away. Clicking
+    // elsewhere is already an answer to something else, and a half-typed name has
+    // no business staying open across it. The click then goes on to do whatever it
+    // was going to do - including opening the bar of another pane, which is why
+    // this runs before the dispatch below rather than inside it.
+    //
+    // Explorer commits a rename on an outside click instead. Not here: the click
+    // that would commit it usually lands on a row, and that same click moves the
+    // cursor - which is what picks the file being renamed (App::ApplyPrompt reads
+    // CursorEntry). Committing would rename on a mis-click, and rename the wrong
+    // thing while doing it. Enter is the only word for yes.
+    if (app_.prompt().isInline()) {
         const bool onField =
-            region && ((region->kind == Hit::AddressBar &&
+            region && (region->kind == Hit::PromptField ||
+                       (region->kind == Hit::AddressBar &&
                         region->pane == app_.workspace().focusedPane()) ||
                        region->kind == Hit::CompletionRow);
-        if (!onField) app_.CancelPathEdit();
+        if (!onField) app_.CancelInlineEdit();
     }
 
     // Mouse back / forward buttons.
@@ -2494,6 +2628,12 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             // Not Cmd::Session1 + index: there are only eight of those, and now
             // that the bar wraps, the ninth chip is on screen and clickable.
             app_.GotoSession(region->index);
+            // 名前の書かれたチップをダブルクリックすれば名前を変えられる、は
+            // どの UI でも同じ読み方。キーボード側の和音（既定 Ctrl+Alt+R）は
+            // 常駐ソフトに奪われていることがあり、そのとき唯一の道が消える。
+            // 名前を変える先は「今アクティブなセッション」なので、1 度目の
+            // クリックで既にそのチップが選ばれている順序に頼っている。
+            if (e.button == 0 && e.clicks >= 2) app_.Execute(Cmd::RenameSession);
             return true;
         case Hit::SessionAdd:
             app_.Execute(Cmd::NewSession);
@@ -2603,6 +2743,13 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             // opens that pane's path for editing - hence the focus first.
             app_.FocusPane(region->pane);
             if (e.button == 0) app_.Execute(Cmd::EditPath);
+            return true;
+
+        case Hit::PromptField:
+            // Swallowed, and nothing more: the press has already been spared the
+            // fold above, and moving the caret by clicking is something no field
+            // in Kite does yet - the address bar included. Whenever it arrives it
+            // belongs to all of them at once.
             return true;
 
         case Hit::CompletionRow:

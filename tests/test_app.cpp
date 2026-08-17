@@ -735,7 +735,7 @@ KITE_TEST(app, moving_off_the_end_folds_the_candidate_list) {
     KITE_EXPECT_FALSE(h.app.pathComplete().open());
 }
 
-KITE_TEST(app, the_address_bar_can_be_folded_away_without_applying_it) {
+KITE_TEST(app, an_in_place_field_can_be_folded_away_without_applying_it) {
     Harness h;
     const std::string was = h.tab()->path;
     h.EditPathAppend();
@@ -743,15 +743,30 @@ KITE_TEST(app, the_address_bar_can_be_folded_away_without_applying_it) {
 
     // What the UI calls when a press lands outside the field. The typed path is
     // dropped, not navigated to: the click was an answer to something else.
-    h.app.CancelPathEdit();
+    h.app.CancelInlineEdit();
     KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::None);
     KITE_EXPECT_FALSE(h.app.pathComplete().open());
     KITE_EXPECT_EQ(h.tab()->path, was);
 
-    // It is the address bar's own exit, and leaves the other prompts alone.
+    // Every field that draws itself on the thing it edits takes the same exit,
+    // and nothing is created on the way out - Enter is the only word for yes.
     h.app.Execute(Cmd::NewFolder);
-    h.app.CancelPathEdit();
-    KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::NewFolder);
+    h.Type("gamma");
+    h.app.CancelInlineEdit();
+    KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::None);
+    KITE_EXPECT_EQ(h.files.dirs.count("C:\\home\\gamma"), size_t{ 0 });
+
+    // The two that have nowhere of their own to sit stay put: the filter belongs
+    // to the whole listing, and the delete confirmation is a question, not a name.
+    h.app.Execute(Cmd::FocusFilter);
+    h.app.CancelInlineEdit();
+    KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::Filter);
+
+    h.app.OnKey(ParseChord("Escape"));
+    h.app.Execute(Cmd::CursorBottom);
+    h.app.Execute(Cmd::DeleteToRecycle);
+    h.app.CancelInlineEdit();
+    KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::ConfirmDelete);
 }
 
 KITE_TEST(app, prompt_editing_handles_multibyte_text_one_character_at_a_time) {
@@ -792,8 +807,66 @@ KITE_TEST(app, rename_preselects_the_stem_of_a_file) {
     h.app.Execute(Cmd::Rename);
     KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::Rename);
     KITE_EXPECT_EQ(h.app.prompt().text, std::string("notes.txt"));
-    // Caret sits before ".txt" so typing replaces the name only.
+    // "notes" is selected and ".txt" is not, so the first key replaces the name
+    // and keeps the extension. The caret is on the far side of the selection, the
+    // way it is after any other select-then-type.
+    KITE_EXPECT_EQ(h.app.prompt().anchor, size_t{ 0 });
     KITE_EXPECT_EQ(h.app.prompt().caret, size_t{ 5 });
+
+    h.Type("todo");
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("todo.txt"));
+    h.app.OnKey(ParseChord("Enter"));
+    h.Settle();
+    KITE_EXPECT(h.files.Exists("C:\\home\\todo.txt"));
+}
+
+KITE_TEST(app, rename_selects_the_whole_name_when_there_is_no_extension_to_keep) {
+    Harness h;
+    // A folder: "alpha" has no extension, and a dotted one would not have an
+    // extension either - nobody reads "backup.2026" as a type.
+    h.app.Execute(Cmd::Rename);
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("alpha"));
+    KITE_EXPECT_EQ(h.app.prompt().anchor, size_t{ 0 });
+    KITE_EXPECT_EQ(h.app.prompt().caret, size_t{ 5 });
+
+    // A dotfile is all stem: there is no name in front of the dot to replace.
+    h.app.OnKey(ParseChord("Escape"));
+    h.app.Execute(Cmd::ToggleHidden);
+    h.Settle();
+    h.app.Execute(Cmd::CursorTop);
+    while (h.CursorName() != ".hidden" && h.tab()->cursor < h.tab()->ItemCount()) {
+        h.app.Execute(Cmd::CursorDown);
+    }
+    KITE_EXPECT_EQ(h.CursorName(), std::string(".hidden"));
+    h.app.Execute(Cmd::Rename);
+    KITE_EXPECT_EQ(h.app.prompt().anchor, size_t{ 0 });
+    KITE_EXPECT_EQ(h.app.prompt().caret, h.app.prompt().text.size());
+}
+
+KITE_TEST(app, renaming_a_session_starts_from_its_current_name) {
+    Harness h;
+    h.app.Execute(Cmd::NewSession);
+    h.Settle();
+    const std::string was = h.session()->name;
+
+    h.app.Execute(Cmd::RenameSession);
+    KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::SessionName);
+    KITE_EXPECT_EQ(h.app.prompt().text, was);
+
+    h.app.OnKey(ParseChord("Ctrl+A"));
+    h.Type("work");
+    h.app.OnKey(ParseChord("Enter"));
+    KITE_EXPECT_EQ(h.session()->name, std::string("work"));
+    // The other session keeps its own name: renaming answers about the active one.
+    KITE_EXPECT_NE(h.app.workspace().sessions.front()->name, std::string("work"));
+
+    // An emptied field leaves the name alone rather than blanking the chip - a
+    // nameless session cannot be told from its neighbours in the bar.
+    h.app.Execute(Cmd::RenameSession);
+    h.app.OnKey(ParseChord("Ctrl+A"));
+    h.app.OnKey(ParseChord("Delete"));
+    h.app.OnKey(ParseChord("Enter"));
+    KITE_EXPECT_EQ(h.session()->name, std::string("work"));
 }
 
 KITE_TEST(app, delete_asks_before_touching_anything) {
