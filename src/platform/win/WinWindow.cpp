@@ -26,29 +26,6 @@ constexpr UINT_PTR kDragDropTimerId = 2;
 // drag this soon after launch.
 constexpr UINT kDragDropDelayMs = 200;
 
-// Quotes one argument the way CommandLineToArgvW will take it apart again.
-// Backslashes only matter in front of the closing quote, and a folder path ends
-// in one often enough to matter: "C:\" would otherwise escape its own quote and
-// swallow the rest of the line.
-std::wstring QuoteArgument(const std::wstring& arg) {
-    std::wstring out = L"\"";
-    size_t backslashes = 0;
-    for (const wchar_t c : arg) {
-        if (c == L'\\') {
-            ++backslashes;
-            continue;
-        }
-        // A run of backslashes is literal unless a quote follows, where it is
-        // halved - so double it there, and escape the quote itself as well.
-        out.append(c == L'"' ? backslashes * 2 + 1 : backslashes, L'\\');
-        backslashes = 0;
-        out.push_back(c);
-    }
-    out.append(backslashes * 2, L'\\');
-    out.push_back(L'"');
-    return out;
-}
-
 uint8_t ButtonsFrom(WPARAM wparam) {
     uint8_t buttons = ui::kButtonNone;
     if (wparam & MK_LBUTTON) buttons |= ui::kButtonLeft;

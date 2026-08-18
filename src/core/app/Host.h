@@ -88,7 +88,8 @@ public:
 
     /// @brief 指定ディレクトリをカレントにしてターミナルを開く。
     /// @param[in] dir 対象のディレクトリ
-    /// @return 成功したら true
+    /// @return 成功したら true。開けない場所（仮想フォルダなど）や
+    ///         ターミナルが見つからなければ false
     virtual bool OpenTerminal(const std::string& dir) = 0;
 
     /// @brief クリップボードにテキストを設定する。

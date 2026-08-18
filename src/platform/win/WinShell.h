@@ -62,7 +62,10 @@ public:
     bool RevealInExplorer(const std::string& path) override;
 
     /// @copydoc IShellIntegration::OpenTerminal
-    /// @note Windows Terminal があればそれを、無ければ cmd.exe を起動する
+    /// @note Windows Terminal があればそれを、無ければ cmd.exe を起動する。
+    ///       前者は lpDirectory を見ずにプロファイルの開始位置（既定は
+    ///       `%USERPROFILE%`）へ行くので、フォルダは `-d` で渡す
+    /// @note 仮想フォルダでは何もせず false を返す（実行できる場所ではない）
     bool OpenTerminal(const std::string& dir) override;
 
     /// @copydoc IShellIntegration::SetClipboardText

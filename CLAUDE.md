@@ -1501,6 +1501,12 @@ release.ps1  CMakeLists.txt の VERSION を書き換えて push
 - **`OleInitialize` は 100 ms 以上かかる**。ドラッグ＆ドロップの登録は初回描画から
   200 ms 後のタイマーに逃がしてある。起動パスに戻さないこと。同じ理由で
   `kite_shellhost.exe` も最初のメニュー要求まで起動しない。
+- **`wt.exe` は `lpDirectory` を見ない**。`ShellExecuteW` に作業フォルダを渡しても、
+  Windows Terminal は各タブをプロファイルの `startingDirectory`（既定は `%USERPROFILE%`）で
+  開くので、「ここでターミナルを開く」がホームフォルダで開く。フォルダは `-d` で渡すこと。
+  引用は `QuoteArgument`（`WinPaths.cpp`）を通す ─ ドライブ直下のパスは `C:\` で終わり、
+  そのまま `"` で閉じると引用符自身がエスケープされる（`Ctrl+N` のコマンドラインと同じ罠で、
+  だから 2 か所から同じ関数を呼んでいる）。`cmd.exe` のほうは `lpDirectory` に従う。
 - **`CMIC_MASK_UNICODE` は `<shellapi.h>` が必要**。実体は `SEE_MASK_UNICODE` で、
   `<shlobj.h>` だけでは「定義されていない識別子」になる。
 - **`MsgWaitForMultipleObjects` に `MWMO_INPUTAVAILABLE` を足すと暴走しうる**。
