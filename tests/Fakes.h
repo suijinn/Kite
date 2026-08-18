@@ -252,10 +252,13 @@ public:
     // Set to false to act like a shell host that could not be started, or one
     // that died with a faulting extension inside it.
     bool contextMenuShown = true;
+    std::string lastContextMenuFolder;
 
-    bool ShowContextMenu(const std::vector<std::string>& paths, int screenX, int screenY,
-                         bool extended, bool background, bool dark) override {
+    bool ShowContextMenu(const std::string& folder, const std::vector<std::string>& paths,
+                         int screenX, int screenY, bool extended, bool background,
+                         bool dark) override {
         ++contextMenuCalls;
+        lastContextMenuFolder = folder;
         lastContextMenuPaths = paths;
         lastContextMenuX = screenX;
         lastContextMenuY = screenY;
@@ -263,6 +266,27 @@ public:
         lastContextMenuBackground = background;
         lastContextMenuDark = dark;
         return contextMenuShown;
+    }
+
+    // Restore reports how it was called and whether it claims to have worked.
+    // Nothing is moved: the fake filesystem has no bin to move things out of,
+    // and what the tests check is who asked for what.
+    std::vector<std::vector<std::string>> restoreCalls;
+    bool restoreSucceeds = true;
+
+    bool RestoreFromTrash(const std::vector<std::string>& paths) override {
+        restoreCalls.push_back(paths);
+        return restoreSucceeds;
+    }
+
+    // Undo of a delete names its targets by the path they had before, so the
+    // two are recorded apart: which one was used is part of what is checked.
+    std::vector<std::vector<std::string>> restoreDeletedCalls;
+    bool restoreDeletedSucceeds = true;
+
+    bool RestoreDeleted(const std::vector<std::string>& originalPaths) override {
+        restoreDeletedCalls.push_back(originalPaths);
+        return restoreDeletedSucceeds;
     }
     bool Open(const std::string& path) override {
         opened.push_back(path);

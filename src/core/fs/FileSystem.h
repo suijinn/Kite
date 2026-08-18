@@ -58,6 +58,17 @@ struct Entry {
     int64_t mtime = 0;       ///< 最終更新時刻。Unix エポックからの秒数
     Attr attrs = Attr::None; ///< 属性ビット
 
+    /// @brief この項目自身を指すパス。空なら「親のパス + 名前」で指せる。
+    ///
+    /// 実フォルダの項目では常に空 ─ 埋めると 1 件あたり 1 本ずつ std::string が
+    /// 増え、10 万件のフォルダでその代金を払うことになる。値が入るのは仮想
+    /// フォルダ（「PC」「ごみ箱」「ネットワーク」）の中身のように、**名前を
+    /// 連結しても指せない**項目だけ。「PC」の下のドライブなら "C:\\"、名前空間
+    /// 拡張なら vfs::kPrefix 付きのシェル解析名が入る。
+    ///
+    /// @note 添字と同じで、`path::Join()` を直接書かず EntryPath() を通すこと
+    std::string address;
+
     /// @brief ディレクトリかを判定する。
     /// @return ディレクトリなら true
     bool isDir() const { return Has(attrs, Attr::Directory); }
@@ -66,6 +77,14 @@ struct Entry {
     /// @return 隠し属性またはシステム属性が立っていれば true
     bool isHidden() const { return Has(attrs, Attr::Hidden) || Has(attrs, Attr::System); }
 };
+
+/// @brief 項目を指すパスを組み立てる。
+/// @param[in] dir 項目が属するディレクトリのパス
+/// @param[in] entry 対象の項目
+/// @return 項目を指すパス
+/// @note `path::Join(dir, entry.name)` を直接書かないこと。仮想フォルダの
+///       項目は名前を連結しても指せず、Entry::address のほうが答えになる
+std::string EntryPath(const std::string& dir, const Entry& entry);
 
 /// @brief ルート（ドライブや特別なフォルダ）の種別。
 enum class RootKind {
@@ -102,6 +121,12 @@ struct ListResult {
     Status status = Status::Ok;   ///< 結果の状態
     std::string message;          ///< OS が返した補足メッセージ。無ければ空
     std::vector<Entry> entries;   ///< 列挙された項目。"." と ".." は含まない
+
+    /// @brief 列挙した場所そのものの表示名。空なら呼ぶ側がパスから作る。
+    ///
+    /// 実フォルダでは常に空（末尾の要素がそのまま名前になる）。値が入るのは、
+    /// パスを見ても名前が読み取れない仮想フォルダだけ。
+    std::string title;
 };
 
 /// @brief ファイルシステム操作のインターフェース。

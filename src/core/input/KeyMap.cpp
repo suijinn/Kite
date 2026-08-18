@@ -166,6 +166,7 @@ const DefaultBinding kDefaults[] = {
     { Cmd::NewFile,             "Ctrl+Alt+Shift+N" },
     { Cmd::Rename,              "F2" },
     { Cmd::DeleteToRecycle,     "Delete" },
+    { Cmd::Restore,            "Alt+R" },
     { Cmd::DeletePermanent,     "Shift+Delete" },
     { Cmd::Copy,                "Ctrl+C" },
     { Cmd::Cut,                 "Ctrl+X" },

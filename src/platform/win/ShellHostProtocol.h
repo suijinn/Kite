@@ -1,9 +1,11 @@
 /// @file
 /// @brief kite.exe と kite_shellhost.exe が交換するメッセージの書式。
 ///
-/// 種別は 2 つ。コンテキストメニューの表示要求と、シェルアイコンの取得要求。
-/// どちらもサードパーティの DLL（メニューハンドラ、アイコンオーバーレイ
-/// ハンドラ）を動かすため、同じ隔離の仕組みに相乗りしている。
+/// 種別は 4 つ。コンテキストメニューの表示要求、シェルアイコンの取得要求、
+/// 仮想フォルダ（「PC」「ごみ箱」「ネットワーク」）の列挙要求、そして動詞の実行要求
+/// （ごみ箱からの復元）。いずれもサードパーティの DLL（メニューハンドラ、アイコン
+/// オーバーレイハンドラ、名前空間拡張）を動かすため、同じ隔離の仕組みに相乗りして
+/// いる。
 ///
 /// このヘッダは Windows ヘッダに依存しない。tests/test_hostproto.cpp が
 /// `kite_core` だけをリンクした状態でこれを直接 include して検証するので、
@@ -25,13 +27,13 @@ namespace kite::shellhost {
 ///
 /// 書式を変えたら必ずこの値も変えること。版の食い違う kite_shellhost.exe が
 /// 残っていた場合に、誤って解釈するのではなく握手の時点で失敗させるためにある。
-inline constexpr uint32_t kMagic = 0x34485348u;  // 'H','S','H','4'
+inline constexpr uint32_t kMagic = 0x37485348u;  // 'H','S','H','7'
 
 /// @brief フレーム本体の上限バイト数。
 ///
-/// 壊れた長さを信じて巨大な確保をしないための歯止め。260 文字のパスなら
-/// 1 万件を超えても収まる。
-inline constexpr uint32_t kMaxPayload = 4u * 1024u * 1024u;
+/// 壊れた長さを信じて巨大な確保をしないための歯止め。1 項目が名前・解析名
+/// あわせて 200 バイト前後なので、ごみ箱に数万件溜めた環境でも収まる。
+inline constexpr uint32_t kMaxPayload = 16u * 1024u * 1024u;
 
 /// @brief フレーム先頭にある固定長ヘッダ（識別子 4 バイト + 本体長 4 バイト）。
 inline constexpr size_t kHeaderSize = 8;
@@ -54,14 +56,37 @@ inline constexpr uint32_t kMaxIconsPerRequest = 256;
 /// 壊れた寸法を信じて幅 × 高さ × 4 バイトを確保しないための歯止め。
 inline constexpr uint32_t kMaxIconPixels = 256;
 
+/// @brief 1 回の列挙で返せる項目数の上限。
+///
+/// 壊れた件数を信じて予約しないための歯止め。これを超えるフォルダは**切り詰めず
+/// エラーにする** ─ 半分の一覧を全部として出すのは、Kite がどの列挙でも避けて
+/// いる唯一の答え方（WinFileSystem の `FindNextFileW` と同じ）。
+inline constexpr uint32_t kMaxFolderEntries = 65536;
+
 /// @brief フレームの種別。本体の先頭に置く。
 enum class MessageKind : uint32_t {
-    Menu = 1,   ///< コンテキストメニューの表示
-    Icons = 2,  ///< シェルアイコンの取得
+    Menu = 1,    ///< コンテキストメニューの表示
+    Icons = 2,   ///< シェルアイコンの取得
+    Folder = 3,  ///< シェル名前空間のフォルダの列挙
+    Verb = 4,    ///< 名前を指定した動詞の実行（「元に戻す」）
 };
 
 /// @brief メニュー表示の要求。kite.exe → kite_shellhost.exe。
 struct Request {
+    /// @brief 対象が属するフォルダの解析名。空なら `paths` を直接解析する。
+    ///
+    /// 空なら `paths` をそのまま `SHParseDisplayName` に渡す ─ 実フォルダのファイルは
+    /// これで正しく解決できる。空でなければ**そのフォルダを列挙し、解析名の一致する
+    /// 子項目を引き当てる**。
+    ///
+    /// 後者が要るのはごみ箱のような場所。消した項目の解析名は隠された `$R` の写しの
+    /// パスなので、そのまま解析するとごみ箱の項目ではなく**ただのファイル**が返り、
+    /// シェルは「元に戻す」を持たない普通のファイルのメニューを組み立てる。
+    ///
+    /// **実フォルダでは必ず空にすること。** 渡せばそのフォルダを丸ごと列挙し直すので、
+    /// 10 万件のフォルダで右クリック 1 回の代金がそれになる。
+    std::string container;
+
     std::vector<std::string> paths;  ///< 対象のパス列。すべて同じフォルダに属すること
     int32_t screenX = -1;            ///< 表示位置の X。負ならホストがカーソル位置を使う
     int32_t screenY = -1;            ///< 表示位置の Y。負ならホストがカーソル位置を使う
@@ -103,6 +128,37 @@ struct Response {
     Result result = Result::Failed;  ///< 結果の種別
 };
 
+/// @brief 動詞の実行要求。kite.exe → kite_shellhost.exe。
+///
+/// メニューを出さずに、名前で指定した動詞をそのまま実行する。今のところ使うのは
+/// ごみ箱の「元に戻す」（`undelete`）だけ。**メニューから選ばせるのと同じ経路を
+/// 通る** ─ `IContextMenu` を取り、`InvokeCommand` に動詞の名前を渡す。
+struct VerbRequest {
+    std::string container;           ///< 対象が属するフォルダの解析名。@see Request::container
+    std::vector<std::string> paths;  ///< 対象。読み方は byOriginalPath による
+    std::string verb;                ///< 実行する動詞の名前（"undelete" など）
+    uint64_t ownerWindow = 0;        ///< ダイアログの親にするウィンドウ。0 なら指定なし
+
+    /// @brief `paths` の読み方。false なら解析名、true なら**消される前のフルパス**。
+    ///
+    /// `Ctrl+Z` で削除を戻すときに要る。削除した時点で分かっているのは元のパスの
+    /// ほうで、ごみ箱に入った後の `$R` の名前は誰も見ていない ─ 控えるには削除の
+    /// たびにごみ箱を引き当て直すことになり、一度も `Ctrl+Z` を押さない人まで
+    /// その代金を払う。
+    ///
+    /// true のときホストは「元の場所」（「元の場所」（`PID_DISPLACED_FROM`））と項目名から元の
+    /// パスを組み立てて突き合わせ、**同じパスが複数あれば最後に消したもの**を採る
+    /// （「削除日時」（`PID_DISPLACED_DATE`））─ `Ctrl+Z` が指しているのは常に直前の削除なので、
+    /// それが正しい答えになる。
+    bool byOriginalPath = false;
+};
+
+/// @brief 動詞の実行結果。kite_shellhost.exe → kite.exe。
+struct VerbResponse {
+    bool ok = false;         ///< 実行できたら true
+    uint32_t applied = 0;    ///< 実際に対象になった項目数
+};
+
 /// @brief シェルアイコンの取得要求。kite.exe → kite_shellhost.exe。
 struct IconRequest {
     std::vector<std::string> paths;  ///< 取得したいパス列。順序が応答と対応する
@@ -131,6 +187,55 @@ struct IconResponse {
     std::vector<IconImage> images;  ///< 新しく現れたビットマップの実体
 };
 
+/// @brief 列挙した項目の属性。core の `fs::Attr` へはプラットフォーム層が訳す。
+///
+/// このヘッダは `kite_core` を持たない `kite_shellhost.exe` にもリンクされるので、
+/// core の型をそのまま流すことはできない。**必要な分だけを持つ**のもそのためで、
+/// シェルが答えられない属性（圧縮・暗号化・クラウドの実体の有無）は入っていない。
+enum class FolderAttr : uint32_t {
+    None = 0,
+    Directory = 1u << 0,   ///< 開ける（フォルダ、またはフォルダとして振る舞う）
+    Hidden = 1u << 1,      ///< 既定では見せない
+    Link = 1u << 2,        ///< ショートカット
+    FileSystem = 1u << 3,  ///< 実ファイルシステム上にある。解析名がそのままパス
+};
+
+/// @brief 列挙された 1 項目。
+struct FolderEntry {
+    std::string name;      ///< 画面に出す名前。パスではない
+    std::string parsing;   ///< シェルの解析名。この項目を指す唯一の文字列
+    uint64_t size = 0;     ///< バイト数。分からなければ 0
+    int64_t mtime = 0;     ///< 更新時刻。Unix エポックからの秒数。分からなければ 0
+    uint32_t attrs = 0;    ///< FolderAttr のビット論理和
+};
+
+/// @brief 列挙の結果。core の `fs::Status` と同じ意味を持つ。
+enum class FolderStatus : uint32_t {
+    Ok = 0,            ///< 成功
+    NotFound = 1,      ///< 名前空間に無い
+    AccessDenied = 2,  ///< 権限が無い
+    Unavailable = 3,   ///< 到達できない
+    Error = 4,         ///< その他
+};
+
+/// @brief 仮想フォルダの列挙要求。kite.exe → kite_shellhost.exe。
+struct FolderRequest {
+    /// @brief 列挙する場所のシェル解析名。
+    ///
+    /// `shell:MyComputerFolder` のような既知フォルダの綴りか、`::{CLSID}` 形式。
+    /// **`virtual:` は付けない** ─ 前置は Kite 側の語彙で、ホストはシェルの
+    /// 言葉しか知らない。訳すのは `platform/win/VirtualNames.h`
+    std::string path;
+};
+
+/// @brief 仮想フォルダの列挙結果。kite_shellhost.exe → kite.exe。
+struct FolderResponse {
+    FolderStatus status = FolderStatus::Error;  ///< 結果の種別
+    std::string message;                        ///< 補足。無ければ空
+    std::string title;                          ///< その場所自身の表示名
+    std::vector<FolderEntry> entries;           ///< 列挙された項目
+};
+
 namespace detail {
 
 /// @brief 32 ビット値をリトルエンディアンで追記する。
@@ -151,6 +256,13 @@ inline void PutU32(std::vector<uint8_t>& out, uint32_t value) {
 inline void PutU64(std::vector<uint8_t>& out, uint64_t value) {
     PutU32(out, static_cast<uint32_t>(value & 0xFFFFFFFFu));
     PutU32(out, static_cast<uint32_t>(value >> 32));
+}
+
+/// @brief 64 ビット値を符号付きとして追記する。
+/// @param[in,out] out 追記先のバイト列
+/// @param[in] value 追記する値
+inline void PutI64(std::vector<uint8_t>& out, int64_t value) {
+    PutU64(out, static_cast<uint64_t>(value));
 }
 
 /// @brief 長さ付きの文字列を追記する。
@@ -280,7 +392,9 @@ inline bool DecodeKind(const uint8_t* payload, size_t size, MessageKind& kind) {
     uint32_t value = 0;
     if (!reader.U32(value)) return false;
     if (value != static_cast<uint32_t>(MessageKind::Menu) &&
-        value != static_cast<uint32_t>(MessageKind::Icons)) {
+        value != static_cast<uint32_t>(MessageKind::Icons) &&
+        value != static_cast<uint32_t>(MessageKind::Folder) &&
+        value != static_cast<uint32_t>(MessageKind::Verb)) {
         return false;
     }
     kind = static_cast<MessageKind>(value);
@@ -313,6 +427,7 @@ inline std::vector<uint8_t> EncodeRequest(const Request& request) {
     detail::PutU32(payload, request.background ? 1u : 0u);
     detail::PutU32(payload, request.dark ? 1u : 0u);
     detail::PutU64(payload, request.ownerWindow);
+    detail::PutString(payload, request.container);
     detail::PutU32(payload, static_cast<uint32_t>(request.paths.size()));
     for (const std::string& path : request.paths) detail::PutString(payload, path);
     return Frame(payload);
@@ -335,7 +450,9 @@ inline bool DecodeRequest(const uint8_t* payload, size_t size, Request& request)
     uint32_t count = 0;
     if (!reader.U32(x) || !reader.U32(y) || !reader.U32(extended)) return false;
     if (!reader.U32(background) || !reader.U32(dark)) return false;
-    if (!reader.U64(request.ownerWindow) || !reader.U32(count)) return false;
+    if (!reader.U64(request.ownerWindow)) return false;
+    if (!reader.String(request.container)) return false;
+    if (!reader.U32(count)) return false;
     if (count > kMaxPaths) return false;
 
     request.screenX = static_cast<int32_t>(x);
@@ -484,6 +601,150 @@ inline bool DecodeIconResponse(const uint8_t* payload, size_t size, IconResponse
         response.images.push_back(std::move(image));
     }
     return reader.AtEnd();
+}
+
+/// @brief 仮想フォルダの列挙要求を 1 フレームに符号化する。
+/// @param[in] request 送る要求
+/// @return 送信できるバイト列。上限を超える場合は空
+inline std::vector<uint8_t> EncodeFolderRequest(const FolderRequest& request) {
+    std::vector<uint8_t> payload;
+    detail::PutU32(payload, static_cast<uint32_t>(MessageKind::Folder));
+    detail::PutString(payload, request.path);
+    return Frame(payload);
+}
+
+/// @brief 仮想フォルダの列挙要求を復号する。
+/// @param[in] payload フレーム本体の先頭（ヘッダを除いた部分）
+/// @param[in] size 本体のバイト数
+/// @param[out] request 復号結果。失敗時の内容は不定
+/// @return 完全に復号でき、余分なバイトも残っていなければ true
+inline bool DecodeFolderRequest(const uint8_t* payload, size_t size, FolderRequest& request) {
+    detail::Reader reader(payload, size);
+    if (!detail::ExpectKind(reader, MessageKind::Folder)) return false;
+    if (!reader.String(request.path)) return false;
+    return reader.AtEnd();
+}
+
+/// @brief 仮想フォルダの列挙結果を 1 フレームに符号化する。
+/// @param[in] response 送る結果
+/// @return 送信できるバイト列。件数か全体の大きさが上限を超える場合は空
+/// @note 空が返ったら**切り詰めて送り直さないこと**。半分の一覧は「残りは消えた」
+///       と読めてしまうので、呼ぶ側はエラーとして答える
+inline std::vector<uint8_t> EncodeFolderResponse(const FolderResponse& response) {
+    if (response.entries.size() > kMaxFolderEntries) return {};
+
+    std::vector<uint8_t> payload;
+    detail::PutU32(payload, static_cast<uint32_t>(MessageKind::Folder));
+    detail::PutU32(payload, static_cast<uint32_t>(response.status));
+    detail::PutString(payload, response.message);
+    detail::PutString(payload, response.title);
+    detail::PutU32(payload, static_cast<uint32_t>(response.entries.size()));
+    for (const FolderEntry& e : response.entries) {
+        detail::PutString(payload, e.name);
+        detail::PutString(payload, e.parsing);
+        detail::PutU64(payload, e.size);
+        detail::PutI64(payload, e.mtime);
+        detail::PutU32(payload, e.attrs);
+    }
+    return Frame(payload);
+}
+
+/// @brief 仮想フォルダの列挙結果を復号する。
+/// @param[in] payload フレーム本体の先頭（ヘッダを除いた部分）
+/// @param[in] size 本体のバイト数
+/// @param[out] response 復号結果。失敗時の内容は不定
+/// @return 完全に復号でき、既知の結果種別であれば true
+inline bool DecodeFolderResponse(const uint8_t* payload, size_t size, FolderResponse& response) {
+    detail::Reader reader(payload, size);
+    if (!detail::ExpectKind(reader, MessageKind::Folder)) return false;
+
+    uint32_t status = 0;
+    if (!reader.U32(status)) return false;
+    if (status > static_cast<uint32_t>(FolderStatus::Error)) return false;
+    response.status = static_cast<FolderStatus>(status);
+    if (!reader.String(response.message) || !reader.String(response.title)) return false;
+
+    uint32_t count = 0;
+    if (!reader.U32(count) || count > kMaxFolderEntries) return false;
+    response.entries.clear();
+    // reserve は count を信じた確保になる。上限を掛けた後に行うこと。
+    response.entries.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        FolderEntry e;
+        uint64_t mtime = 0;
+        if (!reader.String(e.name) || !reader.String(e.parsing)) return false;
+        if (!reader.U64(e.size) || !reader.U64(mtime) || !reader.U32(e.attrs)) return false;
+        e.mtime = static_cast<int64_t>(mtime);
+        response.entries.push_back(std::move(e));
+    }
+    return reader.AtEnd();
+}
+
+/// @brief 動詞の実行要求を 1 フレームに符号化する。
+/// @param[in] request 送る要求
+/// @return 送信できるバイト列。件数が上限を超える場合は空
+inline std::vector<uint8_t> EncodeVerbRequest(const VerbRequest& request) {
+    if (request.paths.size() > kMaxPaths) return {};
+    std::vector<uint8_t> payload;
+    detail::PutU32(payload, static_cast<uint32_t>(MessageKind::Verb));
+    detail::PutU64(payload, request.ownerWindow);
+    detail::PutU32(payload, request.byOriginalPath ? 1u : 0u);
+    detail::PutString(payload, request.container);
+    detail::PutString(payload, request.verb);
+    detail::PutU32(payload, static_cast<uint32_t>(request.paths.size()));
+    for (const std::string& path : request.paths) detail::PutString(payload, path);
+    return Frame(payload);
+}
+
+/// @brief 動詞の実行要求を復号する。
+/// @param[in] payload フレーム本体の先頭（ヘッダを除いた部分）
+/// @param[in] size 本体のバイト数
+/// @param[out] request 復号結果。失敗時の内容は不定
+/// @return 完全に復号でき、余分なバイトも残っていなければ true
+inline bool DecodeVerbRequest(const uint8_t* payload, size_t size, VerbRequest& request) {
+    detail::Reader reader(payload, size);
+    if (!detail::ExpectKind(reader, MessageKind::Verb)) return false;
+    uint32_t byOriginal = 0;
+    if (!reader.U64(request.ownerWindow) || !reader.U32(byOriginal)) return false;
+    request.byOriginalPath = byOriginal != 0;
+    if (!reader.String(request.container) || !reader.String(request.verb)) return false;
+
+    uint32_t count = 0;
+    if (!reader.U32(count) || count > kMaxPaths) return false;
+    request.paths.clear();
+    // reserve は count を信じた確保になる。上限を掛けた後に行うこと。
+    request.paths.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        std::string path;
+        if (!reader.String(path)) return false;
+        request.paths.push_back(std::move(path));
+    }
+    return reader.AtEnd();
+}
+
+/// @brief 動詞の実行結果を 1 フレームに符号化する。
+/// @param[in] response 送る結果
+/// @return 送信できるバイト列
+inline std::vector<uint8_t> EncodeVerbResponse(const VerbResponse& response) {
+    std::vector<uint8_t> payload;
+    detail::PutU32(payload, static_cast<uint32_t>(MessageKind::Verb));
+    detail::PutU32(payload, response.ok ? 1u : 0u);
+    detail::PutU32(payload, response.applied);
+    return Frame(payload);
+}
+
+/// @brief 動詞の実行結果を復号する。
+/// @param[in] payload フレーム本体の先頭（ヘッダを除いた部分）
+/// @param[in] size 本体のバイト数
+/// @param[out] response 復号結果。失敗時の内容は不定
+/// @return 完全に復号できれば true
+inline bool DecodeVerbResponse(const uint8_t* payload, size_t size, VerbResponse& response) {
+    detail::Reader reader(payload, size);
+    if (!detail::ExpectKind(reader, MessageKind::Verb)) return false;
+    uint32_t ok = 0;
+    if (!reader.U32(ok) || !reader.U32(response.applied) || !reader.AtEnd()) return false;
+    response.ok = ok != 0;
+    return true;
 }
 
 }  // namespace kite::shellhost

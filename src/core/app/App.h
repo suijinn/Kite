@@ -454,6 +454,20 @@ public:
     /// @param[in] message 表示する文字列
     void SetStatus(const std::string& message);
 
+    /// @brief タブ見出しに出す短い名前を返す。
+    /// @param[in] tab 対象のタブ
+    /// @return 表示名。仮想フォルダなら Kite の言語での名前
+    /// @note `Tab::title()` を UI から直接呼ばないこと。「PC」「ごみ箱」
+    ///       「ネットワーク」の名前は i18n の側にあり、タブは言語を知らない
+    std::string DisplayName(const Tab& tab) const;
+
+    /// @brief タイトルバーとパンくずに出す、読める形のパスを返す。
+    /// @param[in] tab 対象のタブ
+    /// @return 実フォルダならパスそのもの。仮想フォルダなら表示名
+    /// @note 仮想フォルダのパス（`virtual:` 付きのシェル解析名）は、読ませても
+    ///       打たせても意味を持たない文字列
+    std::string DisplayPath(const Tab& tab) const;
+
     /// @brief 失敗をステータスバーに出す。何が失敗したかは必ず言う。
     /// @param[in] key 何の操作が失敗したかを言う文字列キー（"ui.rename_failed" など）
     /// @param[in] detail OS が返した補足。空でもよい
@@ -551,6 +565,27 @@ private:
     ///       すべてここを通すこと ─ 書けない場所（Program Files、読み取り専用の
     ///       メディア）に置かれたとき、黙って保存されないのが一番たちが悪い
     bool WriteConfigFile(const char* file, std::string_view data);
+
+    /// @brief 表示中の場所が Kite 自身の書き込みを拒むかを判定する。
+    /// @return 仮想フォルダなら true。そのときステータス行に理由を出す
+    /// @note 作成・名前の変更・削除・切り取り・貼り付けの入口すべてが先にこれを
+    ///       呼ぶ。仮想フォルダの項目が持つのは操作の相手になるパスではない
+    ///       （消したファイルなら隠された $R の写し）ので、動くように見えて
+    ///       別のものを壊す
+    bool ReadOnlyHere();
+
+    /// @brief 選択中のごみ箱の項目を元の場所へ戻す。
+    /// @note ごみ箱を表示していないタブでは何もせずその旨を出す。取り消し履歴には
+    ///       積まない ─ 「元に戻す」を元に戻すのは「消す」であって、`Ctrl+Z` で
+    ///       救い出したファイルがごみ箱へ帰るのは誰も望んでいない
+    void DoRestore();
+
+    /// @brief シェルメニューに渡す「項目が属するフォルダ」を返す。
+    /// @return 仮想フォルダを表示中ならそのパス。実フォルダなら空文字列
+    /// @note 実フォルダで空を返すのは性能の話ではなく前提の話 ─ 渡すとシェルは
+    ///       そのフォルダを列挙して項目を突き合わせる（`IShellIntegration::
+    ///       ShowContextMenu`）
+    std::string ShellMenuContainer();
 
     void LoadConfig();
     void LoadSidebarSections();

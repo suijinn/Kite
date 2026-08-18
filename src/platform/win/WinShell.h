@@ -32,8 +32,22 @@ public:
     /// @copydoc IShellIntegration::ShowContextMenu
     /// @note メニューが閉じるまで戻らないが、待っている間もウィンドウの再描画は
     ///       続く。詳細は ShellHostClient::ShowContextMenu()
-    bool ShowContextMenu(const std::vector<std::string>& paths, int screenX, int screenY,
-                         bool extended, bool background, bool dark) override;
+    bool ShowContextMenu(const std::string& folder, const std::vector<std::string>& paths,
+                         int screenX, int screenY, bool extended, bool background,
+                         bool dark) override;
+
+    /// @copydoc IShellIntegration::RestoreFromTrash
+    /// @note 動詞の名前は "undelete"。相手をごみ箱の中から引き当てさせるので、
+    ///       `container` にはごみ箱の解析名を渡す ─ 渡さないと隠された `$R` の
+    ///       写しがただのファイルとして解決され、その親はごみ箱ではないので
+    ///       「元に戻す」がメニューに存在しない
+    bool RestoreFromTrash(const std::vector<std::string>& paths) override;
+
+    /// @copydoc IShellIntegration::RestoreDeleted
+    /// @note 相手はごみ箱の項目だが、指し方が RestoreFromTrash() と違う ─ 渡すのは
+    ///       ごみ箱の中での名前ではなく、消される前のフルパス。突き合わせは
+    ///       `win::ResolveTrashItemsByOrigin`
+    bool RestoreDeleted(const std::vector<std::string>& originalPaths) override;
 
     /// @copydoc IShellIntegration::Open
     bool Open(const std::string& path) override;

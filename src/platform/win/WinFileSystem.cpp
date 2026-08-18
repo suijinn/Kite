@@ -10,6 +10,8 @@
 
 #include "core/app/ConfigDir.h"
 #include "core/base/PathUtil.h"
+#include "core/fs/VirtualPath.h"
+#include "platform/win/VirtualNames.h"
 #include "platform/win/WinPaths.h"
 #include "platform/win/WinUtf.h"
 
@@ -295,12 +297,57 @@ WinFileSystem::WinFileSystem() {
                                   { roaming, DirectoryExists(roaming) } });
 }
 
+fs::ListResult WinFileSystem::ListVirtual(const std::string& dir) {
+    fs::ListResult result;
+
+    shellhost::FolderResponse answer;
+    if (!folders_.List(ToShellParsingName(dir), answer)) {
+        // The host could not be started, did not answer in time, or died with a
+        // namespace extension inside it. All three read the same from here, and
+        // none of them is "the folder is empty".
+        result.status = fs::Status::Unavailable;
+        return result;
+    }
+
+    switch (answer.status) {
+        case shellhost::FolderStatus::Ok: result.status = fs::Status::Ok; break;
+        case shellhost::FolderStatus::NotFound: result.status = fs::Status::NotFound; break;
+        case shellhost::FolderStatus::AccessDenied: result.status = fs::Status::AccessDenied; break;
+        case shellhost::FolderStatus::Unavailable: result.status = fs::Status::Unavailable; break;
+        default: result.status = fs::Status::Error; break;
+    }
+    result.message = answer.message;
+    result.title = answer.title;
+    if (result.status != fs::Status::Ok) return result;
+
+    result.entries.reserve(answer.entries.size());
+    for (const shellhost::FolderEntry& e : answer.entries) {
+        using Bit = shellhost::FolderAttr;
+        const bool fileSystem = (e.attrs & static_cast<uint32_t>(Bit::FileSystem)) != 0;
+
+        fs::Entry entry;
+        entry.name = e.name;
+        entry.size = e.size;
+        entry.mtime = e.mtime;
+        // A drive under "PC" comes back as "C:\\" and is simply that folder from
+        // here on: the fast path lists it, the watcher watches it, and nothing
+        // downstream has to know it was reached through the shell namespace.
+        entry.address = FromShellParsingName(e.parsing, fileSystem);
+        if (e.attrs & static_cast<uint32_t>(Bit::Directory)) entry.attrs |= fs::Attr::Directory;
+        if (e.attrs & static_cast<uint32_t>(Bit::Hidden)) entry.attrs |= fs::Attr::Hidden;
+        if (e.attrs & static_cast<uint32_t>(Bit::Link)) entry.attrs |= fs::Attr::Link;
+        result.entries.push_back(std::move(entry));
+    }
+    return result;
+}
+
 fs::ListResult WinFileSystem::List(const std::string& dir) {
     fs::ListResult result;
     if (dir.empty()) {
         result.status = fs::Status::NotFound;
         return result;
     }
+    if (vfs::IsVirtual(dir)) return ListVirtual(dir);
     if (path::IsUncServer(dir)) return ListShares(dir);
 
     std::wstring pattern = ToExtendedPath(dir);
@@ -358,6 +405,13 @@ fs::ListResult WinFileSystem::List(const std::string& dir) {
 }
 
 bool WinFileSystem::Exists(const std::string& p, bool* isDir) {
+    // Answered without asking anyone. The question is only ever "can this be
+    // opened as a folder", and starting the shell host to confirm what the
+    // three built-in places already are would be a process per keystroke.
+    if (vfs::IsVirtual(p)) {
+        if (isDir) *isDir = true;
+        return true;
+    }
     const DWORD attrs = ::GetFileAttributesW(ToExtendedPath(p).c_str());
     if (attrs == INVALID_FILE_ATTRIBUTES) return false;
     if (isDir) *isDir = (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
@@ -434,6 +488,16 @@ std::vector<fs::Root> WinFileSystem::QuickAccess() {
     };
 
     std::vector<fs::Root> out;
+    // The shell namespace places come first, in the order Explorer's own tree
+    // puts them. They carry no label: naming them is App::RefreshRoots's job,
+    // because the name has to follow Kite's language rather than Windows's.
+    for (const char* id : { vfs::kComputer, vfs::kRecycleBin, vfs::kNetwork }) {
+        fs::Root entry;
+        entry.path = id;
+        entry.kind = fs::RootKind::Special;
+        out.push_back(std::move(entry));
+    }
+
     for (const Spec& spec : specs) {
         const std::string p = KnownFolder(*spec.id);
         if (p.empty()) continue;

@@ -4,6 +4,7 @@
 #include "Fakes.h"
 #include "TestFramework.h"
 #include "ui/AppUi.h"
+#include "core/fs/VirtualPath.h"
 
 using namespace kite;
 
@@ -864,11 +865,12 @@ KITE_TEST(appui, a_crumb_click_still_navigates) {
     const RectF bar = PathBarOf(th, th.sidebarWidth + 1.0f, f.renderer.size.w);
     f.Paint();
 
-    // The first crumb is the drive, at the left end of the bar.
-    f.Press(bar.l + 20.0f, bar.t + bar.h() * 0.5f);
+    // The leftmost crumb is "PC" now - the walk runs through vfs::ParentOf, so
+    // the chain no longer stops at the drive.
+    f.Press(bar.l + 8.0f, bar.t + bar.h() * 0.5f);
     test::PumpUntilSettled(f.app);
     KITE_EXPECT_EQ(f.app.prompt().kind, PromptKind::None);
-    KITE_EXPECT_EQ(f.tab()->path, std::string("C:\\"));
+    KITE_EXPECT_EQ(f.tab()->path, std::string(vfs::kComputer));
 }
 
 // The box an in-place field drew itself into, found by the panel fill under the

@@ -59,17 +59,26 @@ KITE_TEST(undo, the_stack_forgets_the_oldest_beyond_its_limit) {
     KITE_EXPECT_EQ(newest, std::string("C:\\x") + std::to_string(UndoStack::kLimit + 4));
 }
 
-KITE_TEST(undo, a_delete_drops_everything_underneath_it) {
+KITE_TEST(undo, a_permanent_delete_drops_everything_underneath_it) {
     UndoStack stack;
     stack.Push({ UndoKind::Create, { "C:\\a" }, {} });
     stack.Push({ UndoKind::Create, { "C:\\b" }, {} });
     KITE_EXPECT_EQ(stack.size(), size_t{ 2 });
 
     // Those two are unreachable from here on, and reaching them would be worse
-    // than losing them: the deleted file would stay gone while an older,
+    // than losing them: the erased file would stay gone while an older,
     // unrelated operation quietly rolled back.
-    stack.Push({ UndoKind::Delete, {}, {} });
+    stack.Push({ UndoKind::Erase, {}, {} });
     KITE_EXPECT_EQ(stack.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(static_cast<int>(stack.top()->kind), static_cast<int>(UndoKind::Erase));
+}
+
+KITE_TEST(undo, a_recycled_delete_keeps_the_history_below_it) {
+    UndoStack stack;
+    stack.Push({ UndoKind::Create, { "C:\\a" }, {} });
+    // It can be undone, so there is nothing unreachable underneath it.
+    stack.Push({ UndoKind::Delete, { "C:\\b" }, {} });
+    KITE_EXPECT_EQ(stack.size(), size_t{ 2 });
     KITE_EXPECT_EQ(static_cast<int>(stack.top()->kind), static_cast<int>(UndoKind::Delete));
 }
 
@@ -246,7 +255,44 @@ KITE_TEST(undo, a_dropped_move_is_undone_as_one_call_per_source_folder) {
     KITE_EXPECT_EQ(h.files.copyCalls[2].destDir, std::string("C:\\home\\alpha"));
 }
 
-KITE_TEST(undo, deleting_blocks_the_history_instead_of_reaching_past_it) {
+KITE_TEST(undo, a_delete_to_the_recycle_bin_is_undone_by_restoring_it) {
+    Harness h;
+    h.app.Execute(Cmd::CursorBottom);
+    const std::string doomed = h.app.workspace().focusedTab()->CursorPath();
+    h.app.Execute(Cmd::DeleteToRecycle);
+    h.app.OnKey(ParseChord("Enter"));
+    h.Settle();
+    KITE_EXPECT_FALSE(h.files.Exists(doomed));
+
+    h.app.Execute(Cmd::Undo);
+    h.Settle();
+    KITE_EXPECT_EQ(h.Status(), h.Text("ui.undone_delete"));
+
+    // Named by the path it had before, not by whatever it is called inside the
+    // bin: at the time of the delete, that is the only name anyone has seen.
+    KITE_EXPECT_EQ(h.shell.restoreDeletedCalls.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.shell.restoreDeletedCalls[0].size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.shell.restoreDeletedCalls[0][0], doomed);
+
+    // Spent, like every other undo entry.
+    KITE_EXPECT(h.app.undoStack().empty());
+}
+
+KITE_TEST(undo, a_delete_nobody_can_find_again_reports_it_rather_than_lying) {
+    Harness h;
+    h.shell.restoreDeletedSucceeds = false;  // emptied from another window
+    h.app.Execute(Cmd::CursorBottom);
+    h.app.Execute(Cmd::DeleteToRecycle);
+    h.app.OnKey(ParseChord("Enter"));
+    h.Settle();
+
+    h.app.Execute(Cmd::Undo);
+    h.Settle();
+    KITE_EXPECT_EQ(h.Status(), h.Text("ui.undo_stale"));
+    KITE_EXPECT(h.app.undoStack().empty());
+}
+
+KITE_TEST(undo, a_recycled_delete_does_not_block_what_is_under_it) {
     Harness h;
     h.Commit(Cmd::NewFolder, "gamma");
     KITE_EXPECT_EQ(h.app.undoStack().size(), size_t{ 1 });
@@ -255,25 +301,45 @@ KITE_TEST(undo, deleting_blocks_the_history_instead_of_reaching_past_it) {
     h.app.Execute(Cmd::DeleteToRecycle);
     h.app.OnKey(ParseChord("Enter"));
     h.Settle();
+    // Both entries are still there - the delete can be undone, so nothing
+    // underneath it has become unreachable.
+    KITE_EXPECT_EQ(h.app.undoStack().size(), size_t{ 2 });
+
+    h.app.Execute(Cmd::Undo);  // the delete
+    h.Settle();
+    h.app.Execute(Cmd::Undo);  // and then gamma
+    h.Settle();
+    KITE_EXPECT_FALSE(h.files.Exists("C:\\home\\gamma"));
+}
+
+KITE_TEST(undo, a_permanent_delete_blocks_the_history_instead_of_reaching_past_it) {
+    Harness h;
+    h.Commit(Cmd::NewFolder, "gamma");
+    KITE_EXPECT_EQ(h.app.undoStack().size(), size_t{ 1 });
+
+    h.app.Execute(Cmd::CursorBottom);
+    h.app.Execute(Cmd::DeletePermanent);
+    h.app.OnKey(ParseChord("Enter"));
+    h.Settle();
 
     // The mark replaced the history rather than sitting on top of it.
     KITE_EXPECT_EQ(h.app.undoStack().size(), size_t{ 1 });
 
     h.app.Execute(Cmd::Undo);
-    KITE_EXPECT_EQ(h.Status(), h.Text("ui.undo_no_delete"));
-    // gamma is still there: undo did not step over the delete to reach it.
+    KITE_EXPECT_EQ(h.Status(), h.Text("ui.undo_no_erase"));
+    // gamma is still there: undo did not step over the erase to reach it.
     KITE_EXPECT(h.files.Exists("C:\\home\\gamma"));
 
     // And it stays blocked - the mark is not consumed by being reported.
     h.app.Execute(Cmd::Undo);
-    KITE_EXPECT_EQ(h.Status(), h.Text("ui.undo_no_delete"));
+    KITE_EXPECT_EQ(h.Status(), h.Text("ui.undo_no_erase"));
     KITE_EXPECT_EQ(h.app.undoStack().size(), size_t{ 1 });
 }
 
-KITE_TEST(undo, work_done_after_a_delete_is_still_undoable) {
+KITE_TEST(undo, work_done_after_a_permanent_delete_is_still_undoable) {
     Harness h;
     h.app.Execute(Cmd::CursorBottom);
-    h.app.Execute(Cmd::DeleteToRecycle);
+    h.app.Execute(Cmd::DeletePermanent);
     h.app.OnKey(ParseChord("Enter"));
     h.Settle();
 
@@ -284,7 +350,7 @@ KITE_TEST(undo, work_done_after_a_delete_is_still_undoable) {
 
     // Back down to the mark, which still answers for itself.
     h.app.Execute(Cmd::Undo);
-    KITE_EXPECT_EQ(h.Status(), h.Text("ui.undo_no_delete"));
+    KITE_EXPECT_EQ(h.Status(), h.Text("ui.undo_no_erase"));
 }
 
 // ---------------------------------------------------------------------------

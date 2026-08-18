@@ -22,6 +22,11 @@ public:
     virtual ~IShellIntegration() = default;
 
     /// @brief シェルのコンテキストメニューを表示し、選択された項目を実行する。
+    /// @param[in] folder 対象が属するフォルダのパス。空でなければ、シェルは項目を
+    ///            パスとして解析するのではなく**そのフォルダの中から引き当てる**。
+    ///            仮想フォルダのときだけ渡すこと ─ 実フォルダに渡すと、右クリック
+    ///            1 回のたびにそのフォルダを列挙し直すことになる（詳細は CLAUDE.md
+    ///            「ごみ箱の項目を正しく指す」）
     /// @param[in] paths 対象のパス列。すべて同じフォルダに属している必要がある
     /// @param[in] screenX 表示位置の X 座標（スクリーン座標）。負ならカーソル位置
     /// @param[in] screenY 表示位置の Y 座標（スクリーン座標）。負ならカーソル位置
@@ -37,8 +42,29 @@ public:
     ///         メニューを出せなかった場合（別プロセスのホストを起動できない、
     ///         表示中にホストが落ちた、など）は false
     /// @note メニューが閉じるまで戻らない
-    virtual bool ShowContextMenu(const std::vector<std::string>& paths, int screenX, int screenY,
-                                 bool extended, bool background, bool dark) = 0;
+    virtual bool ShowContextMenu(const std::string& folder, const std::vector<std::string>& paths,
+                                 int screenX, int screenY, bool extended, bool background,
+                                 bool dark) = 0;
+
+    /// @brief ごみ箱の項目を、消される前にあった場所へ戻す。
+    /// @param[in] paths 対象のパス列。ごみ箱の一覧が返した項目のパスであること
+    /// @return 1 件でも戻せたら true
+    /// @note 実体はシェルの「元に戻す」動詞。名前の衝突も、戻す先のフォルダがもう
+    ///       無い場合も、シェルが自分のダイアログで尋ねる ─ 自前で書き直すと、
+    ///       ファイル操作をシェルに委ねている理由がここだけ崩れる
+    /// @note 呼ぶ前の一覧が古くなっている（別の窓から空にされた）ことがある。
+    ///       見つからなかった項目は黙って飛ばされる
+    virtual bool RestoreFromTrash(const std::vector<std::string>& paths) = 0;
+
+    /// @brief 消される前のパスを頼りに、ごみ箱の項目を元の場所へ戻す。
+    /// @param[in] originalPaths 消される前のフルパス
+    /// @return 1 件でも戻せたら true。ごみ箱に見つからなければ false
+    /// @note `Ctrl+Z` で削除を戻すためにある。RestoreFromTrash() と相手は同じだが
+    ///       指し方が違う ─ 削除した時点で分かっているのは元のパスのほうで、
+    ///       ごみ箱に入った後の名前は誰も見ていない
+    /// @note 同じパスが複数回消されていれば**最後に消したもの**が戻る。`Ctrl+Z` が
+    ///       指しているのは常に直前の削除なので、それが正しい答えになる
+    virtual bool RestoreDeleted(const std::vector<std::string>& originalPaths) = 0;
 
     /// @brief 既定の関連付けでパスを開く。
     /// @param[in] path 開くファイルまたはフォルダのパス

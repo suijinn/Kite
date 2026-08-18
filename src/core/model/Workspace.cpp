@@ -7,6 +7,7 @@
 
 #include "core/base/PathUtil.h"
 #include "core/base/Utf8.h"
+#include "core/fs/VirtualPath.h"
 
 namespace kite {
 
@@ -15,6 +16,13 @@ namespace kite {
 // ---------------------------------------------------------------------------
 
 std::string Tab::title() const {
+    // 仮想フォルダの名前はパスに書かれていない。列挙が答えを持って帰ってくる
+    // ので、あればそちらを使う。
+    if (!listing.title.empty()) return listing.title;
+    if (vfs::IsVirtual(path)) {
+        std::string trailing = vfs::TrailingName(path);
+        if (!trailing.empty()) return trailing;
+    }
     std::string t = path::DisplayName(path);
     return t.empty() ? path : t;
 }
@@ -76,7 +84,7 @@ void Tab::Rebuild() {
 
     // 並べ替えの後に挿す。「..」は名前でも日付でも動かない。読めなかったフォルダに
     // は出さない ─ 画面はエラーだけを出すので、触れない行が残るだけになる。
-    if (listing.status == fs::Status::Ok && !path::Parent(path).empty()) {
+    if (listing.status == fs::Status::Ok && !vfs::ParentOf(path).empty()) {
         visible.insert(visible.begin(), kParentRow);
     }
 
@@ -133,14 +141,14 @@ const fs::Entry* Tab::CursorEntry() const { return EntryAt(cursor); }
 
 std::string Tab::CursorPath() const {
     const fs::Entry* e = CursorEntry();
-    return e ? path::Join(path, e->name) : std::string();
+    return e ? fs::EntryPath(path, *e) : std::string();
 }
 
 std::vector<std::string> Tab::SelectionPaths() const {
     std::vector<std::string> out;
     for (int index : visible) {
         if (index >= 0 && index < static_cast<int>(marked.size()) && marked[index]) {
-            out.push_back(path::Join(path, listing.entries[index].name));
+            out.push_back(fs::EntryPath(path, listing.entries[index]));
         }
     }
     if (out.empty()) {

@@ -6,6 +6,8 @@
 #include <shlwapi.h>
 
 #include "core/base/PathUtil.h"
+#include "core/fs/VirtualPath.h"
+#include "platform/win/VirtualNames.h"
 #include "platform/win/WinUtf.h"
 
 namespace kite::win {
@@ -105,11 +107,36 @@ std::vector<std::string> ExtractDroppedPaths(IDataObject* data) {
     return out;
 }
 
-bool WinShell::ShowContextMenu(const std::vector<std::string>& paths, int screenX, int screenY,
-                               bool extended, bool background, bool dark) {
+bool WinShell::ShowContextMenu(const std::string& folder, const std::vector<std::string>& paths,
+                               int screenX, int screenY, bool extended, bool background,
+                               bool dark) {
     // Everything about this call happens in kite_shellhost.exe. Nothing below
     // this line loads a shell extension, and nothing above it should either.
-    return menuHost_.ShowContextMenu(hwnd_, paths, screenX, screenY, extended, background, dark);
+    std::vector<std::string> shellPaths;
+    shellPaths.reserve(paths.size());
+    for (const std::string& p : paths) shellPaths.push_back(ToShellPath(p));
+    return menuHost_.ShowContextMenu(hwnd_, ToShellPath(folder), shellPaths, screenX, screenY,
+                                     extended, background, dark);
+}
+
+bool WinShell::RestoreFromTrash(const std::vector<std::string>& paths) {
+    if (paths.empty()) return false;
+    std::vector<std::string> shellPaths;
+    shellPaths.reserve(paths.size());
+    for (const std::string& p : paths) shellPaths.push_back(ToShellPath(p));
+    // "undelete" is the shell's own verb for this, and going through it means
+    // the Recycle Bin's bookkeeping ($I record, original location, the entry
+    // itself) is unwound by the code that wrote it.
+    return menuHost_.InvokeVerb(hwnd_, ToShellPath(vfs::kRecycleBin), shellPaths, "undelete",
+                                false);
+}
+
+bool WinShell::RestoreDeleted(const std::vector<std::string>& originalPaths) {
+    if (originalPaths.empty()) return false;
+    // The paths go through unchanged: these are the real paths the files had
+    // before they were deleted, which is exactly what the bin recorded.
+    return menuHost_.InvokeVerb(hwnd_, ToShellPath(vfs::kRecycleBin), originalPaths, "undelete",
+                                true);
 }
 
 bool WinShell::Open(const std::string& path) {

@@ -6,6 +6,7 @@
 #include "core/base/Format.h"
 #include "core/base/PathUtil.h"
 #include "core/base/Version.h"
+#include "core/fs/VirtualPath.h"
 #include "core/input/Commands.h"
 #include "ui/Glyphs.h"
 
@@ -746,7 +747,7 @@ void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused
         const RectF close = { tabRect.r - 20.0f, tabRect.t + 6.0f, tabRect.r - 6.0f,
                               tabRect.b - 6.0f };
         const RectF label = { tabRect.l + 10.0f, tabRect.t, close.l - 4.0f, tabRect.b };
-        r.DrawText(pane->tabs[i]->title(), label,
+        r.DrawText(app_.DisplayName(*pane->tabs[i]), label,
                    active ? th.tabActiveText : th.tabInactiveText, FontRole::Ui, TextAlign::Left);
         // The cross is drawn faint so a row of tabs does not read as a row of
         // buttons; under the pointer it has to be unambiguous, since this is
@@ -848,13 +849,27 @@ void AppUi::PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area, b
     // crumb goes there, clicking the space after them starts editing.
     Add(area, Hit::AddressBar, 0, pane);
 
-    // Breadcrumbs: split the path into cumulative prefixes.
+    // Breadcrumbs: split the path into cumulative prefixes. The walk goes
+    // through vfs::ParentOf, so it does not stop at "C:\\" - above a drive is
+    // "PC", which is a place the crumbs can now take you to.
     std::vector<std::pair<std::string, std::string>> crumbs;  // label, full path
     {
         std::string p = tab->path;
         while (!p.empty()) {
-            crumbs.push_back({ path::DisplayName(p), p });
-            const std::string up = path::Parent(p);
+            std::string label;
+            if (const char* key = vfs::LabelKey(p)) {
+                label = app_.strings().Get(key);
+            } else if (p == tab->path) {
+                // The tab knows the name the listing brought back with it, which
+                // is the only source for a nested namespace extension.
+                label = app_.DisplayName(*tab);
+            } else if (vfs::IsVirtual(p)) {
+                label = vfs::TrailingName(p);
+            } else {
+                label = path::DisplayName(p);
+            }
+            crumbs.push_back({ std::move(label), p });
+            const std::string up = vfs::ParentOf(p);
             if (up == p) break;
             p = up;
         }
@@ -1088,7 +1103,7 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
         // The real icon arrives a frame or two later, and carries any overlay
         // (version control, cloud sync) with it. Until then the drawn glyph
         // holds the space, so rows never shift when it lands.
-        const uint32_t shellIcon = app_.IconFor(path::Join(tab->path, e.name));
+        const uint32_t shellIcon = app_.IconFor(fs::EntryPath(tab->path, e));
         if (shellIcon) {
             r.DrawIcon(shellIcon, icon.inset(1.0f));
         } else if (ghost) {
@@ -2333,11 +2348,11 @@ std::string AppUi::DropTargetAt(float x, float y) const {
     if (region->kind == Hit::ListRow) {
         // Dropping onto ".." moves things up a level - the one direction the
         // list itself cannot offer as a target.
-        if (tab->IsParentRow(region->index)) return path::Parent(tab->path);
+        if (tab->IsParentRow(region->index)) return vfs::ParentOf(tab->path);
         // Only a folder swallows the drop; over a file it goes to the folder
         // being listed, which is what every file manager does.
         if (const fs::Entry* entry = tab->EntryAt(region->index)) {
-            if (entry->isDir()) return path::Join(tab->path, entry->name);
+            if (entry->isDir()) return fs::EntryPath(tab->path, *entry);
         }
     }
     return tab->path;

@@ -1,4 +1,5 @@
 #include "TestFramework.h"
+#include "core/fs/VirtualPath.h"
 #include "core/model/Workspace.h"
 
 using namespace kite;
@@ -220,7 +221,15 @@ KITE_TEST(tab, a_parent_row_leads_the_list_unless_the_folder_is_a_root) {
     KITE_EXPECT_EQ(tab.visible.size(), size_t{ 6 });  // 5 items plus ".."
     KITE_EXPECT_EQ(tab.ItemCount(), 5);
 
+    // A drive root is no longer the top: above it is "PC" (vfs::ParentOf), so
+    // the row stays and Alt+Up leads out of the filesystem rather than nowhere.
     tab.path = "C:\\";
+    tab.Rebuild();
+    KITE_EXPECT(tab.hasParentRow());
+    KITE_EXPECT_EQ(tab.visible.size(), size_t{ 6 });
+
+    // A virtual root really is the top.
+    tab.path = vfs::kComputer;
     tab.Rebuild();
     KITE_EXPECT_FALSE(tab.hasParentRow());
     KITE_EXPECT_EQ(tab.visible.size(), size_t{ 5 });

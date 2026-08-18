@@ -23,6 +23,9 @@ namespace kite::win {
 ///            そのウィンドウプロシージャは ForwardContextMenuMessage() を呼ぶこと
 /// @param[in] dialogOwner 実行したコマンドが開くダイアログの親にするウィンドウ。
 ///            別プロセスの Kite 本体を渡してよい。nullptr なら menuOwner を使う
+/// @param[in] container 対象が属するフォルダの解析名。空なら `paths` を直接解析する。
+///            **実フォルダでは必ず空にすること** ─ 渡すとそのフォルダを列挙し直す
+///            （詳細は `shellhost::Request::container`）
 /// @param[in] paths 対象のパス列。すべて同じフォルダに属している必要がある
 /// @param[in] screenX 表示位置の X（スクリーン座標）。負ならカーソル位置
 /// @param[in] screenY 表示位置の Y（スクリーン座標）。負ならカーソル位置
@@ -36,8 +39,27 @@ namespace kite::win {
 /// @note シェル拡張への呼び出しはすべて SEH で囲んである。拡張がフォールトしても
 ///       失われるのはそのメニューだけで、ホストは次の要求を処理できる
 shellhost::Result ShowShellContextMenu(HWND menuOwner, HWND dialogOwner,
+                                       const std::string& container,
                                        const std::vector<std::string>& paths, int screenX,
                                        int screenY, bool extended, bool background);
+
+/// @brief メニューを出さずに、名前で指定した動詞を実行する。
+/// @param[in] dialogOwner 動詞が開くダイアログの親にするウィンドウ
+/// @param[in] container 対象が属するフォルダの解析名。@see ShowShellContextMenu
+/// @param[in] paths 対象の解析名。すべて同じフォルダに属している必要がある
+/// @param[in] verb 実行する動詞の名前（ごみ箱からの復元なら "undelete"）
+/// @param[in] byOriginalPath true なら `paths` を解析名ではなく**消される前のフルパス**
+///            として読む。`Ctrl+Z` で削除を戻すときの指し方
+///            （`shellhost::VerbRequest::byOriginalPath`）
+/// @return 実行できたかと、対象になった件数
+/// @pre COM が初期化済みであること
+/// @note **`QueryContextMenu` を先に通す。** ハンドラが動詞の表を作るのはそこなので、
+///       構築を頼んでいないメニューはどの名前にも答えない。作った HMENU は捨てる
+/// @note 動詞の実行はシェル拡張を動かしうるので、メニュー表示と同じく SEH で
+///       囲んである
+shellhost::VerbResponse InvokeShellVerb(HWND dialogOwner, const std::string& container,
+                                        const std::vector<std::string>& paths,
+                                        const std::string& verb, bool byOriginalPath);
 
 /// @brief 以降に作るメニューをダーク／ライトのどちらで描かせるかを指定する。
 /// @param[in] menuOwner メニューを追跡するウィンドウ

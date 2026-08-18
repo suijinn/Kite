@@ -105,9 +105,9 @@ void RestoreOwner(HWND owner, DWORD hostProcessId) {
 
 }  // namespace
 
-bool ShellHostClient::ShowContextMenu(HWND owner, const std::vector<std::string>& paths,
-                                      int screenX, int screenY, bool extended, bool background,
-                                      bool dark) {
+bool ShellHostClient::ShowContextMenu(HWND owner, const std::string& container,
+                                      const std::vector<std::string>& paths, int screenX,
+                                      int screenY, bool extended, bool background, bool dark) {
     if (paths.empty()) return false;
 
     PumpState connectState{ owner, false };
@@ -118,6 +118,7 @@ bool ShellHostClient::ShowContextMenu(HWND owner, const std::vector<std::string>
     ::AllowSetForegroundWindow(host_.processId());
 
     shellhost::Request request;
+    request.container = container;
     request.paths = paths;
     request.screenX = screenX;
     request.screenY = screenY;
@@ -161,6 +162,54 @@ bool ShellHostClient::ShowContextMenu(HWND owner, const std::vector<std::string>
 
     RestoreOwner(owner, hostId);
     return response.result != shellhost::Result::Failed;
+}
+
+bool ShellHostClient::InvokeVerb(HWND owner, const std::string& container,
+                                 const std::vector<std::string>& paths, const std::string& verb,
+                                 bool byOriginalPath) {
+    if (paths.empty() || verb.empty()) return false;
+
+    PumpState connectState{ owner, false };
+    if (!host_.Ensure(&PumpOwnerWindow, &connectState)) return false;
+
+    // The verb may raise a dialog of its own - "this file is too big for the
+    // Recycle Bin", a name collision at the original location - and that dialog
+    // has to be able to come to the front.
+    ::AllowSetForegroundWindow(host_.processId());
+
+    shellhost::VerbRequest request;
+    request.container = container;
+    request.paths = paths;
+    request.verb = verb;
+    request.byOriginalPath = byOriginalPath;
+    request.ownerWindow = reinterpret_cast<uint64_t>(owner);
+
+    const std::vector<uint8_t> frame = shellhost::EncodeVerbRequest(request);
+    if (frame.empty()) return false;
+
+    PumpState state{ owner, false };
+    if (WritePipeFrame(host_.pipe(), frame, &PumpOwnerWindow, &state) != PipeStatus::Ok) {
+        host_.Stop();
+        return false;
+    }
+
+    // No timeout, for the same reason a menu has none: what is being waited on
+    // may be a dialog the user has not answered yet.
+    std::vector<uint8_t> payload;
+    const PipeStatus status =
+        ReadPipeFrame(host_.pipe(), payload, INFINITE, &PumpOwnerWindow, &state);
+    RestoreOwner(owner, host_.processId());
+    if (status != PipeStatus::Ok) {
+        host_.Stop();
+        return false;
+    }
+
+    shellhost::VerbResponse response;
+    if (!shellhost::DecodeVerbResponse(payload.data(), payload.size(), response)) {
+        host_.Stop();
+        return false;
+    }
+    return response.ok;
 }
 
 }  // namespace kite::win

@@ -102,6 +102,8 @@ add_library(kite_core STATIC
     src/core/base/PathUtil.cpp
     src/core/base/Utf8.cpp
     src/core/fs/DirectoryLoader.cpp
+    src/core/fs/FileSystem.cpp
+    src/core/fs/VirtualPath.cpp
     src/core/i18n/Strings.cpp
     src/core/input/Commands.cpp
     src/core/input/KeyEditor.cpp
@@ -127,6 +129,7 @@ add_dependencies(kite_core kite_version)
 add_executable(kite WIN32
     src/main_win.cpp
     src/platform/win/D2DRenderer.cpp
+    src/platform/win/FolderHostClient.cpp
     src/platform/win/IconHostClient.cpp
     src/platform/win/ShellHostClient.cpp
     src/platform/win/ShellHostProcess.cpp
@@ -139,6 +142,7 @@ add_executable(kite WIN32
     src/platform/win/WinPlatform.cpp
     src/platform/win/WinShell.cpp
     src/platform/win/WinSingleInstance.cpp
+    src/platform/win/VirtualNames.cpp
     src/platform/win/WinUtf.cpp
     src/platform/win/WinWindow.cpp
     ${KITE_APP_RC}
@@ -175,9 +179,11 @@ endif()
 # Third-party shell extensions (Box, Google Drive, 7-Zip, TortoiseGit ...) are
 # instantiated here and nowhere else, so one of them faulting costs a context
 # menu or an icon instead of the file manager. ShellMenu.cpp is the IContextMenu
-# code and ShellIcons.cpp is what asks for icon overlays; both must stay out of
-# the kite target, since linking either one there would put the extensions back
-# in Kite's address space, which is the whole thing this avoids.
+# code, ShellIcons.cpp is what asks for icon overlays, and ShellFolder.cpp is
+# what enumerates the shell namespace (which loads the extensions registered
+# under "PC" and friends); all three must stay out of the kite target, since
+# linking any of them there would put the extensions back in Kite's address
+# space, which is the whole thing this avoids.
 #
 # It does not link kite_core. Nothing in core/ or ui/ is involved in showing a
 # menu or reading an icon, and keeping the host small keeps its start-up - which
@@ -185,6 +191,7 @@ endif()
 # ---------------------------------------------------------------------------
 add_executable(kite_shellhost WIN32
     tools/shellhost/main.cpp
+    src/platform/win/ShellFolder.cpp
     src/platform/win/ShellIcons.cpp
     src/platform/win/ShellMenu.cpp
     src/platform/win/ShellPipe.cpp
@@ -258,13 +265,14 @@ if(KITE_BUILD_TESTS)
         tests/test_dropcheck.cpp
         tests/test_undo.cpp
         tests/test_hostproto.cpp
+        tests/test_vfolder.cpp
     )
     target_link_libraries(kite_tests PRIVATE kite_core)
 
     # One CTest entry per suite so a failure names the area straight away.
     set(KITE_TEST_SUITES
         utf8 path ini format strings keymap keyeditor settings pathcomplete typeahead theme tab workspace session
-        app appui drop iconcache hostproto config undo bookmarkpicker)
+        app appui drop iconcache hostproto config undo bookmarkpicker vfolder)
 
     foreach(suite IN LISTS KITE_TEST_SUITES)
         add_test(NAME ${suite} COMMAND kite_tests --filter ${suite}.)

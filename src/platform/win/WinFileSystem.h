@@ -7,14 +7,19 @@
 #include <vector>
 
 #include "core/fs/FileSystem.h"
+#include "platform/win/FolderHostClient.h"
 
 namespace kite::win {
 
 /// @brief Win32 API を直接使うファイルシステム。
 ///
-/// IShellFolder を意図的に使わない。列挙が速いままで、サードパーティのシェル拡張を
-/// 読み込むこともなく、ファイル内容に一切触れないのでクラウドのプレースホルダを
-/// ダウンロードさせずに一覧できる。
+/// 実フォルダに対しては IShellFolder を意図的に使わない。列挙が速いままで、
+/// サードパーティのシェル拡張を読み込むこともなく、ファイル内容に一切触れないので
+/// クラウドのプレースホルダをダウンロードさせずに一覧できる。
+///
+/// 仮想フォルダ（`virtual:` 付きのパス）だけがシェル名前空間を必要とするが、
+/// **その列挙もこのプロセスでは行わない** ─ `kite_shellhost.exe` に投げる
+/// （`FolderHostClient`）。実 FS の高速経路には手を触れていない。
 ///
 /// @note List() は DirectoryLoader のワーカースレッドから呼ばれるためスレッド安全
 ///       でなければならない。可変な状態を持たないことで満たしている
@@ -46,6 +51,9 @@ public:
     std::string ConfigDir() override;
 
     /// @copydoc fs::IFileSystem::QuickAccess
+    /// @note 先頭に「PC」「ごみ箱」「ネットワーク」を置く。ここに置くことが
+    ///       「この環境はこの 3 つを開ける」という表明そのもので、名前は付けない
+    ///       （Kite の言語で呼ぶのは App::RefreshRoots の仕事）
     std::vector<fs::Root> QuickAccess() override;
 
     /// @copydoc fs::IFileSystem::MakeDirectory
@@ -67,8 +75,14 @@ public:
                 std::string* err) override;
 
 private:
+    /// @brief 仮想フォルダ 1 つ分をホストに列挙させる。
+    /// @param[in] dir `virtual:` 付きのパス
+    /// @return 列挙結果
+    fs::ListResult ListVirtual(const std::string& dir);
+
     std::string home_;
     std::string configDir_;
+    FolderHostClient folders_;  ///< 仮想フォルダの列挙口。内部で直列化している
 };
 
 }  // namespace kite::win

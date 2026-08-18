@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "platform/win/VirtualNames.h"
+
 namespace kite::win {
 namespace {
 
@@ -131,9 +133,17 @@ void WinIconProvider::WorkerMain() {
             inFlight_ = batch;
         }
 
+        // The host speaks shell, not Kite: a "virtual:" path would reach
+        // SHGetFileInfo verbatim and come back with no icon at all. The reply
+        // is still paired with `batch`, whose entries are what the cache is
+        // keyed by.
+        std::vector<std::string> asked;
+        asked.reserve(batch.size());
+        for (const std::string& p : batch) asked.push_back(ToShellPath(p));
+
         shellhost::IconResponse response;
         unsigned generation = 0;
-        const bool ok = client_.Fetch(batch, requestedSize_.load(std::memory_order_relaxed),
+        const bool ok = client_.Fetch(asked, requestedSize_.load(std::memory_order_relaxed),
                                       response, generation);
 
         {

@@ -3,6 +3,7 @@
 #include "Fakes.h"
 #include "TestFramework.h"
 #include "core/base/Version.h"
+#include "core/fs/VirtualPath.h"
 
 using namespace kite;
 
@@ -270,17 +271,93 @@ KITE_TEST(app, opening_the_parent_row_goes_up_and_lands_on_the_folder_left) {
     KITE_EXPECT_EQ(h.CursorName(), std::string("alpha"));
 }
 
-KITE_TEST(app, a_root_folder_has_no_parent_row_to_open) {
+KITE_TEST(app, a_drive_root_leads_up_to_the_computer) {
     Harness h;
     h.files.AddDir("C:\\");
     h.app.OpenPath("C:\\", false);
     h.Settle();
     KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\"));
-    KITE_EXPECT_FALSE(h.tab()->hasParentRow());
+    KITE_EXPECT(h.tab()->hasParentRow());
 
     h.app.Execute(Cmd::GoUp);
     h.Settle();
-    KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\"));
+    KITE_EXPECT_EQ(h.tab()->path, std::string(vfs::kComputer));
+
+    // And that is the top: nothing above "PC" to walk into.
+    h.app.Execute(Cmd::GoUp);
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string(vfs::kComputer));
+}
+
+KITE_TEST(app, the_recycle_bin_names_itself_when_asking_for_a_menu) {
+    Harness h;
+    // A deleted item addresses the hidden $R copy of itself, so parsing that
+    // path would hand the shell an ordinary file - with no "Restore" on it. The
+    // folder travels with the request so the shell can find the item inside it.
+    h.files.AddFile(vfs::kRecycleBin, "notes.txt", 12, 0);
+    h.app.OpenPath(vfs::kRecycleBin, false);
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->ItemCount(), 1);
+
+    h.app.Execute(Cmd::CursorBottom);
+    h.app.ShowContextMenuAt(10, 10, false);
+    KITE_EXPECT_EQ(h.shell.contextMenuCalls, 1);
+    KITE_EXPECT_EQ(h.shell.lastContextMenuFolder, std::string(vfs::kRecycleBin));
+
+    // A real folder must not name one: the shell would enumerate it again for
+    // every right-click, and parsing the paths is both correct and free there.
+    h.files.AddFile("C:\\home", "beta.txt", 1, 0);
+    h.app.OpenPath("C:\\home", false);
+    h.Settle();
+    h.app.Execute(Cmd::CursorBottom);
+    h.app.ShowContextMenuAt(10, 10, false);
+    KITE_EXPECT_EQ(h.shell.contextMenuCalls, 2);
+    KITE_EXPECT_EQ(h.shell.lastContextMenuFolder, std::string(""));
+}
+
+KITE_TEST(app, restore_only_answers_inside_the_recycle_bin) {
+    Harness h;
+    h.files.AddFile(vfs::kRecycleBin, "notes.txt", 12, 0);
+    h.app.OpenPath(vfs::kRecycleBin, false);
+    h.Settle();
+    h.app.Execute(Cmd::CursorBottom);
+
+    h.app.Execute(Cmd::Restore);
+    KITE_EXPECT_EQ(h.shell.restoreCalls.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.shell.restoreCalls[0].size(), size_t{ 1 });
+
+    // Elsewhere it does nothing at all - the shell verb only exists for items
+    // that are in the bin, and a silent no-op would read as a broken key.
+    h.app.OpenPath("C:\\home", false);
+    h.Settle();
+    h.app.Execute(Cmd::CursorBottom);
+    h.app.Execute(Cmd::Restore);
+    KITE_EXPECT_EQ(h.shell.restoreCalls.size(), size_t{ 1 });
+
+    // Restoring is not undoable: Ctrl+Z on it would put the rescued file back.
+    h.app.OpenPath(vfs::kRecycleBin, false);
+    h.Settle();
+    h.app.Execute(Cmd::CursorBottom);
+    h.app.Execute(Cmd::Restore);
+    KITE_EXPECT_EQ(h.shell.restoreCalls.size(), size_t{ 2 });
+    h.app.Execute(Cmd::Undo);
+    KITE_EXPECT(h.files.deleteCalls.empty());
+}
+
+KITE_TEST(app, a_virtual_folder_refuses_to_be_written_into) {
+    Harness h;
+    h.app.OpenPath(vfs::kComputer, false);
+    h.Settle();
+
+    h.app.Execute(Cmd::NewFolder);
+    KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::None);
+    h.app.Execute(Cmd::NewFile);
+    KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::None);
+    h.app.Execute(Cmd::Paste);
+    KITE_EXPECT(h.files.copyCalls.empty());
+
+    // A list is not a place a drop can land in either.
+    KITE_EXPECT_FALSE(App::IsValidDropTarget({ "C:\\home\\a.txt" }, vfs::kComputer));
 }
 
 KITE_TEST(app, select_all_and_invert) {
@@ -436,7 +513,7 @@ KITE_TEST(app, the_offer_goes_away_when_the_caret_leaves_the_end_of_the_text) {
 
 KITE_TEST(app, tab_alone_opens_the_offer_on_a_folder_that_was_never_typed_into) {
     Harness h;
-    // The drive itself, so that "C:\home" has something to be completed from.
+    // The drive itself, so that "C:\\home" has something to be completed from.
     h.files.dirs["C:\\"];
     h.files.AddDir("C:\\home");
 
@@ -532,7 +609,7 @@ KITE_TEST(app, select_all_stays_out_of_the_confirmation_prompt) {
 
 KITE_TEST(app, shift_and_arrows_grow_one_selection) {
     Harness h;
-    h.EditPathAppend();                    // "C:\home", caret at the end
+    h.EditPathAppend();                    // "C:\\home", caret at the end
     const std::string full = h.app.prompt().text;
 
     h.app.OnKey(ParseChord("Shift+Left"));
@@ -674,8 +751,13 @@ KITE_TEST(app, a_share_walks_up_to_the_server_that_lists_it) {
     h.app.Execute(Cmd::GoUp);
     h.Settle();
     KITE_EXPECT_EQ(h.tab()->path, std::string("\\\\srv"));
-    KITE_EXPECT_EQ(h.tab()->ItemCount(), 1);  // "pub", and no ".." above it
-    KITE_EXPECT_FALSE(h.tab()->IsParentRow(0));
+    KITE_EXPECT_EQ(h.tab()->ItemCount(), 1);  // "pub"
+    // Above the server is "Network", by the same reading that put the server
+    // above the share.
+    KITE_EXPECT(h.tab()->IsParentRow(0));
+    h.app.Execute(Cmd::GoUp);
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string(vfs::kNetwork));
 }
 
 KITE_TEST(app, signing_in_aims_at_the_share_not_the_folder_inside_it) {
