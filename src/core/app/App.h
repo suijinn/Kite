@@ -32,7 +32,7 @@
 
 namespace kite {
 
-/// @brief 画面下部の入力欄が何を尋ねているか。
+/// @brief 入力欄が何を尋ねているか。
 enum class PromptKind : uint8_t {
     None,                    ///< 入力欄は出ていない
     Path,                    ///< 移動先パスの入力
@@ -77,11 +77,18 @@ struct Prompt {
         anchor = pos;
     }
 
-    /// @brief 全体を選択する。
-    void SelectAll() {
-        anchor = 0;
-        caret = text.size();
+    /// @brief 範囲を選択し、キャレットを終端側に置く。
+    /// @param[in] begin 選択の先頭。text へのバイト添字
+    /// @param[in] end 選択の終端。text へのバイト添字。どちらも末尾に丸める
+    /// @note キャレットが終端側なのは、`→` を押せば選択の後ろへ畳めるという
+    ///       入力欄の一般則に合わせるため
+    void SelectRange(size_t begin, size_t end) {
+        anchor = begin < text.size() ? begin : text.size();
+        caret = end < text.size() ? end : text.size();
     }
+
+    /// @brief 全体を選択する。
+    void SelectAll() { SelectRange(0, text.size()); }
 
     /// @brief 選択されている範囲を削除する。
     /// @return 実際に削除したら true
@@ -100,6 +107,16 @@ struct Prompt {
     /// @return 確認なら true
     bool isConfirm() const {
         return kind == PromptKind::ConfirmDelete || kind == PromptKind::ConfirmDeletePermanent;
+    }
+
+    /// @brief 対象そのものの上で編集する入力欄かを判定する。
+    /// @return パンくずの行・一覧の行・セッションチップの上に出るものなら true
+    /// @note 画面下部の帯に出るのは、これが false のもの ─ 一覧全体を相手にする
+    ///       絞り込みと、文字を打つのではない削除の確認だけ
+    bool isInline() const {
+        return kind == PromptKind::Path || kind == PromptKind::Rename ||
+               kind == PromptKind::NewFolder || kind == PromptKind::NewFile ||
+               kind == PromptKind::SessionName;
     }
 };
 
@@ -235,11 +252,12 @@ public:
     ///       常に閉じている
     const PathComplete& pathComplete() const { return complete_; }
 
-    /// @brief 編集中のアドレスバーを畳み、パンくずに戻す。
+    /// @brief 対象の上で開いている入力欄を畳む。
     /// @note 打った文字列は捨てる。UI 層が「入力欄の外が押された」ときに呼ぶ ─
-    ///       押した先が答えなのだから、書きかけのパスを抱えたまま居座らせない。
-    ///       アドレスバー以外の入力欄には効かない
-    void CancelPathEdit();
+    ///       押した先が答えなのだから、書きかけの名前を抱えたまま居座らせない。
+    ///       効くのは Prompt::isInline() が真の入力欄だけで、画面下部の帯に出る
+    ///       絞り込みと削除の確認は残る
+    void CancelInlineEdit();
 
     /// @brief 補完候補を選び、そのフォルダへ移動する。
     /// @param[in] index PathComplete::matches() への添字

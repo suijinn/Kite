@@ -1329,8 +1329,8 @@ bool App::MoveCompletion(int delta) {
     return true;
 }
 
-void App::CancelPathEdit() {
-    if (prompt_.kind != PromptKind::Path) return;
+void App::CancelInlineEdit() {
+    if (!prompt_.isInline()) return;
     CancelPrompt();
 }
 
@@ -2566,8 +2566,22 @@ void App::Execute(Cmd cmd) {
             const fs::Entry* e = tab->CursorEntry();
             if (!e) break;
             BeginPrompt(PromptKind::Rename, "ui.rename_label", e->name);
-            // Preselect the stem so typing replaces the name, not the extension.
-            if (!e->isDir()) prompt_.SetCaret(path::Stem(e->name).size());
+            // The stem opens selected, so the first thing typed replaces the name
+            // and leaves the extension alone - which is what renaming a file
+            // almost always means, and what every shell that offers it does.
+            //
+            // A folder has no extension to protect, so the whole name is the stem.
+            // Deliberately not path::Stem for those: "backup.2026" would keep a
+            // ".2026" nobody thinks of as one.
+            //
+            // path::Stem already answers the whole name for the two cases where
+            // there is nothing to keep back - a leading dot (".gitignore") and no
+            // dot at all - so neither needs its own branch here.
+            if (e->isDir()) {
+                prompt_.SelectAll();
+            } else {
+                prompt_.SelectRange(0, path::Stem(e->name).size());
+            }
             break;
         }
         case Cmd::DeleteToRecycle: DoDelete(false); break;

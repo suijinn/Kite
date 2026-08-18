@@ -383,6 +383,15 @@ public:
         size_t seq = 0;  ///< 何番目の描画か。重なりは前後関係でしか判定できない
     };
 
+    /// One shell icon. The pixels are the platform's business, so all that is kept
+    /// is which identifier went where - enough to tell a row that got the real
+    /// icon from a row that fell back to a drawn glyph.
+    struct Icon {
+        RectF rect;
+        uint32_t id = 0;
+        size_t seq = 0;
+    };
+
     /// One run of text, with the box its glyphs actually cover - the layout rect
     /// trimmed to the width of the string and pushed to whichever end the
     /// alignment asked for. A right-aligned line in a wide rect leaves most of
@@ -398,6 +407,7 @@ public:
 
     std::vector<Fill> fills;
     std::vector<Text> texts;
+    std::vector<Icon> icons;
     SizeF size{ 1200.0f, 800.0f };
 
     void PushClip(const RectF&) override {}
@@ -409,7 +419,7 @@ public:
     void StrokeRect(const RectF&, const Color&, float) override {}
     void DrawLine(float, float, float, float, const Color&, float) override {}
     void FillTriangle(PointF, PointF, PointF, const Color&) override {}
-    void DrawIcon(uint32_t, const RectF&) override {}
+    void DrawIcon(uint32_t id, const RectF& r) override { icons.push_back({ r, id, seq_++ }); }
     void DrawText(std::string_view utf8, const RectF& r, const Color& c, ui::FontRole role,
                   ui::TextAlign align) override {
         // The same conditions the real renderer draws nothing under.
@@ -434,7 +444,17 @@ public:
     void Clear() {
         fills.clear();
         texts.clear();
+        icons.clear();
         seq_ = 0;
+    }
+
+    /// The icon drawn over a point, if any - which is how a test asks "did this row
+    /// get a shell icon".
+    const Icon* IconAt(float x, float y) const {
+        for (const Icon& i : icons) {
+            if (i.rect.contains(x, y)) return &i;
+        }
+        return nullptr;
     }
 
     /// Everything drawn after the last fill of this colour - the way to ask about
@@ -484,6 +504,42 @@ public:
 
 private:
     size_t seq_ = 0;
+};
+
+// ---------------------------------------------------------------------------
+// Icon provider
+// ---------------------------------------------------------------------------
+
+// Answers on the first ask, unlike the real one, which returns 0 and queues the
+// path for a worker. Tests here are about who gets asked and what gets drawn, and
+// a provider that needs a second frame to answer only adds a pump to every one of
+// them. Each distinct path gets its own identifier, so "these two rows drew the
+// same icon" is a question that can be asked.
+class FakeIconProvider final : public IIconProvider {
+public:
+    std::vector<std::string> asked;  ///< 渡されたパス。重複も順序もそのまま
+    int invalidateCalls = 0;
+
+    uint32_t IconFor(const std::string& path) override {
+        asked.push_back(path);
+        const auto it = ids_.find(path);
+        if (it != ids_.end()) return it->second;
+        const uint32_t id = static_cast<uint32_t>(ids_.size()) + 1;
+        ids_[path] = id;
+        return id;
+    }
+
+    void Invalidate() override {
+        ++invalidateCalls;
+        ids_.clear();
+    }
+
+    bool WasAsked(const std::string& path) const {
+        return std::find(asked.begin(), asked.end(), path) != asked.end();
+    }
+
+private:
+    std::map<std::string, uint32_t> ids_;
 };
 
 // ---------------------------------------------------------------------------

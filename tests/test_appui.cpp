@@ -54,13 +54,14 @@ struct Fixture {
         ui.OnMouse(e);
     }
 
-    void Press(float x, float y, uint8_t mods = 0, int button = 0) {
+    void Press(float x, float y, uint8_t mods = 0, int button = 0, int clicks = 1) {
         ui::MouseEvent e;
         e.type = ui::MouseEvent::Type::Down;
         e.x = x;
         e.y = y;
         e.button = button;
         e.mods = mods;
+        e.clicks = clicks;
         ui.OnMouse(e);
     }
 
@@ -89,6 +90,14 @@ struct Fixture {
         Release(x, y);
     }
 
+    // What Windows actually delivers: a plain click, then a second press marked
+    // as the double. Anything reading e.clicks has to survive the first one.
+    void DoubleClick(float x, float y) {
+        Click(x, y);
+        Press(x, y, 0, 0, 2);
+        Release(x, y);
+    }
+
     // One notch of the wheel. Positive is away from the user, which scrolls up.
     void Wheel(float x, float y, float notches) {
         ui::MouseEvent e;
@@ -102,6 +111,16 @@ struct Fixture {
     Tab* tab() { return app.workspace().focusedTab(); }
 
     Pane* pane() { return app.workspace().focusedPane(); }
+
+    // Where a run of text landed this frame. The sidebar is painted before the
+    // panes and the panes before the status bar, so the first match for a name
+    // that appears in more than one of them is the leftmost one on screen.
+    const test::FakeRenderer::Text* TextNamed(const std::string& s) const {
+        for (const test::FakeRenderer::Text& t : renderer.texts) {
+            if (t.text == s) return &t;
+        }
+        return nullptr;
+    }
 
     // Thumbs painted inside the tab bar. The listing has a scrollbar of its own
     // in the same colour, so the ones out in the pane do not count.
@@ -420,6 +439,59 @@ struct SidebarFixture : Fixture {
 };
 
 }  // namespace
+
+// A bookmark row used to draw a star instead of asking the shell. The star said
+// "you pinned this" - which the heading above the rows already says - and said
+// nothing about what was pinned, so a synced cloud folder, a repository with
+// local changes and an unreachable share were three identical stars.
+KITE_TEST(appui, a_bookmark_row_draws_the_shell_icon_of_what_it_points_at) {
+    test::FakeIconProvider icons;
+    SidebarFixture f;
+    f.app.SetIconProvider(&icons);
+    f.Paint();
+
+    // Read out of the frame first, so nothing below asks the provider again -
+    // IconFor() records every call, and an assertion should not be one of them.
+    std::vector<uint32_t> drawn;
+    for (int i = 0; i < 3; ++i) {
+        KITE_EXPECT(icons.WasAsked(f.BookmarkAt(i)));
+        // The icon cell sits at the left of the row, ahead of the label.
+        const test::FakeRenderer::Icon* icon = f.renderer.IconAt(14.0f, f.BookmarkY(i));
+        KITE_EXPECT(icon != nullptr);
+        drawn.push_back(icon ? icon->id : 0u);
+    }
+
+    for (uint32_t id : drawn) KITE_EXPECT_NE(id, 0u);
+    // Three bookmarks on three folders are three different icons - the whole
+    // point of asking per path rather than per kind.
+    KITE_EXPECT_NE(drawn[0], drawn[1]);
+    KITE_EXPECT_NE(drawn[1], drawn[2]);
+    KITE_EXPECT_NE(drawn[0], drawn[2]);
+}
+
+// With the shell switched off ([ui] shell_icons = false, or before the first
+// answer arrives) there is nothing to ask, and the drawn glyph has to hold the
+// exact same space - or every label shifts sideways as the icons land.
+KITE_TEST(appui, a_bookmark_row_keeps_its_layout_whether_or_not_the_shell_answers) {
+    SidebarFixture f;  // no icon provider installed yet
+    f.Paint();
+    KITE_EXPECT(f.renderer.icons.empty());
+    const test::FakeRenderer::Text* before = f.TextNamed("alpha");
+    KITE_EXPECT(before != nullptr);
+    const RectF was = before->ink;
+
+    test::FakeIconProvider icons;
+    f.app.SetIconProvider(&icons);
+    f.Paint();
+    KITE_EXPECT_FALSE(f.renderer.icons.empty());
+
+    const test::FakeRenderer::Text* after = f.TextNamed("alpha");
+    KITE_EXPECT(after != nullptr);
+    if (after) {
+        KITE_EXPECT_NEAR(after->ink.l, was.l, 0.01f);
+        KITE_EXPECT_NEAR(after->ink.t, was.t, 0.01f);
+    }
+}
 
 KITE_TEST(appui, dragging_a_bookmark_down_past_another_swaps_them) {
     SidebarFixture f;
@@ -799,23 +871,58 @@ KITE_TEST(appui, a_crumb_click_still_navigates) {
     KITE_EXPECT_EQ(f.tab()->path, std::string("C:\\"));
 }
 
-// The prompts that ask about the list stay under it, where they always were.
-KITE_TEST(appui, the_other_prompts_still_come_up_at_the_bottom) {
-    Fixture f;
+// The box an in-place field drew itself into, found by the panel fill under the
+// text. Returns an empty rect if the text is not sitting on one.
+RectF FieldBoxUnder(Fixture& f, const RectF& ink) {
+    const std::vector<test::FakeRenderer::Fill> under =
+        f.renderer.FillsAt(f.app.theme().overlayBg, ink.l + 2.0f, ink.center().y);
+    return under.empty() ? RectF{} : under.back().rect;
+}
+
+// A field spanning the window just above the status bar - which is what the
+// prompts that have no single row to sit on still get.
+bool BarAtBottom(Fixture& f) {
     const Theme& th = f.app.theme();
-
-    f.app.Execute(Cmd::NewFolder);
-    f.Paint();
-
-    bool atBottom = false;
     for (const test::FakeRenderer::Fill& fill : f.renderer.fills) {
         if (!test::FakeRenderer::SameColor(fill.color, th.overlayBg)) continue;
         if (fill.rect.l == 0.0f && fill.rect.r == f.renderer.size.w &&
             std::abs(fill.rect.b - (f.renderer.size.h - th.statusBarHeight)) < 0.01f) {
-            atBottom = true;
+            return true;
         }
     }
-    KITE_EXPECT(atBottom);
+    return false;
+}
+
+// The prompts that ask about the whole list stay under it, where they always
+// were. The ones that name one thing do not: they are drawn on that thing.
+KITE_TEST(appui, only_the_prompts_without_a_place_of_their_own_come_up_at_the_bottom) {
+    Fixture f;
+
+    f.app.Execute(Cmd::FocusFilter);
+    f.Paint();
+    KITE_EXPECT(BarAtBottom(f));
+
+    f.app.OnKey(ParseChord("Escape"));
+    f.app.Execute(Cmd::DeleteToRecycle);
+    f.Paint();
+    KITE_EXPECT_EQ(f.app.prompt().kind, PromptKind::ConfirmDelete);
+    KITE_EXPECT(BarAtBottom(f));
+
+    f.app.OnKey(ParseChord("Escape"));
+    f.app.Execute(Cmd::NewFolder);
+    f.Paint();
+    KITE_EXPECT_FALSE(BarAtBottom(f));
+
+    f.app.OnKey(ParseChord("Escape"));
+    f.app.Execute(Cmd::Rename);
+    f.Paint();
+    KITE_EXPECT_EQ(f.app.prompt().kind, PromptKind::Rename);
+    KITE_EXPECT_FALSE(BarAtBottom(f));
+
+    f.app.OnKey(ParseChord("Escape"));
+    f.app.Execute(Cmd::RenameSession);
+    f.Paint();
+    KITE_EXPECT_FALSE(BarAtBottom(f));
 }
 
 // Ctrl+L opens with the path selected, and the wash is drawn behind the text in
@@ -983,6 +1090,167 @@ KITE_TEST(appui, the_session_bar_wraps_and_the_ninth_session_still_switches) {
     f.Click(chip.center().x, chip.center().y);
     test::PumpUntilSettled(f.app);
     KITE_EXPECT_EQ(f.app.workspace().active, 11);
+}
+
+// --- editing in place -------------------------------------------------------
+//
+// Every field that edits one nameable thing is drawn on that thing. What these
+// check is the placement, because that is the whole point: a field at the bottom
+// of the window works exactly as well and tells nobody what it is renaming.
+
+KITE_TEST(appui, renaming_puts_the_field_on_the_row_being_renamed) {
+    Fixture f;
+    f.Paint();
+
+    const std::string name = f.tab()->CursorEntry()->name;
+    const test::FakeRenderer::Text* onRow = f.TextNamed(name);
+    KITE_EXPECT(onRow != nullptr);
+    const RectF was = onRow->ink;
+
+    f.app.Execute(Cmd::Rename);
+    f.Paint();
+
+    // The field opens holding the same name, so finding that text again finds the
+    // field - and it has to be on the row, not down at the bottom of the window.
+    const test::FakeRenderer::Text* inField = f.TextNamed(name);
+    KITE_EXPECT(inField != nullptr);
+    KITE_EXPECT_NEAR(inField->ink.t, was.t, 3.0f);
+    KITE_EXPECT_NEAR(inField->ink.l, was.l, 4.0f);
+
+    // And it reads as a field rather than as text sitting loose on the row.
+    KITE_EXPECT_FALSE(FieldBoxUnder(f, inField->ink).empty());
+}
+
+KITE_TEST(appui, creating_borrows_a_row_below_the_cursor) {
+    Fixture f;
+    f.app.Execute(Cmd::CursorDown);
+    f.app.Execute(Cmd::CursorDown);
+    f.Paint();
+
+    const int cursor = f.tab()->cursor;
+    // One row above the cursor and one below it: the borrowed row goes between
+    // them, so only the lower one is expected to move.
+    const std::string above = f.tab()->EntryAt(cursor - 1)->name;
+    const std::string below = f.tab()->EntryAt(cursor + 1)->name;
+    const float aboveWas = f.TextNamed(above)->ink.t;
+    const float belowWas = f.TextNamed(below)->ink.t;
+    const size_t dirsWas = f.files.dirs.size();
+
+    f.app.Execute(Cmd::NewFolder);
+    f.Paint();
+
+    KITE_EXPECT_NEAR(f.TextNamed(above)->ink.t, aboveWas, 0.01f);
+    KITE_EXPECT_NEAR(f.TextNamed(below)->ink.t, belowWas + f.app.theme().rowHeight, 0.01f);
+
+    // Nothing has been created yet - the row is on loan until Enter.
+    KITE_EXPECT_EQ(f.files.dirs.size(), dirsWas);
+
+    // The gap that opened up is a field, and it is empty: an empty box on a
+    // borrowed row is what says "type a name here".
+    const RectF gap = { f.pane()->listArea.l + 40.0f, belowWas + 4.0f,
+                        f.pane()->listArea.l + 60.0f, belowWas + 12.0f };
+    KITE_EXPECT_FALSE(FieldBoxUnder(f, gap).empty());
+    KITE_EXPECT(f.app.prompt().text.empty());
+}
+
+KITE_TEST(appui, the_session_name_is_edited_inside_its_chip) {
+    Fixture f;
+    f.Paint();
+
+    const Theme& th = f.app.theme();
+    const std::string name = f.app.workspace().activeSession()->name;
+
+    f.app.Execute(Cmd::RenameSession);
+    f.Paint();
+
+    const test::FakeRenderer::Text* inField = f.TextNamed(name);
+    KITE_EXPECT(inField != nullptr);
+    // Inside the bar at the top, which is the only place the name it edits is
+    // ever written.
+    KITE_EXPECT(inField->ink.b <= th.sessionBarHeight + 0.01f);
+
+    const RectF box = FieldBoxUnder(f, inField->ink);
+    KITE_EXPECT_FALSE(box.empty());
+
+    // The chip is sized to what is in the field, not to the name on file: a chip
+    // that kept its old width would clip the very text being typed into it.
+    for (char c : std::string("XXXXXXXXXX")) f.app.OnChar(static_cast<uint32_t>(c));
+    f.Paint();
+    const test::FakeRenderer::Text* grown = f.TextNamed(name + "XXXXXXXXXX");
+    KITE_EXPECT(grown != nullptr);
+    KITE_EXPECT(FieldBoxUnder(f, grown->ink).w() > box.w());
+}
+
+KITE_TEST(appui, a_press_outside_an_in_place_field_folds_it_and_one_inside_does_not) {
+    Fixture f;
+    f.Paint();
+
+    const int cursor = f.tab()->cursor;
+    const std::string name = f.tab()->CursorEntry()->name;
+    f.app.Execute(Cmd::Rename);
+    f.Paint();
+    const RectF box = FieldBoxUnder(f, f.TextNamed(name)->ink);
+    KITE_EXPECT_FALSE(box.empty());
+
+    // Inside: the press is spent on the field. In particular it must not move the
+    // cursor, because the cursor is what picks the file being renamed.
+    f.Click(box.center().x, box.center().y);
+    test::PumpUntilSettled(f.app);
+    KITE_EXPECT_EQ(f.app.prompt().kind, PromptKind::Rename);
+    KITE_EXPECT_EQ(f.tab()->cursor, cursor);
+
+    // Outside: folded, and nothing renamed on the way out - a mis-click is not a
+    // yes. The click still does what it was going to do.
+    f.Paint();
+    const float otherRow = box.t + f.app.theme().rowHeight * 2.0f;
+    f.Click(box.center().x, otherRow);
+    test::PumpUntilSettled(f.app);
+    KITE_EXPECT_EQ(f.app.prompt().kind, PromptKind::None);
+    KITE_EXPECT_NE(f.tab()->cursor, cursor);
+    KITE_EXPECT_EQ(f.files.dirs.count("C:\\home\\alpha"), size_t{ 1 });
+}
+
+KITE_TEST(appui, double_clicking_a_session_chip_renames_the_session_it_names) {
+    Fixture f;
+    f.app.Execute(Cmd::NewSession);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    const Theme& th = f.app.theme();
+    KITE_EXPECT_EQ(f.app.workspace().sessions.size(), size_t{ 2 });
+    KITE_EXPECT_EQ(f.app.workspace().active, 1);
+
+    // The chip wearing the active fill is the second session's, which is how the
+    // test finds one without repeating the bar's layout arithmetic. Its box does
+    // not move when the selection does: the labels are unchanged.
+    const float barBottom = f.app.workspace().activeSession()->root->rect.t;
+    RectF chip{};
+    for (const test::FakeRenderer::Fill& fill : f.renderer.fills) {
+        if (fill.rect.b > barBottom) continue;  // the same grey is used in the list
+        if (fill.rect.h() < 4.0f) continue;     // and by the hairline under the bar
+        if (test::FakeRenderer::SameColor(fill.color, th.sessionActiveBg)) chip = fill.rect;
+    }
+    KITE_EXPECT_FALSE(chip.empty());
+
+    f.app.Execute(Cmd::Session1);
+    KITE_EXPECT_EQ(f.app.workspace().active, 0);
+    f.Paint();
+
+    // One click still only switches. Opening a text field every time a session is
+    // picked would put an edit under the pointer nobody asked for.
+    f.Click(chip.center().x, chip.center().y);
+    test::PumpUntilSettled(f.app);
+    KITE_EXPECT_EQ(f.app.workspace().active, 1);
+    KITE_EXPECT_FALSE(f.app.prompt().active());
+
+    // The second click renames, and it is the chip that was hit - the first click
+    // of the pair is what made that session the active one.
+    f.app.Execute(Cmd::Session1);
+    f.DoubleClick(chip.center().x, chip.center().y);
+    test::PumpUntilSettled(f.app);
+    KITE_EXPECT_EQ(f.app.workspace().active, 1);
+    KITE_EXPECT_EQ(f.app.prompt().kind, PromptKind::SessionName);
+    KITE_EXPECT_EQ(f.app.prompt().text, f.app.workspace().sessions[1]->name);
 }
 
 // --- the vertical tab bar ---------------------------------------------------
