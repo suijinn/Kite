@@ -2811,7 +2811,10 @@ void App::Execute(Cmd cmd) {
             }
             break;
         case Cmd::OpenTerminal:
-            if (tab) shell_.OpenTerminal(tab->path);
+            // Silence here reads as a dead key: nothing on screen moves either
+            // way, so a virtual folder - or a machine with no console at all -
+            // has to say so.
+            if (tab && !shell_.OpenTerminal(tab->path)) ReportFailure("ui.terminal_failed", {});
             break;
         case Cmd::ConnectNetwork: {
             if (!tab) break;

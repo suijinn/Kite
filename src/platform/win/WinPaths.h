@@ -34,4 +34,11 @@ std::wstring ModuleDirectory();
 ///       ここは UTF-16 へ変換するだけ
 std::wstring ToExtendedPath(std::string_view utf8);
 
+/// @brief コマンドライン引数 1 つを、`CommandLineToArgvW` が元どおりに分解できる形で括る。
+/// @param[in] arg 括る引数（UTF-16）
+/// @return 前後を `"` で囲んだ文字列。閉じ引用符の直前のバックスラッシュだけ倍にする
+/// @note フォルダのパスは `C:\\` のように区切りで終わることがあり、そのまま `"` で
+///       閉じると引用符自身がエスケープされて残り全部が 1 つの引数になる
+std::wstring QuoteArgument(std::wstring_view arg);
+
 }  // namespace kite::win

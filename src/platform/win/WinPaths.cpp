@@ -33,4 +33,23 @@ std::wstring ModuleDirectory() {
 
 std::wstring ToExtendedPath(std::string_view utf8) { return ToWide(path::ToExtended(utf8)); }
 
+std::wstring QuoteArgument(std::wstring_view arg) {
+    std::wstring out = L"\"";
+    size_t backslashes = 0;
+    for (const wchar_t c : arg) {
+        if (c == L'\\') {
+            ++backslashes;
+            continue;
+        }
+        // A run of backslashes is literal unless a quote follows, where it is
+        // halved - so double it there, and escape the quote itself as well.
+        out.append(c == L'"' ? backslashes * 2 + 1 : backslashes, L'\\');
+        backslashes = 0;
+        out.push_back(c);
+    }
+    out.append(backslashes * 2, L'\\');
+    out.push_back(L'"');
+    return out;
+}
+
 }  // namespace kite::win

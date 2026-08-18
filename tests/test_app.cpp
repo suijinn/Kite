@@ -773,6 +773,29 @@ KITE_TEST(app, signing_in_aims_at_the_share_not_the_folder_inside_it) {
     KITE_EXPECT_EQ(h.shell.connectCalls.back(), std::string("\\\\srv\\pub"));
 }
 
+KITE_TEST(app, a_terminal_opens_in_the_folder_on_screen) {
+    Harness h;
+    h.app.Execute(Cmd::CursorTop);
+    h.app.Execute(Cmd::CursorDown);  // alpha
+    h.app.Execute(Cmd::OpenSelected);
+    h.Settle();
+
+    // The cursor row is irrelevant: the command is "open a terminal here", and
+    // here is the folder being listed.
+    h.app.Execute(Cmd::OpenTerminal);
+    KITE_EXPECT_EQ(h.shell.terminalDirs.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.shell.terminalDirs.back(), std::string("C:\\home\\alpha"));
+}
+
+// Nothing on screen moves when a terminal fails to open, so silence is
+// indistinguishable from a key that does not work.
+KITE_TEST(app, a_terminal_that_will_not_open_says_so) {
+    Harness h;
+    h.shell.terminalSucceeds = false;
+    h.app.Execute(Cmd::OpenTerminal);
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.terminal_failed"));
+}
+
 KITE_TEST(app, signing_in_has_nothing_to_offer_a_local_folder) {
     Harness h;
     h.app.Execute(Cmd::ConnectNetwork);

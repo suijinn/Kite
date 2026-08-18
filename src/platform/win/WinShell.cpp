@@ -8,6 +8,7 @@
 #include "core/base/PathUtil.h"
 #include "core/fs/VirtualPath.h"
 #include "platform/win/VirtualNames.h"
+#include "platform/win/WinPaths.h"
 #include "platform/win/WinUtf.h"
 
 namespace kite::win {
@@ -163,10 +164,23 @@ bool WinShell::RevealInExplorer(const std::string& path) {
 }
 
 bool WinShell::OpenTerminal(const std::string& dir) {
+    // A shell namespace listing is not a place a process can run in, and the
+    // "virtual:" spelling means nothing outside Kite.
+    if (dir.empty() || vfs::IsVirtual(dir)) return false;
+
     const std::wstring w = ToWide(dir);
     // Windows Terminal if it is installed, otherwise the classic console.
-    HINSTANCE result = ::ShellExecuteW(hwnd_, nullptr, L"wt.exe", nullptr, w.c_str(), SW_SHOWNORMAL);
+    //
+    // wt.exe ignores lpDirectory: every tab starts in its profile's own
+    // startingDirectory, which ships as %USERPROFILE% - so the folder has to be
+    // named on the command line, or "open terminal here" lands at home. Quoting
+    // goes through QuoteArgument because a drive root ends in a backslash, and
+    // "C:\" would otherwise escape its own closing quote.
+    const std::wstring args = L"-d " + QuoteArgument(w);
+    HINSTANCE result =
+        ::ShellExecuteW(hwnd_, nullptr, L"wt.exe", args.c_str(), w.c_str(), SW_SHOWNORMAL);
     if (reinterpret_cast<INT_PTR>(result) > 32) return true;
+    // cmd.exe has no such setting: it does start where it is told.
     result = ::ShellExecuteW(hwnd_, nullptr, L"cmd.exe", nullptr, w.c_str(), SW_SHOWNORMAL);
     return reinterpret_cast<INT_PTR>(result) > 32;
 }

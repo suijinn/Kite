@@ -295,7 +295,16 @@ public:
     bool OpenWith(const std::string&) override { return true; }
     bool ShowProperties(const std::string&) override { return true; }
     bool RevealInExplorer(const std::string&) override { return true; }
-    bool OpenTerminal(const std::string&) override { return true; }
+    // Which folder a terminal was asked for is the whole point of the command,
+    // so it is recorded; the switch lets a test see what a machine with no
+    // console does.
+    std::vector<std::string> terminalDirs;
+    bool terminalSucceeds = true;
+
+    bool OpenTerminal(const std::string& dir) override {
+        terminalDirs.push_back(dir);
+        return terminalSucceeds;
+    }
 
     bool SetClipboardText(const std::string& utf8) override {
         clipboardText.push_back(utf8);
