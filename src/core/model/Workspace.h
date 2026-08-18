@@ -371,6 +371,14 @@ public:
     /// @param[in] index アクティブにするセッションの添字。範囲外はクランプする
     /// @note 切り替え時、離れるセッションの非アクティブタブは一覧を解放する
     void ActivateSession(int index);
+
+    /// @brief セッションの並び順を変える。
+    /// @param[in] fromIndex 動かすセッションの添字
+    /// @param[in] toIndex 移動先の添字。範囲外はクランプする
+    /// @return 並べ替えたら true。添字が不正、または移動先が同じなら false
+    /// @note アクティブなセッションが変わらないよう active も追随させる
+    ///       （Pane::ReorderTab と同じ約束）
+    bool ReorderSession(int fromIndex, int toIndex);
 };
 
 }  // namespace kite

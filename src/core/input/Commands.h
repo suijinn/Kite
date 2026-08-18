@@ -114,6 +114,8 @@ enum class CmdGroup : uint8_t {
     X(RenameSession,      "session.rename",          "cmd.rename_session",     Session)          \
     X(NextSession,        "session.next",            "cmd.next_session",       Session)          \
     X(PrevSession,        "session.prev",            "cmd.prev_session",       Session)          \
+    X(MoveSessionLeft,    "session.move_left",       "cmd.move_session_left",  Session)          \
+    X(MoveSessionRight,   "session.move_right",      "cmd.move_session_right", Session)          \
     X(SaveWorkspace,      "session.save",            "cmd.save_workspace",     Session)          \
     X(Session1,           "session.goto_1",          "cmd.goto_session_1",     Session)          \
     X(Session2,           "session.goto_2",          "cmd.goto_session_2",     Session)          \
