@@ -20,6 +20,36 @@ DWORD_PTR GuardedGetFileInfo(const wchar_t* path, SHFILEINFOW* info, UINT flags)
     }
 }
 
+DWORD_PTR GuardedGetPidlInfo(const void* pidl, SHFILEINFOW* info, UINT flags) {
+    __try {
+        return ::SHGetFileInfoW(reinterpret_cast<LPCWSTR>(pidl), 0, info, sizeof(*info),
+                                flags | SHGFI_PIDL);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+// True for the names the shell parses but the filesystem does not: "::{CLSID}"
+// and the "shell:Name" monikers. SHGetFileInfo takes a path, so these have to
+// go through a PIDL instead - without this, "PC" and the Recycle Bin draw with
+// Kite's fallback glyph while every row inside them gets a real icon.
+bool IsShellName(const std::string& path) {
+    if (path.size() >= 2 && path[0] == ':' && path[1] == ':') return true;
+    return path.compare(0, 6, "shell:") == 0;
+}
+
+// Fills `info` for a name only the shell can resolve. Returns false if it will
+// not resolve, which is the same answer a missing file gives.
+bool ShellNameInfo(const std::wstring& wide, SHFILEINFOW* info, UINT flags) {
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    if (FAILED(::SHParseDisplayName(wide.c_str(), nullptr, &pidl, 0, nullptr)) || !pidl) {
+        return false;
+    }
+    const DWORD_PTR ok = GuardedGetPidlInfo(pidl, info, flags);
+    ::CoTaskMemFree(pidl);
+    return ok != 0;
+}
+
 /// A 32-bit top-down DIB to draw an icon into, released on scope exit.
 class IconSurface {
 public:
@@ -131,14 +161,20 @@ bool LoadShellIcon(const std::string& path, uint32_t pixelSize, IconBitmap& out)
     const bool wantSmall = pixelSize <= 16;
     UINT flags = SHGFI_ICON | SHGFI_ADDOVERLAYS | (wantSmall ? SHGFI_SMALLICON : SHGFI_LARGEICON);
 
+    const bool shellName = IsShellName(path);
+    auto ask = [&](SHFILEINFOW* info, UINT with) {
+        return shellName ? ShellNameInfo(wide, info, with)
+                         : GuardedGetFileInfo(wide.c_str(), info, with) != 0;
+    };
+
     SHFILEINFOW info{};
-    if (!GuardedGetFileInfo(wide.c_str(), &info, flags)) {
+    if (!ask(&info, flags)) {
         // A handler that faulted, or a path the shell will not bind to. Retry
         // once without overlays: a plain icon beats an empty cell, and this is
         // also the path a badly behaved overlay handler ends up on.
         info = SHFILEINFOW{};
         flags &= ~static_cast<UINT>(SHGFI_ADDOVERLAYS);
-        if (!GuardedGetFileInfo(wide.c_str(), &info, flags)) return false;
+        if (!ask(&info, flags)) return false;
     }
     if (!info.hIcon) return false;
 

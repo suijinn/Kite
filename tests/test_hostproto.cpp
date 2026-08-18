@@ -384,3 +384,144 @@ KITE_TEST(hostproto, a_path_holding_arbitrary_bytes_survives) {
     KITE_EXPECT_EQ(got.paths[0], std::string("C:\\a\0b", 6));
     KITE_EXPECT_EQ(got.paths[1], std::string(1, '\xFF'));
 }
+
+KITE_TEST(hostproto, a_folder_listing_round_trips) {
+    FolderResponse sent;
+    sent.status = FolderStatus::Ok;
+    sent.title = "PC";
+
+    FolderEntry drive;
+    drive.name = "Windows (C:)";
+    drive.parsing = "C:\\";
+    drive.attrs = static_cast<uint32_t>(FolderAttr::Directory) |
+                  static_cast<uint32_t>(FolderAttr::FileSystem);
+    sent.entries.push_back(drive);
+
+    FolderEntry ext;
+    ext.name = "iCloud";
+    ext.parsing = "::{AAA}\\::{BBB}";
+    ext.size = 1234;
+    ext.mtime = -5;  // before 1970, and the sign has to survive
+    ext.attrs = static_cast<uint32_t>(FolderAttr::Directory);
+    sent.entries.push_back(ext);
+
+    const std::vector<uint8_t> frame = EncodeFolderResponse(sent);
+    KITE_EXPECT_FALSE(frame.empty());
+
+    FolderResponse got;
+    KITE_EXPECT(DecodeFolderResponse(Body(frame), BodySize(frame), got));
+    KITE_EXPECT(got.status == FolderStatus::Ok);
+    KITE_EXPECT_EQ(got.title, std::string("PC"));
+    KITE_EXPECT_EQ(got.entries.size(), size_t{ 2 });
+    KITE_EXPECT_EQ(got.entries[0].parsing, std::string("C:\\"));
+    KITE_EXPECT_EQ(got.entries[1].mtime, int64_t{ -5 });
+    KITE_EXPECT_EQ(got.entries[1].size, uint64_t{ 1234 });
+    KITE_EXPECT_EQ(got.entries[1].attrs, static_cast<uint32_t>(FolderAttr::Directory));
+}
+
+KITE_TEST(hostproto, a_folder_request_round_trips_and_is_told_apart) {
+    FolderRequest sent;
+    sent.path = "shell:RecycleBinFolder";
+    const std::vector<uint8_t> frame = EncodeFolderRequest(sent);
+
+    MessageKind kind = MessageKind::Menu;
+    KITE_EXPECT(DecodeKind(Body(frame), BodySize(frame), kind));
+    KITE_EXPECT(kind == MessageKind::Folder);
+
+    FolderRequest got;
+    KITE_EXPECT(DecodeFolderRequest(Body(frame), BodySize(frame), got));
+    KITE_EXPECT_EQ(got.path, std::string("shell:RecycleBinFolder"));
+
+    // The other decoders must not accept it: a frame read as the wrong kind is
+    // how two versions of the format quietly disagree.
+    Request menu;
+    KITE_EXPECT_FALSE(DecodeRequest(Body(frame), BodySize(frame), menu));
+    IconRequest icons;
+    KITE_EXPECT_FALSE(DecodeIconRequest(Body(frame), BodySize(frame), icons));
+}
+
+KITE_TEST(hostproto, a_folder_response_refuses_an_impossible_count) {
+    // The count comes from another process, and reserve() would believe it.
+    std::vector<uint8_t> body;
+    detail::PutU32(body, static_cast<uint32_t>(MessageKind::Folder));
+    detail::PutU32(body, static_cast<uint32_t>(FolderStatus::Ok));
+    detail::PutString(body, "");
+    detail::PutString(body, "");
+    detail::PutU32(body, kMaxFolderEntries + 1);
+
+    FolderResponse got;
+    KITE_EXPECT_FALSE(DecodeFolderResponse(body.data(), body.size(), got));
+
+    // A status nobody defined is refused too.
+    std::vector<uint8_t> bad;
+    detail::PutU32(bad, static_cast<uint32_t>(MessageKind::Folder));
+    detail::PutU32(bad, 99);
+    KITE_EXPECT_FALSE(DecodeFolderResponse(bad.data(), bad.size(), got));
+}
+
+KITE_TEST(hostproto, a_menu_request_carries_the_folder_its_items_came_from) {
+    Request sent;
+    sent.container = "::{645FF040-5081-101B-9F08-00AA002F954E}";
+    sent.paths = { "C:\\$Recycle.Bin\\S-1-5-21\\$R0L38Q5.ini" };
+    sent.dark = true;
+
+    const std::vector<uint8_t> frame = EncodeRequest(sent);
+    Request got;
+    KITE_EXPECT(DecodeRequest(Body(frame), BodySize(frame), got));
+    KITE_EXPECT_EQ(got.container, sent.container);
+    KITE_EXPECT_EQ(got.paths.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(got.paths[0], sent.paths[0]);
+    KITE_EXPECT(got.dark);
+
+    // An empty container is the ordinary case and has to survive as empty: it
+    // is what tells the host to parse the paths instead of enumerating.
+    Request plain;
+    plain.paths = { "C:\\a.txt" };
+    const std::vector<uint8_t> plainFrame = EncodeRequest(plain);
+    Request plainGot;
+    KITE_EXPECT(DecodeRequest(Body(plainFrame), BodySize(plainFrame), plainGot));
+    KITE_EXPECT(plainGot.container.empty());
+}
+
+KITE_TEST(hostproto, a_verb_request_round_trips_and_is_told_apart) {
+    VerbRequest sent;
+    sent.container = "::{645FF040-5081-101B-9F08-00AA002F954E}";
+    sent.paths = { "C:\\$Recycle.Bin\\$R1.ini", "C:\\$Recycle.Bin\\$R2.ini" };
+    sent.verb = "undelete";
+    sent.ownerWindow = 0x123456789ABCDEFull;
+
+    const std::vector<uint8_t> frame = EncodeVerbRequest(sent);
+    MessageKind kind = MessageKind::Menu;
+    KITE_EXPECT(DecodeKind(Body(frame), BodySize(frame), kind));
+    KITE_EXPECT(kind == MessageKind::Verb);
+
+    VerbRequest got;
+    KITE_EXPECT(DecodeVerbRequest(Body(frame), BodySize(frame), got));
+    KITE_EXPECT_EQ(got.verb, std::string("undelete"));
+    KITE_EXPECT_EQ(got.container, sent.container);
+    KITE_EXPECT_EQ(got.paths.size(), size_t{ 2 });
+    KITE_EXPECT_EQ(got.ownerWindow, sent.ownerWindow);
+
+    // Reading a frame as the wrong kind is how two versions quietly disagree.
+    Request menu;
+    KITE_EXPECT_FALSE(DecodeRequest(Body(frame), BodySize(frame), menu));
+    FolderRequest folder;
+    KITE_EXPECT_FALSE(DecodeFolderRequest(Body(frame), BodySize(frame), folder));
+}
+
+KITE_TEST(hostproto, a_verb_response_round_trips) {
+    VerbResponse sent;
+    sent.ok = true;
+    sent.applied = 3;
+    const std::vector<uint8_t> frame = EncodeVerbResponse(sent);
+
+    VerbResponse got;
+    KITE_EXPECT(DecodeVerbResponse(Body(frame), BodySize(frame), got));
+    KITE_EXPECT(got.ok);
+    KITE_EXPECT_EQ(got.applied, uint32_t{ 3 });
+
+    VerbResponse failed;
+    const std::vector<uint8_t> failedFrame = EncodeVerbResponse(VerbResponse{});
+    KITE_EXPECT(DecodeVerbResponse(Body(failedFrame), BodySize(failedFrame), failed));
+    KITE_EXPECT_FALSE(failed.ok);
+}

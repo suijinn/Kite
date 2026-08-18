@@ -7,6 +7,7 @@
 #include "core/base/Platform.h"
 #include "core/base/Utf8.h"
 #include "core/base/Version.h"
+#include "core/fs/VirtualPath.h"
 
 namespace kite {
 namespace {
@@ -270,6 +271,13 @@ uint32_t App::IconFor(const std::string& path) {
 void App::RefreshRoots() {
     roots_ = fs_.Roots();
     quickAccess_ = fs_.QuickAccess();
+    // The platform names these places in the OS's language; Kite's own may be a
+    // different one. Its answer is what is on screen everywhere else, so it is
+    // the one that goes here too - and it follows the language toggle, which
+    // the shell's name would not.
+    for (fs::Root& r : quickAccess_) {
+        if (const char* key = vfs::LabelKey(r.path)) r.label = strings_.Get(key);
+    }
     // Both lists come straight from the OS, in the OS's order. Any dragging the
     // user did lives in the saved order and has to be laid back over them here -
     // this runs again whenever the drive list changes, not just at start-up.
@@ -764,6 +772,9 @@ void App::SyncWatches() {
         for (Pane* p : s->Panes()) {
             Tab* t = p->activeTab();
             if (!t) continue;
+            // Nothing to hang a notification on: the shell namespace has no
+            // directory handle. F5 is how these are refreshed.
+            if (vfs::IsVirtual(t->path)) continue;
             if (t->watchId == 0) t->watchId = NextWatchId();
             desired[t->watchId] = t->path;
 
@@ -861,7 +872,7 @@ void App::UpdateTitle() {
     Session* s = workspace_.activeSession();
     // The build ends the caption rather than starting it: it is what someone
     // filing a report needs, and the folder is what everyone else reads.
-    std::string title = t->path + "  \xE2\x80\x94  " + (s ? s->name : std::string("Kite")) +
+    std::string title = DisplayPath(*t) + "  \xE2\x80\x94  " + (s ? s->name : std::string("Kite")) +
                         "  \xE2\x80\x94  Kite " + version::kDisplay;
     // Only touch the caption when it actually changed: SetWindowText on every
     // cursor keystroke makes the taskbar entry flicker.
@@ -959,7 +970,7 @@ void App::OpenForwardedPaths(const std::vector<std::string>& paths) {
 void App::NavigateToParent(bool newTab) {
     Tab* t = workspace_.focusedTab();
     if (!t) return;
-    const std::string parent = path::Parent(t->path);
+    const std::string parent = vfs::ParentOf(t->path);
     if (parent.empty()) return;
     const std::string leaving = path::FileName(t->path);
     OpenPath(parent, newTab);
@@ -978,7 +989,7 @@ void App::ActivateEntry(int visibleIndex, bool newTab) {
     if (!entry) return;
 
     const fs::Entry& e = *entry;
-    const std::string full = path::Join(t->path, e.name);
+    const std::string full = fs::EntryPath(t->path, e);
     if (e.isDir()) {
         OpenPath(full, newTab);
     } else {
@@ -1006,6 +1017,9 @@ void App::RefreshFocused() {
 
 bool App::IsValidDropTarget(const std::vector<std::string>& paths, const std::string& destDir) {
     if (destDir.empty() || paths.empty()) return false;
+    // "PC" and the Recycle Bin are lists, not places: there is no folder under
+    // them for a file to land in.
+    if (vfs::IsVirtual(destDir)) return false;
     const std::string dest = path::Normalize(destDir);
 
     for (const std::string& p : paths) {
@@ -1136,6 +1150,28 @@ void App::SetStatus(const std::string& message) {
     host_.Invalidate();
 }
 
+bool App::ReadOnlyHere() {
+    const Tab* t = workspace_.focusedTab();
+    if (!t || !vfs::IsVirtual(t->path)) return false;
+    // Kite does not write into the shell namespace. "PC" and the Recycle Bin
+    // are not folders - there is nowhere in them to create a name, and the
+    // paths their items carry are not the paths the shell operates on (a
+    // deleted file's is its hidden $R copy, and renaming that would strand it).
+    // The verbs that do work there are on the shell's own context menu.
+    SetStatus(strings_.Get("ui.vfolder_read_only"));
+    return true;
+}
+
+std::string App::DisplayName(const Tab& tab) const {
+    if (const char* key = vfs::LabelKey(tab.path)) return strings_.Get(key);
+    return tab.title();
+}
+
+std::string App::DisplayPath(const Tab& tab) const {
+    if (!vfs::IsVirtual(tab.path)) return tab.path;
+    return DisplayName(tab);
+}
+
 void App::ReportFailure(const char* key, const std::string& detail) {
     std::string message = strings_.Get(key);
     if (!detail.empty()) message += "  (" + detail + ")";
@@ -1181,6 +1217,9 @@ void App::ShowContextMenuAt(int screenX, int screenY, bool extended) {
     // which is a different menu from the one the folder gets as an item.
     std::vector<std::string> paths = t->SelectionPaths();
     if (paths.empty()) {
+        // Still offered inside the Recycle Bin, and worth having there: the
+        // background menu answers for the bin itself, which is where "Empty
+        // Recycle Bin" lives.
         ShowShellMenu({ t->path }, screenX, screenY, extended, true);
         return;
     }
@@ -1203,6 +1242,9 @@ void App::ShowFolderContextMenu(bool extended) {
     // background menu was meant to keep out - "Git clone into this folder" -
     // turned out to follow CMF_EXTENDEDVERBS, not this choice, and is already
     // where Explorer keeps it: behind Shift.
+    //
+    // Inside the Recycle Bin the target here is the bin itself, and its item
+    // menu is the useful one: "Empty Recycle Bin" and Properties.
     ShowShellMenu({ t->path }, x, y, extended, false);
 }
 
@@ -1214,10 +1256,42 @@ void App::ShowBackgroundContextMenu(int screenX, int screenY, bool extended) {
     ShowShellMenu({ t->path }, screenX, screenY, extended, true);
 }
 
+void App::DoRestore() {
+    Tab* t = workspace_.focusedTab();
+    if (!t || t->path != vfs::kRecycleBin) {
+        SetStatus(strings_.Get("ui.restore_not_trash"));
+        return;
+    }
+    const std::vector<std::string> paths = t->SelectionPaths();
+    if (paths.empty()) {
+        SetStatus(strings_.Get("ui.no_selection"));
+        return;
+    }
+    // Not pushed onto the undo stack. The inverse of "restore" is "delete", and
+    // offering Ctrl+Z for that would put a file the user just rescued back in
+    // the bin - through a keystroke they press to undo mistakes.
+    if (!shell_.RestoreFromTrash(paths)) {
+        ReportFailure("ui.restore_failed", {});
+        return;
+    }
+    SetStatus(strings_.Format("ui.restored", { std::to_string(paths.size()) }));
+    RefreshFocused();
+}
+
+// Only a virtual folder names itself here. A real folder's items are found by
+// parsing their own paths, which is both correct and free; handing the shell a
+// container would make it enumerate the folder again for every right-click.
+std::string App::ShellMenuContainer() {
+    const Tab* t = workspace_.focusedTab();
+    if (!t || !vfs::IsVirtual(t->path)) return {};
+    return t->path;
+}
+
 void App::ShowShellMenu(const std::vector<std::string>& paths, int screenX, int screenY,
                         bool extended, bool background) {
     if (paths.empty()) return;
-    if (!shell_.ShowContextMenu(paths, screenX, screenY, extended, background, theme_.dark)) {
+    if (!shell_.ShowContextMenu(ShellMenuContainer(), paths, screenX, screenY, extended,
+                                      background, theme_.dark)) {
         // The menu runs in a separate process; losing it means that process
         // could not be started, or a shell extension took it down. Say so rather
         // than letting a right-click look like it did nothing.
@@ -1303,6 +1377,10 @@ void App::SyncCompletion(bool open) {
 
 void App::RequestCompletion() {
     if (!loader_ || !complete_.wantsListing()) return;
+    // Never from here. Listing a virtual folder starts the shell host, and this
+    // runs on every keystroke - the address bar would spawn that process, and
+    // keep asking it questions, to offer candidates nobody types by hand.
+    if (vfs::IsVirtual(complete_.dir())) return;
     // One request per directory. Typing "C:\\Users\\ab" walks through three
     // prefixes of one folder, and re-listing it for each keystroke would put a
     // network share's latency on every letter.
@@ -1415,11 +1493,17 @@ void App::ApplyPrompt() {
             if (!fs_.Delete(pending, recycle, &err)) {
                 ReportFailure("ui.delete_failed", err);
             } else {
-                // 削除を戻す道はまだ無い（ごみ箱は仮想フォルダの側の話で、
-                // ROADMAP P2-1 と一緒に入る）。だからこそ印を積む ─ 積まずに
-                // 黙っていると、次の Ctrl+Z が削除を飛び越えて、消えたファイルは
-                // そのままにその前の名前変更だけを巻き戻す。
-                undo_.Push({ UndoKind::Delete, {}, {} });
+                // ごみ箱へ入れたなら覚えるのは**消される前のパス**。ごみ箱の中で
+                // 名乗る名前（隠された $R の写し）は誰も見ていないし、それを控える
+                // には削除のたびにごみ箱を引き当て直すことになる ─ 一度も Ctrl+Z を
+                // 押さない人までその代金を払う。
+                //
+                // 完全削除のほうは戻せないので印だけを積む。積まずに黙っていると、
+                // 次の Ctrl+Z がそれを飛び越えて、消えたファイルはそのままに
+                // その前の名前変更だけを巻き戻す。
+                undo_.Push({ recycle ? UndoKind::Delete : UndoKind::Erase,
+                             recycle ? pending : std::vector<std::string>{},
+                             {} });
                 SetStatus(strings_.Get("ui.done"));
             }
             RefreshFocused();
@@ -1909,11 +1993,11 @@ void App::DoUndo() {
         SetStatus(strings_.Get("ui.undo_empty"));
         return;
     }
-    if (next->kind == UndoKind::Delete) {
+    if (next->kind == UndoKind::Erase) {
         // The mark stays put rather than being popped: everything under it was
         // dropped when it went on, so stepping past it would reach nothing, and
         // saying so every time is the only honest answer left.
-        SetStatus(strings_.Get("ui.undo_no_delete"));
+        SetStatus(strings_.Get("ui.undo_no_erase"));
         return;
     }
 
@@ -1996,7 +2080,20 @@ void App::DoUndo() {
             break;
         }
 
-        case UndoKind::Delete:
+        case UndoKind::Delete: {
+            messageKey = "ui.undone_delete";
+            if (action.targets.empty()) break;
+            // Everything is handed over, including paths something else has
+            // since put back: the shell is what knows whether the bin still
+            // holds a matching item, and asking it twice about the same folder
+            // is what looking first would cost.
+            if (!shell_.RestoreDeleted(action.targets)) break;
+            for (const std::string& p : action.targets) note(path::Parent(p));
+            acted = true;
+            break;
+        }
+
+        case UndoKind::Erase:
             break;  // handled above
     }
 
@@ -2380,7 +2477,7 @@ void App::Execute(Cmd cmd) {
             std::vector<Pane*> panes = session->Panes();
             if (panes.size() < 2) break;
             const fs::Entry* e = tab->CursorEntry();
-            const std::string target = (e && e->isDir()) ? path::Join(tab->path, e->name)
+            const std::string target = (e && e->isDir()) ? fs::EntryPath(tab->path, *e)
                                                          : tab->path;
             Pane* other = nullptr;
             for (size_t i = 0; i < panes.size(); ++i) {
@@ -2587,13 +2684,15 @@ void App::Execute(Cmd cmd) {
 
         // --- file operations ---------------------------------------------------
         case Cmd::NewFolder:
+            if (ReadOnlyHere()) break;
             BeginPrompt(PromptKind::NewFolder, "ui.new_folder_label", {});
             break;
         case Cmd::NewFile:
+            if (ReadOnlyHere()) break;
             BeginPrompt(PromptKind::NewFile, "ui.new_file_label", {});
             break;
         case Cmd::Rename: {
-            if (!tab) break;
+            if (!tab || ReadOnlyHere()) break;
             const fs::Entry* e = tab->CursorEntry();
             if (!e) break;
             BeginPrompt(PromptKind::Rename, "ui.rename_label", e->name);
@@ -2615,11 +2714,19 @@ void App::Execute(Cmd cmd) {
             }
             break;
         }
-        case Cmd::DeleteToRecycle: DoDelete(false); break;
-        case Cmd::DeletePermanent: DoDelete(true); break;
+        case Cmd::DeleteToRecycle:
+            if (!ReadOnlyHere()) DoDelete(false);
+            break;
+        case Cmd::Restore:
+            DoRestore();
+            break;
+        case Cmd::DeletePermanent:
+            if (!ReadOnlyHere()) DoDelete(true);
+            break;
         case Cmd::Copy:
         case Cmd::Cut: {
             if (!tab) break;
+            if (cmd == Cmd::Cut && ReadOnlyHere()) break;
             std::vector<std::string> paths = tab->SelectionPaths();
             if (paths.empty()) {
                 SetStatus(strings_.Get("ui.no_selection"));
@@ -2637,7 +2744,7 @@ void App::Execute(Cmd cmd) {
             break;
         }
         case Cmd::Paste:
-            DoPaste();
+            if (!ReadOnlyHere()) DoPaste();
             break;
         case Cmd::Undo:
             DoUndo();

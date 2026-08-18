@@ -154,6 +154,7 @@ enum class CmdGroup : uint8_t {
     X(NewFile,            "file.new_file",           "cmd.new_file",           File)             \
     X(Rename,             "file.rename",             "cmd.rename",             File)             \
     X(DeleteToRecycle,    "file.delete",             "cmd.delete",             File)             \
+    X(Restore,            "file.restore",            "cmd.restore",            File)             \
     X(DeletePermanent,    "file.delete_permanent",   "cmd.delete_permanent",   File)             \
     X(Copy,               "file.copy",               "cmd.copy",               File)             \
     X(Cut,                "file.cut",                "cmd.cut",                File)             \

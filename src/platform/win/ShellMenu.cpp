@@ -3,6 +3,7 @@
 #include <shellapi.h>  // CMIC_MASK_UNICODE resolves to SEE_MASK_UNICODE, declared here
 #include <shlobj.h>
 
+#include "platform/win/ShellFolder.h"
 #include "platform/win/WinUtf.h"
 
 namespace kite::win {
@@ -144,6 +145,59 @@ PIDLIST_ABSOLUTE ParsePath(const std::string& path) {
     return pidl;
 }
 
+/// Turns the request's paths into absolute PIDLs.
+///
+/// With no container, each path is parsed on its own - which is right for every
+/// real file and folder. With one, the items are looked up inside it instead;
+/// see Request::container for why the Recycle Bin cannot use the first way.
+std::vector<PIDLIST_ABSOLUTE> ResolveTargets(const std::string& container,
+                                             const std::vector<std::string>& paths) {
+    if (!container.empty()) return ResolveItemsInFolder(container, paths);
+
+    std::vector<PIDLIST_ABSOLUTE> absolute;
+    absolute.reserve(paths.size());
+    for (const std::string& p : paths) {
+        if (PIDLIST_ABSOLUTE pidl = ParsePath(p)) absolute.push_back(pidl);
+    }
+    return absolute;
+}
+
+/// Binds the IContextMenu for a set of items that share a parent.
+///
+/// The parent is handed back too, because it owns the menu: releasing it while
+/// the menu is still up is how a shell extension gets torn out from under its
+/// own popup.
+IContextMenu* ItemContextMenu(const std::vector<PIDLIST_ABSOLUTE>& absolute, HWND dialogOwner,
+                              IShellFolder** parentOut) {
+    PCUITEMID_CHILD firstChild = nullptr;
+    IShellFolder* parent = nullptr;
+    if (FAILED(::SHBindToParent(absolute[0], IID_IShellFolder,
+                                reinterpret_cast<void**>(&parent), &firstChild)) ||
+        !parent) {
+        return nullptr;
+    }
+
+    // All selected items share a folder, so their last IDs are valid children
+    // of the parent we just bound.
+    std::vector<PCUITEMID_CHILD> children;
+    children.reserve(absolute.size());
+    for (PIDLIST_ABSOLUTE pidl : absolute) children.push_back(::ILFindLastID(pidl));
+
+    // Handlers are instantiated here, not in QueryContextMenu, so this call is
+    // already third-party code and needs the guard.
+    IContextMenu* menu = nullptr;
+    const HRESULT hr =
+        GuardedGetUIObjectOf(parent, dialogOwner, static_cast<UINT>(children.size()),
+                             reinterpret_cast<PCUITEMID_CHILD_ARRAY>(children.data()),
+                             reinterpret_cast<void**>(&menu));
+    if (FAILED(hr) || !menu) {
+        parent->Release();
+        return nullptr;
+    }
+    *parentOut = parent;
+    return menu;
+}
+
 }  // namespace
 
 bool SetShellMenuDarkMode(HWND menuOwner, bool dark) {
@@ -198,6 +252,7 @@ bool ForwardContextMenuMessage(UINT message, WPARAM wparam, LPARAM lparam, LRESU
 }
 
 shellhost::Result ShowShellContextMenu(HWND menuOwner, HWND dialogOwner,
+                                       const std::string& container,
                                        const std::vector<std::string>& paths, int screenX,
                                        int screenY, bool extended, bool background) {
     if (paths.empty() || !menuOwner) return shellhost::Result::Failed;
@@ -212,11 +267,7 @@ shellhost::Result ShowShellContextMenu(HWND menuOwner, HWND dialogOwner,
         screenY = pt.y;
     }
 
-    std::vector<PIDLIST_ABSOLUTE> absolute;
-    absolute.reserve(paths.size());
-    for (const std::string& p : paths) {
-        if (PIDLIST_ABSOLUTE pidl = ParsePath(p)) absolute.push_back(pidl);
-    }
+    std::vector<PIDLIST_ABSOLUTE> absolute = ResolveTargets(container, paths);
     if (absolute.empty()) return shellhost::Result::Failed;
 
     // Two different shell objects answer to "the menu for this folder", and the
@@ -243,22 +294,8 @@ shellhost::Result ShowShellContextMenu(HWND menuOwner, HWND dialogOwner,
             folder->Release();
         }
     } else {
-        PCUITEMID_CHILD firstChild = nullptr;
-        if (SUCCEEDED(::SHBindToParent(absolute[0], IID_IShellFolder,
-                                       reinterpret_cast<void**>(&parent), &firstChild)) &&
-            parent) {
-            // All selected items share a folder, so their last IDs are valid
-            // children of the parent we just bound.
-            std::vector<PCUITEMID_CHILD> children;
-            children.reserve(absolute.size());
-            for (PIDLIST_ABSOLUTE pidl : absolute) children.push_back(::ILFindLastID(pidl));
-
-            // Handlers are instantiated here, not in QueryContextMenu, so this
-            // call is already third-party code and needs the guard.
-            hr = GuardedGetUIObjectOf(parent, dialogOwner, static_cast<UINT>(children.size()),
-                                      reinterpret_cast<PCUITEMID_CHILD_ARRAY>(children.data()),
-                                      reinterpret_cast<void**>(&menu));
-        }
+        menu = ItemContextMenu(absolute, dialogOwner, &parent);
+        hr = menu ? S_OK : E_FAIL;
     }
 
     if (SUCCEEDED(hr) && menu) {
@@ -325,6 +362,50 @@ shellhost::Result ShowShellContextMenu(HWND menuOwner, HWND dialogOwner,
     if (parent) parent->Release();
     for (PIDLIST_ABSOLUTE pidl : absolute) ::CoTaskMemFree(pidl);
     return result;
+}
+
+shellhost::VerbResponse InvokeShellVerb(HWND dialogOwner, const std::string& container,
+                                        const std::vector<std::string>& paths,
+                                        const std::string& verb, bool byOriginalPath) {
+    shellhost::VerbResponse response;
+    if (paths.empty() || verb.empty()) return response;
+
+    std::vector<PIDLIST_ABSOLUTE> absolute =
+        byOriginalPath ? ResolveTrashItemsByOrigin(container, paths)
+                       : ResolveTargets(container, paths);
+    if (absolute.empty()) return response;
+
+    IShellFolder* parent = nullptr;
+    IContextMenu* menu = ItemContextMenu(absolute, dialogOwner, &parent);
+    if (menu) {
+        // The verb has to be queried for before it can be invoked: the handler
+        // populates its verb table in QueryContextMenu, and a menu that was
+        // never asked to build itself answers to nothing. The HMENU is thrown
+        // away - nothing is shown - but the call is what makes "undelete" real.
+        HMENU hmenu = ::CreatePopupMenu();
+        if (SUCCEEDED(GuardedQueryContextMenu(menu, hmenu, CMF_NORMAL))) {
+            CMINVOKECOMMANDINFOEX info{};
+            info.cbSize = sizeof(info);
+            info.fMask = CMIC_MASK_UNICODE;
+            // Kite's own window, so the shell's confirmation and progress
+            // dialogs are owned by something the user can see.
+            info.hwnd = dialogOwner;
+            const std::wstring wide = ToWide(verb);
+            info.lpVerb = verb.c_str();
+            info.lpVerbW = wide.c_str();
+            info.nShow = SW_SHOWNORMAL;
+            if (SUCCEEDED(GuardedInvoke(menu, &info))) {
+                response.ok = true;
+                response.applied = static_cast<uint32_t>(absolute.size());
+            }
+        }
+        ::DestroyMenu(hmenu);
+        menu->Release();
+    }
+
+    if (parent) parent->Release();
+    for (PIDLIST_ABSOLUTE pidl : absolute) ::CoTaskMemFree(pidl);
+    return response;
 }
 
 }  // namespace kite::win

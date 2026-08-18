@@ -4,16 +4,17 @@
 // (Box, Google Drive, 7-Zip, TortoiseGit and whatever else the machine has
 // registered) is instantiated here instead, so a handler that corrupts the heap
 // or faults on a background thread costs the user a context menu rather than
-// their file manager. Two kinds of handler arrive that way: context menus
-// (IContextMenu) and icon overlays (IShellIconOverlayIdentifier).
+// their file manager. Three kinds of handler arrive that way: context menus
+// (IContextMenu), icon overlays (IShellIconOverlayIdentifier) and namespace
+// extensions (the folders that appear under "PC" and friends).
 //
 // It is started by kite.exe on the first request, reads requests from the named
 // pipe given on the command line, and answers one response per request. It quits
 // when the pipe breaks - which is also how it learns that Kite is gone.
 //
-// kite.exe runs two of these. A menu host sits inside TrackPopupMenu for as long
-// as the menu is open, so icons get an instance of their own rather than waiting
-// behind it.
+// kite.exe runs three of these. A menu host sits inside TrackPopupMenu for as
+// long as the menu is open, so icons - and the listing of a virtual folder - get
+// instances of their own rather than waiting behind it.
 #include <windows.h>
 
 #include <objbase.h>
@@ -23,6 +24,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "platform/win/ShellFolder.h"
 #include "platform/win/ShellHostProtocol.h"
 #include "platform/win/ShellIcons.h"
 #include "platform/win/ShellMenu.h"
@@ -124,8 +126,8 @@ shellhost::Result HandleRequest(HWND window, const shellhost::Request& request) 
     ::ShowWindow(window, SW_SHOWNA);
 
     const shellhost::Result result = kite::win::ShowShellContextMenu(
-        window, reinterpret_cast<HWND>(request.ownerWindow), request.paths, request.screenX,
-        request.screenY, request.extended, request.background);
+        window, reinterpret_cast<HWND>(request.ownerWindow), request.container, request.paths,
+        request.screenX, request.screenY, request.extended, request.background);
 
     // Hidden again straight away: while it is visible it is the foreground
     // window, and Kite's title bar stays greyed out for as long as that lasts.
@@ -217,6 +219,11 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     // the one that asked for them is.
     ::SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
+    // Listing "PC" touches every drive letter. Without this, an empty card
+    // reader raises the OS "there is no disk in the drive" dialog - on a
+    // process with no visible window, in front of whatever the user was doing.
+    ::SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+
     HANDLE pipe = ::CreateFileW(pipeName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
                                 OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
     if (pipe == INVALID_HANDLE_VALUE) return 1;
@@ -254,6 +261,27 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
                 shellhost::Response response;
                 response.result = HandleRequest(window, request);
                 reply = shellhost::EncodeResponse(response);
+            } else if (kind == shellhost::MessageKind::Verb) {
+                shellhost::VerbRequest request;
+                if (!shellhost::DecodeVerbRequest(payload.data(), payload.size(), request)) break;
+                reply = shellhost::EncodeVerbResponse(kite::win::InvokeShellVerb(
+                    reinterpret_cast<HWND>(request.ownerWindow), request.container, request.paths,
+                    request.verb, request.byOriginalPath));
+            } else if (kind == shellhost::MessageKind::Folder) {
+                shellhost::FolderRequest request;
+                if (!shellhost::DecodeFolderRequest(payload.data(), payload.size(), request)) {
+                    break;
+                }
+                shellhost::FolderResponse response =
+                    kite::win::EnumerateShellFolder(request.path);
+                reply = shellhost::EncodeFolderResponse(response);
+                if (reply.empty()) {
+                    // Too large to send. Saying so beats sending part of it -
+                    // a half listing reads as "the rest was deleted".
+                    shellhost::FolderResponse failure;
+                    failure.status = shellhost::FolderStatus::Error;
+                    reply = shellhost::EncodeFolderResponse(failure);
+                }
             } else {
                 shellhost::IconRequest request;
                 if (!shellhost::DecodeIconRequest(payload.data(), payload.size(), request)) break;

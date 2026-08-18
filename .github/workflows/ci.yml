@@ -135,8 +135,9 @@ jobs:
 
       - name: シェル拡張が kite.exe に入っていないか
         # ShellMenu.cpp は IContextMenu を、ShellIcons.cpp は SHGFI_ADDOVERLAYS
-        # (=アイコンオーバーレイハンドラ) を触る唯一のファイル。kite ターゲットに
-        # 足すと、サードパーティの DLL が Kite 本体のアドレス空間で動くようになり、
+        # (=アイコンオーバーレイハンドラ) を、ShellFolder.cpp は IShellFolder の
+        # 列挙 (=名前空間拡張) を触る唯一のファイル。kite ターゲットに足すと、
+        # サードパーティの DLL が Kite 本体のアドレス空間で動くようになり、
         # プロセスを分けている意味がその時点で消える
         run: |
           block=$(awk '/^add_executable\(kite WIN32/ { f = 1 } f { print } f && /^\)/ { exit }' \
@@ -146,8 +147,8 @@ jobs:
             echo "(この検査はターゲット定義の書き方に依存している。整形し直したなら awk も直すこと)"
             exit 1
           fi
-          if printf '%s\n' "$block" | grep -nE 'Shell(Menu|Icons)\.cpp'; then
-            echo "::error file=CMakeLists.txt::ShellMenu.cpp / ShellIcons.cpp は kite_shellhost 専用。kite ターゲットに足してはならない"
+          if printf '%s\n' "$block" | grep -nE 'Shell(Menu|Icons|Folder)\.cpp'; then
+            echo "::error file=CMakeLists.txt::ShellMenu.cpp / ShellIcons.cpp / ShellFolder.cpp は kite_shellhost 専用。kite ターゲットに足してはならない"
             exit 1
           fi
           echo "kite ターゲットにシェル拡張のコードは無い"

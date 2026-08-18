@@ -23,13 +23,17 @@ enum class UndoKind : uint8_t {
     Create,  ///< 新規作成（フォルダ・ファイル）。逆操作はごみ箱へ入れる
     Move,    ///< 移動（切り取り貼り付け、ドラッグ移動）。逆操作は元のフォルダへ戻す
     Copy,    ///< コピー。逆操作は作られた複製をごみ箱へ入れる
-    Delete,  ///< 削除。**戻せない印**。詳細は UndoStack::Push()
+    Delete,  ///< ごみ箱への削除。逆操作はごみ箱から元の場所へ戻す
+    Erase,   ///< 完全削除。**戻せない印**。詳細は UndoStack::Push()
 };
 
 /// @brief 元に戻せる操作 1 つ分。
 ///
 /// `targets` と `origins` は Rename / Move では同じ長さで、同じ添字が同じ 1 件を指す。
-/// Create / Copy は `targets` だけを使い、Delete はどちらも空。
+/// Create / Copy / Delete は `targets` だけを使い、Erase はどちらも空。
+///
+/// Delete の `targets` は**消される前のパス**。ごみ箱に入った後の名前ではないのは、
+/// 削除の時点で分かっているのがそちらしかないから（`IShellIntegration::RestoreDeleted`）。
 struct UndoAction {
     UndoKind kind = UndoKind::Delete;  ///< 何をしたか
     std::vector<std::string> targets;  ///< 操作が作った、または動かした先のパス
@@ -47,9 +51,10 @@ public:
 
     /// @brief 操作を 1 つ積む。
     /// @param[in] action 積む操作
-    /// @note UndoKind::Delete を積むと、**それより前の履歴はすべて捨てる。**
-    ///       削除の下にある操作は二度と到達できない ─ 削除を飛び越えて古い操作を
-    ///       戻すと、消えたファイルはそのままに、その前の名前変更だけが巻き戻る
+    /// @note UndoKind::Erase を積むと、**それより前の履歴はすべて捨てる。**
+    ///       完全削除の下にある操作は二度と到達できない ─ それを飛び越えて古い操作を
+    ///       戻すと、消えたファイルはそのままに、その前の名前変更だけが巻き戻る。
+    ///       ごみ箱への削除（UndoKind::Delete）は戻せるので、捨てる理由が無い
     void Push(UndoAction action);
 
     /// @brief 履歴が空かを返す。
