@@ -1821,6 +1821,13 @@ void App::GotoSession(int index) {
     host_.Invalidate();
 }
 
+bool App::MoveSession(int from, int to) {
+    if (!workspace_.ReorderSession(from, to)) return false;
+    dirty_ = true;
+    host_.Invalidate();
+    return true;
+}
+
 void App::GotoBookmark(int index) {
     if (index < 0 || index >= static_cast<int>(workspace_.bookmarks.size())) return;
     NavigateFocused(workspace_.bookmarks[index].path);
@@ -2235,6 +2242,20 @@ void App::Execute(Cmd cmd) {
         }
         case Cmd::CloseTab: {
             if (!pane) break;
+            // The last tab closes the window, the way every browser reads Ctrl+W.
+            // A pane always keeps one tab (Pane::CloseTab refuses), so without
+            // this the key simply stopped answering on the last one.
+            //
+            // No stepping down through the pane and the session first: those have
+            // keys of their own (Alt+W, Ctrl+Alt+W), and a Ctrl+W whose meaning
+            // depended on how the window happened to be split could not be
+            // pressed without looking. Closing is not destructive here - the
+            // workspace is written on the way out and comes back on the next
+            // start.
+            if (pane->tabs.size() <= 1) {
+                host_.Close();
+                break;
+            }
             std::string closed;
             if (pane->CloseTab(pane->active, &closed)) {
                 workspace_.closedTabs.push_back(closed);
@@ -2435,6 +2456,16 @@ void App::Execute(Cmd cmd) {
                 const int n = static_cast<int>(workspace_.sessions.size());
                 GotoSession((workspace_.active - 1 + n) % n);
             }
+            break;
+        // No wrapping, unlike Next/PrevSession: those are "show me another one",
+        // where coming back round is the point, while these are a direction along
+        // the bar - a chip that leapt from the first slot to the last would only
+        // ever be an accident (the same call Cmd::MoveTabLeft/Right makes).
+        case Cmd::MoveSessionLeft:
+            MoveSession(workspace_.active, workspace_.active - 1);
+            break;
+        case Cmd::MoveSessionRight:
+            MoveSession(workspace_.active, workspace_.active + 1);
             break;
         case Cmd::SaveWorkspace:
             // 失敗したときは WriteConfigFile が出した「保存できません」をそのまま

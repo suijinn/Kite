@@ -59,7 +59,7 @@ const AppUi::Region* AppUi::Pick(float x, float y) const {
 bool AppUi::PointerOver(const RectF& box) const {
     if (!mouseInside_ || dropActive_) return false;
     if (drag_ == Drag::Splitter || drag_ == Drag::Tab || drag_ == Drag::Marquee ||
-        drag_ == Drag::Sidebar || drag_ == Drag::Section) {
+        drag_ == Drag::Sidebar || drag_ == Drag::Section || drag_ == Drag::Session) {
         return false;
     }
     return box.contains(mouseX_, mouseY_);
@@ -178,6 +178,11 @@ void AppUi::PaintDragOverlay(Renderer& r) {
     }
     if (drag_ == Drag::Section && !dropSectionMarker_.empty()) {
         r.FillRect(dropSectionMarker_, th.accent);
+    }
+    // And down the side of a session chip, the way a horizontal tab bar draws it:
+    // the chips are ordered along the row they wrapped into.
+    if (drag_ == Drag::Session && !dropSessionMarker_.empty()) {
+        r.FillRect(dropSessionMarker_, th.accent);
     }
 
     // The selection band. Drawn last and clipped to its own list, so sweeping
@@ -2162,6 +2167,39 @@ void AppUi::FinishTabDrag() {
     app_.host().Invalidate();
 }
 
+// Which slot in the session bar a carried chip is asking for, plus the boundary
+// to draw the caret on.
+//
+// Only the chips themselves count. Every slot is still reachable - the halves of
+// a chip are "before it" and "after it", so the two ends are the left half of the
+// first and the right half of the last - and off the chips there is no answer to
+// give: the bar wraps, so the empty space at the end of a row is as much "before
+// the next row" as it is "after this one".
+bool AppUi::ResolveSessionDrop(float x, float y, int* outIndex, RectF* outMarker) const {
+    for (const Region& candidate : regions_) {
+        if (candidate.kind != Hit::SessionChip) continue;
+        if (!candidate.rect.contains(x, y)) continue;
+
+        const bool after = x > candidate.rect.center().x;
+        *outIndex = candidate.index + (after ? 1 : 0);
+        const float edge = after ? candidate.rect.r : candidate.rect.l;
+        *outMarker = { edge - 1.0f, candidate.rect.t, edge + 2.0f, candidate.rect.b };
+        return true;
+    }
+    return false;
+}
+
+void AppUi::FinishSessionDrag() {
+    if (dragSessionIndex_ >= 0 && dropSessionIndex_ >= 0) {
+        int target = dropSessionIndex_;
+        // Lifting the chip out first shifts everything after it down by one.
+        if (target > dragSessionIndex_) --target;
+        app_.MoveSession(dragSessionIndex_, target);
+    }
+    CancelDrag();
+    app_.host().Invalidate();
+}
+
 // Which slot in the section being dragged the pointer is asking for, plus the
 // boundary to draw the caret on. Only rows of that one section are considered:
 // a bookmark has no meaning among the drives, and the sections are separately
@@ -2255,6 +2293,9 @@ void AppUi::FinishSectionDrag() {
 
 void AppUi::CancelDrag() {
     drag_ = Drag::None;
+    dragSessionIndex_ = -1;
+    dropSessionIndex_ = -1;
+    dropSessionMarker_ = {};
     dragSection_ = SidebarSection::Count;
     dragSectionIndex_ = -1;
     dropSectionIndex_ = -1;
@@ -2393,6 +2434,8 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             drag_ = Drag::Sidebar;
         } else if (drag_ == Drag::PendingSection && moved > kDragThreshold) {
             drag_ = Drag::Section;
+        } else if (drag_ == Drag::PendingSession && moved > kDragThreshold) {
+            drag_ = Drag::Session;
         } else if (drag_ == Drag::PendingFile && moved > kDragThreshold) {
             // Hand off to the OS. BeginFileDrag blocks until the drag ends, so
             // clear our own state first.
@@ -2431,6 +2474,22 @@ bool AppUi::OnMouse(const MouseEvent& e) {
                                              : RectF{ box.r - 2.0f, box.t, box.r + 1.0f, box.b };
                     }
                 }
+            }
+            app_.host().Invalidate();
+            return true;
+        }
+
+        if (drag_ == Drag::Session) {
+            int index = -1;
+            RectF marker{};
+            if (ResolveSessionDrop(e.x, e.y, &index, &marker)) {
+                dropSessionIndex_ = index;
+                dropSessionMarker_ = marker;
+            } else {
+                // Off the chips - nothing is proposed, so letting go here leaves
+                // the order alone.
+                dropSessionIndex_ = -1;
+                dropSessionMarker_ = {};
             }
             app_.host().Invalidate();
             return true;
@@ -2500,6 +2559,10 @@ bool AppUi::OnMouse(const MouseEvent& e) {
         }
         if (drag_ == Drag::Section) {
             FinishSectionDrag();
+            return true;
+        }
+        if (drag_ == Drag::Session) {
+            FinishSessionDrag();
             return true;
         }
         if (drag_ == Drag::PendingSidebar) {
@@ -2633,7 +2696,22 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             // 常駐ソフトに奪われていることがあり、そのとき唯一の道が消える。
             // 名前を変える先は「今アクティブなセッション」なので、1 度目の
             // クリックで既にそのチップが選ばれている順序に頼っている。
-            if (e.button == 0 && e.clicks >= 2) app_.Execute(Cmd::RenameSession);
+            if (e.button == 0 && e.clicks >= 2) {
+                app_.Execute(Cmd::RenameSession);
+                return true;
+            }
+            if (e.button == 0) {
+                // Arm a possible reorder; it only becomes a drag once the pointer
+                // actually moves. Not armed on the double click above: the field
+                // is open on that chip now, and dragging the box being typed into
+                // is not something anyone means.
+                drag_ = Drag::PendingSession;
+                dragSessionIndex_ = region->index;
+                dropSessionIndex_ = -1;
+                dropSessionMarker_ = {};
+                dragStartX_ = e.x;
+                dragStartY_ = e.y;
+            }
             return true;
         case Hit::SessionAdd:
             app_.Execute(Cmd::NewSession);

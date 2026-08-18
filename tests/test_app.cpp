@@ -1001,6 +1001,63 @@ KITE_TEST(app, sessions_switch_instantly_and_keep_their_layout) {
     KITE_EXPECT_EQ(h.session()->Panes().size(), size_t{ 2 });
 }
 
+KITE_TEST(app, closing_the_last_tab_closes_the_window) {
+    Harness h;
+    KITE_EXPECT_EQ(h.pane()->tabs.size(), size_t{ 1 });
+
+    h.app.Execute(Cmd::CloseTab);
+    KITE_EXPECT_EQ(h.host.closeCount, 1);
+    // The pane keeps its tab: the window is going away, not the tab.
+    KITE_EXPECT_EQ(h.pane()->tabs.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.app.workspace().closedTabs.size(), size_t{ 0 });
+}
+
+KITE_TEST(app, the_last_tab_closes_the_window_even_with_panes_and_sessions_left) {
+    Harness h;
+    h.app.Execute(Cmd::SplitLeftRight);
+    h.app.Execute(Cmd::NewSession);
+    h.Settle();
+    KITE_EXPECT_EQ(h.app.workspace().sessions.size(), size_t{ 2 });
+
+    h.app.Execute(Cmd::CloseTab);
+    KITE_EXPECT_EQ(h.host.closeCount, 1);
+    KITE_EXPECT_EQ(h.app.workspace().sessions.size(), size_t{ 2 });
+}
+
+KITE_TEST(app, sessions_move_along_the_bar_and_stay_active) {
+    Harness h;
+    h.app.Execute(Cmd::NewSession);
+    h.app.Execute(Cmd::NewSession);
+    h.Settle();
+    KITE_EXPECT_EQ(h.app.workspace().sessions.size(), size_t{ 3 });
+    const std::string moved = h.session()->name;
+
+    h.app.Execute(Cmd::MoveSessionLeft);
+    KITE_EXPECT_EQ(h.app.workspace().active, 1);
+    KITE_EXPECT_EQ(h.session()->name, moved);
+    KITE_EXPECT_EQ(h.app.workspace().sessions[1]->name, moved);
+
+    h.app.Execute(Cmd::MoveSessionRight);
+    KITE_EXPECT_EQ(h.app.workspace().active, 2);
+    KITE_EXPECT_EQ(h.session()->name, moved);
+}
+
+KITE_TEST(app, a_session_at_the_end_of_the_bar_does_not_wrap_round) {
+    Harness h;
+    h.app.Execute(Cmd::NewSession);
+    h.Settle();
+    KITE_EXPECT_EQ(h.app.workspace().active, 1);
+
+    // Already last: the chip stays where it is rather than jumping to the front.
+    h.app.Execute(Cmd::MoveSessionRight);
+    KITE_EXPECT_EQ(h.app.workspace().active, 1);
+
+    h.app.Execute(Cmd::MoveSessionLeft);
+    KITE_EXPECT_EQ(h.app.workspace().active, 0);
+    h.app.Execute(Cmd::MoveSessionLeft);
+    KITE_EXPECT_EQ(h.app.workspace().active, 0);
+}
+
 KITE_TEST(app, bookmarks_toggle_and_navigate) {
     Harness h;
     h.app.NavigateFocused("C:\\home\\beta");

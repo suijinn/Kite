@@ -601,4 +601,27 @@ void Workspace::ActivateSession(int index) {
     active = next;
 }
 
+bool Workspace::ReorderSession(int fromIndex, int toIndex) {
+    const int count = static_cast<int>(sessions.size());
+    if (fromIndex < 0 || fromIndex >= count) return false;
+    toIndex = std::clamp(toIndex, 0, count - 1);
+    if (fromIndex == toIndex) return false;
+
+    std::unique_ptr<Session> moved = std::move(sessions[fromIndex]);
+    sessions.erase(sessions.begin() + fromIndex);
+    sessions.insert(sessions.begin() + toIndex, std::move(moved));
+
+    // Keep the same session active across the move - reordering is not a way of
+    // switching. Not ActivateSession() either: nothing is being left, so the
+    // listings the other sessions hold have no reason to be dropped.
+    if (active == fromIndex) {
+        active = toIndex;
+    } else if (fromIndex < active && toIndex >= active) {
+        --active;
+    } else if (fromIndex > active && toIndex <= active) {
+        ++active;
+    }
+    return true;
+}
+
 }  // namespace kite

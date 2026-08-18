@@ -93,6 +93,8 @@ const Row kEn[] = {
     { "cmd.rename_session", "Rename session" },
     { "cmd.next_session", "Next session" },
     { "cmd.prev_session", "Previous session" },
+    { "cmd.move_session_left", "Move session left" },
+    { "cmd.move_session_right", "Move session right" },
     { "cmd.save_workspace", "Save workspace" },
     { "cmd.goto_session_n", "Go to session {n}" },
 
@@ -340,6 +342,8 @@ const Row kJa[] = {
     { "cmd.rename_session", "セッション名を変更" },
     { "cmd.next_session", "次のセッション" },
     { "cmd.prev_session", "前のセッション" },
+    { "cmd.move_session_left", "セッションを左へ移動" },
+    { "cmd.move_session_right", "セッションを右へ移動" },
     { "cmd.save_workspace", "ワークスペースを保存" },
     { "cmd.goto_session_n", "セッション {n} へ" },
 

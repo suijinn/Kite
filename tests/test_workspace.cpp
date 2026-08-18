@@ -164,6 +164,63 @@ KITE_TEST(workspace, switching_sessions_frees_background_listings) {
     KITE_EXPECT_FALSE(background->loaded);
 }
 
+KITE_TEST(workspace, reorder_moves_a_session_and_keeps_the_same_one_active) {
+    Workspace workspace;
+    workspace.AddSession("one", "C:\\a");
+    workspace.AddSession("two", "C:\\b");
+    workspace.AddSession("three", "C:\\c");
+    workspace.ActivateSession(0);  // "one" is active
+
+    KITE_EXPECT(workspace.ReorderSession(0, 2));
+    KITE_EXPECT_EQ(workspace.sessions[0]->name, std::string("two"));
+    KITE_EXPECT_EQ(workspace.sessions[1]->name, std::string("three"));
+    KITE_EXPECT_EQ(workspace.sessions[2]->name, std::string("one"));
+    KITE_EXPECT_EQ(workspace.active, 2);
+}
+
+KITE_TEST(workspace, reorder_carries_the_active_index_past_a_session_moved_over_it) {
+    Workspace workspace;
+    workspace.AddSession("one", "C:\\a");
+    workspace.AddSession("two", "C:\\b");
+    workspace.AddSession("three", "C:\\c");
+    workspace.ActivateSession(1);  // "two" is active
+
+    // The last one moves to the front, so "two" slides one to the right.
+    KITE_EXPECT(workspace.ReorderSession(2, 0));
+    KITE_EXPECT_EQ(workspace.sessions[0]->name, std::string("three"));
+    KITE_EXPECT_EQ(workspace.active, 2);
+    KITE_EXPECT_EQ(workspace.activeSession()->name, std::string("two"));
+}
+
+KITE_TEST(workspace, reorder_rejects_a_move_that_changes_nothing) {
+    Workspace workspace;
+    workspace.AddSession("one", "C:\\a");
+    workspace.AddSession("two", "C:\\b");
+
+    KITE_EXPECT_FALSE(workspace.ReorderSession(0, 0));
+    KITE_EXPECT_FALSE(workspace.ReorderSession(5, 0));
+    // Clamped to the last slot, which is where it already is.
+    KITE_EXPECT_FALSE(workspace.ReorderSession(1, 9));
+    KITE_EXPECT_EQ(workspace.sessions[0]->name, std::string("one"));
+}
+
+KITE_TEST(workspace, reordering_does_not_free_the_listings_of_other_sessions) {
+    Workspace workspace;
+    Session* first = workspace.AddSession("one", "C:\\a");
+    Pane* pane = first->Panes().front();
+    Tab* background = pane->AddTab("C:\\background");
+    background->listing.entries.resize(8);
+    background->loaded = true;
+    pane->Activate(0);
+
+    workspace.AddSession("two", "C:\\b");
+    KITE_EXPECT(workspace.ReorderSession(0, 1));
+
+    // Nothing was left, so nothing had to be dropped.
+    KITE_EXPECT_EQ(background->listing.entries.size(), size_t{ 8 });
+    KITE_EXPECT(background->loaded);
+}
+
 KITE_TEST(workspace, focused_tab_follows_the_focused_pane) {
     Workspace workspace;
     Session* session = workspace.AddSession("one", "C:\\a");

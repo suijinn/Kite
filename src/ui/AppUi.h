@@ -133,6 +133,8 @@ private:
         Sidebar,         // reordering within one sidebar section
         PendingSection,  // pressed on a sidebar heading, not yet moved far enough
         Section,         // reordering the sidebar sections themselves
+        PendingSession,  // pressed on a session chip, not yet moved far enough
+        Session,         // reordering the session chips
     };
 
     struct Region {
@@ -211,6 +213,8 @@ private:
 
     bool ResolveTabDrop(float x, float y, Pane** outPane, int* outIndex) const;
     void FinishTabDrag();
+    bool ResolveSessionDrop(float x, float y, int* outIndex, RectF* outMarker) const;
+    void FinishSessionDrag();
     bool ResolveSidebarDrop(float x, float y, int* outIndex, RectF* outMarker) const;
     void FinishSidebarDrag();
     RectF SectionBlock(SidebarSection section) const;
@@ -271,6 +275,13 @@ private:
     int dragSectionIndex_ = -1;
     int dropSectionIndex_ = -1;
     RectF dropSectionMarker_{};
+
+    // The chip being carried along the session bar, and the slot letting go
+    // would put it in. The press activates that session (as a plain click always
+    // has), so the bar keeps scrolling to the chip under the pointer.
+    int dragSessionIndex_ = -1;
+    int dropSessionIndex_ = -1;
+    RectF dropSessionMarker_{};
 
     Pane* dragTabPane_ = nullptr;
     int dragTabIndex_ = -1;

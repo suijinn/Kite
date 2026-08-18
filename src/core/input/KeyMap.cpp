@@ -109,6 +109,8 @@ const DefaultBinding kDefaults[] = {
     { Cmd::RenameSession,       "Ctrl+Alt+R" },
     { Cmd::NextSession,         "Ctrl+Alt+PageDown" },
     { Cmd::PrevSession,         "Ctrl+Alt+PageUp" },
+    { Cmd::MoveSessionLeft,     "Ctrl+Alt+Shift+PageUp" },
+    { Cmd::MoveSessionRight,    "Ctrl+Alt+Shift+PageDown" },
     { Cmd::SaveWorkspace,       "Ctrl+S" },
     { Cmd::Session1,            "Alt+1" },
     { Cmd::Session2,            "Alt+2" },

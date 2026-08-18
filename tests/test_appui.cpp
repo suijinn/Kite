@@ -1253,6 +1253,114 @@ KITE_TEST(appui, double_clicking_a_session_chip_renames_the_session_it_names) {
     KITE_EXPECT_EQ(f.app.prompt().text, f.app.workspace().sessions[1]->name);
 }
 
+// --- reordering the session chips -------------------------------------------
+//
+// The same grammar as a tab drag, one bar up: press, move, and the caret says
+// which side of which chip letting go would put it on.
+
+namespace {
+
+// The chip of session `index`, found by the label it draws rather than by
+// repeating the bar's layout arithmetic. The number is part of the label, so
+// this is also what proves the chips renumbered after a move.
+RectF SessionChipBox(Fixture& f, int index) {
+    const std::string label =
+        std::to_string(index + 1) + "  " + f.app.workspace().sessions[index]->name;
+    const test::FakeRenderer::Text* text = f.TextNamed(label);
+    return text ? text->rect : RectF{};
+}
+
+}  // namespace
+
+KITE_TEST(appui, dragging_a_session_chip_onto_an_earlier_one_reorders_the_bar) {
+    Fixture f;
+    f.app.Execute(Cmd::NewSession);
+    f.app.Execute(Cmd::NewSession);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    KITE_EXPECT_EQ(f.app.workspace().sessions.size(), size_t{ 3 });
+    KITE_EXPECT_EQ(f.app.workspace().active, 2);
+    const std::string carried = f.app.workspace().sessions[2]->name;
+
+    const RectF from = SessionChipBox(f, 2);
+    const RectF onto = SessionChipBox(f, 0);
+    KITE_EXPECT_FALSE(from.empty());
+    KITE_EXPECT_FALSE(onto.empty());
+
+    f.Press(from.center().x, from.center().y);
+    // The left half of the first chip means "before it", which is the only way
+    // to reach the front of the bar.
+    f.Drag(onto.l + onto.w() * 0.25f, onto.center().y);
+    f.Release(onto.l + onto.w() * 0.25f, onto.center().y);
+    test::PumpUntilSettled(f.app);
+
+    KITE_EXPECT_EQ(f.app.workspace().sessions[0]->name, carried);
+    // Reordering is not switching: the same session is still the active one.
+    KITE_EXPECT_EQ(f.app.workspace().active, 0);
+    KITE_EXPECT_EQ(f.app.workspace().sessions.size(), size_t{ 3 });
+}
+
+KITE_TEST(appui, a_chip_dropped_on_the_far_side_of_its_neighbour_lands_after_it) {
+    Fixture f;
+    f.app.Execute(Cmd::NewSession);
+    f.app.Execute(Cmd::NewSession);
+    test::PumpUntilSettled(f.app);
+    f.app.Execute(Cmd::Session1);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    const std::string carried = f.app.workspace().sessions[0]->name;
+    const RectF from = SessionChipBox(f, 0);
+    const RectF onto = SessionChipBox(f, 1);
+
+    f.Press(from.center().x, from.center().y);
+    f.Drag(onto.r - onto.w() * 0.25f, onto.center().y);
+    f.Release(onto.r - onto.w() * 0.25f, onto.center().y);
+    test::PumpUntilSettled(f.app);
+
+    // Past the midpoint is "after this one" - and after lifting the chip out,
+    // that slot is the one it came from plus one, not plus two.
+    KITE_EXPECT_EQ(f.app.workspace().sessions[1]->name, carried);
+    KITE_EXPECT_EQ(f.app.workspace().active, 1);
+}
+
+KITE_TEST(appui, a_chip_let_go_away_from_the_bar_leaves_the_order_alone) {
+    Fixture f;
+    f.app.Execute(Cmd::NewSession);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    const std::string first = f.app.workspace().sessions[0]->name;
+    const RectF from = SessionChipBox(f, 1);
+
+    // Down into the listing, where no chip can answer "which side of what".
+    f.Press(from.center().x, from.center().y);
+    f.Drag(from.center().x, from.center().y + 300.0f);
+    f.Release(from.center().x, from.center().y + 300.0f);
+    test::PumpUntilSettled(f.app);
+
+    KITE_EXPECT_EQ(f.app.workspace().sessions[0]->name, first);
+    KITE_EXPECT_EQ(f.app.workspace().active, 1);
+}
+
+KITE_TEST(appui, a_press_on_a_chip_that_never_moves_is_still_just_a_click) {
+    Fixture f;
+    f.app.Execute(Cmd::NewSession);
+    test::PumpUntilSettled(f.app);
+    f.app.Execute(Cmd::Session1);
+    f.Paint();
+
+    const std::string first = f.app.workspace().sessions[0]->name;
+    const RectF chip = SessionChipBox(f, 1);
+
+    f.Click(chip.center().x, chip.center().y);
+    test::PumpUntilSettled(f.app);
+
+    KITE_EXPECT_EQ(f.app.workspace().active, 1);
+    KITE_EXPECT_EQ(f.app.workspace().sessions[0]->name, first);
+}
+
 // --- the vertical tab bar ---------------------------------------------------
 //
 // The same layout with the two axes swapped: tabs run down the left of the pane

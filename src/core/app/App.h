@@ -412,6 +412,15 @@ public:
     ///       8 個しか無いので、9 個目以降のチップをコマンドに直すことはできない
     void GotoSession(int index);
 
+    /// @brief セッションの並び順を変える。
+    /// @param[in] from 動かすセッションの添字
+    /// @param[in] to 移動先の添字。範囲外はクランプする
+    /// @return 並べ替えたら true
+    /// @note UI 層はチップのドラッグでここを呼ぶ。挿入位置は要素を抜く前の数え方で
+    ///       渡す（Workspace::ReorderSession と同じ約束。後ろへ動かすときは呼ぶ側が
+    ///       1 引く）
+    bool MoveSession(int from, int to);
+
     /// @brief ウィンドウが OS のフォーカスを持っているかを記録する。
     /// @param[in] active 持っていれば true
     /// @note UI がフォーカス表示の色を切り替えるためだけに使う。状態が変わったときだけ
