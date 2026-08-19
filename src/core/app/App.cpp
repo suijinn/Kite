@@ -894,6 +894,49 @@ void App::FocusPane(Pane* pane) {
     host_.Invalidate();
 }
 
+// Pulling a tab out of the bar and letting go outside the window.
+//
+// What travels is the folder, not the tab: the new window is another process
+// (see Cmd::NewWindow), so the history and the view state stay behind and go
+// with the tab we drop here. Nothing else can cross a process boundary.
+bool App::DetachTabToNewWindow(Pane* pane, int index) {
+    Session* session = workspace_.activeSession();
+    if (!session || !pane) return false;
+    if (index < 0 || index >= static_cast<int>(pane->tabs.size())) return false;
+
+    // The only tab of the only pane has nowhere to go: the window it would open
+    // is the window it is already in, and this one cannot be left empty. Say so
+    // rather than opening a second copy of the same folder.
+    const bool lastInPane = pane->tabs.size() <= 1;
+    if (lastInPane && session->Panes().size() <= 1) {
+        SetStatus(strings_.Get("ui.cannot_detach_last"));
+        host_.Invalidate();
+        return false;
+    }
+
+    const std::string path = pane->tabs[index]->path;
+    if (!host_.OpenNewWindow(path)) {
+        // Drop nothing when the window never opened - the tab is all there is.
+        SetStatus(strings_.Get("ui.new_window_failed"));
+        host_.Invalidate();
+        return false;
+    }
+
+    // Not recorded in closedTabs: the tab moved, it did not close. Ctrl+Shift+T
+    // would otherwise hand back a folder that is open in the new window.
+    if (lastInPane) {
+        session->ClosePane(pane);
+    } else {
+        pane->CloseTab(index, nullptr);
+        if (Tab* t = pane->activeTab()) RequestLoad(*t);
+    }
+    dirty_ = true;
+    SyncWatches();
+    UpdateTitle();
+    host_.Invalidate();
+    return true;
+}
+
 void App::SetWindowActive(bool active) {
     if (windowActive_ == active) return;
     windowActive_ = active;
@@ -2417,17 +2460,27 @@ void App::Execute(Cmd cmd) {
         }
         case Cmd::CloseTab: {
             if (!pane) break;
-            // The last tab closes the window, the way every browser reads Ctrl+W.
-            // A pane always keeps one tab (Pane::CloseTab refuses), so without
-            // this the key simply stopped answering on the last one.
+            // A pane always keeps one tab (Pane::CloseTab refuses), so the last
+            // one has to be answered here or the key stops answering at all.
             //
-            // No stepping down through the pane and the session first: those have
-            // keys of their own (Alt+W, Ctrl+Alt+W), and a Ctrl+W whose meaning
-            // depended on how the window happened to be split could not be
-            // pressed without looking. Closing is not destructive here - the
-            // workspace is written on the way out and comes back on the next
-            // start.
+            // Split, the answer is the pane: closing the window because one of
+            // several panes ran out of tabs throws away everything the other
+            // panes were showing. Unsplit, it is the window, the way every
+            // browser reads Ctrl+W - and that is not destructive, since the
+            // workspace is written on the way out and comes back next start.
+            //
+            // Only the last step is skipped: the session keeps its own key
+            // (Ctrl+Alt+W), because a session holds panes that are not on
+            // screen and closing them by running one pane empty is a surprise.
             if (pane->tabs.size() <= 1) {
+                if (session && session->Panes().size() > 1) {
+                    // Reopenable, like any other tab closed with this key.
+                    if (Tab* t = pane->activeTab()) workspace_.closedTabs.push_back(t->path);
+                    session->ClosePane(pane);
+                    dirty_ = true;
+                    host_.Invalidate();
+                    break;
+                }
                 host_.Close();
                 break;
             }

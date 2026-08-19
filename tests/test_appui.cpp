@@ -1905,3 +1905,52 @@ KITE_TEST(appui, the_wheel_moves_the_bookmark_list_and_not_the_list_behind_it) {
     KITE_EXPECT_NEAR(f.tab()->scroll, listScroll, 0.01f);
     KITE_EXPECT(f.app.bookmarkPicker().scroll() > 0);
 }
+
+
+// Carried off the window and let go: the tab asks for a window of its own.
+// Coordinates outside the surface keep arriving because the platform captures
+// the pointer while the button is held.
+KITE_TEST(appui, a_tab_dropped_outside_the_window_opens_a_window_of_its_own) {
+    Fixture f;
+    f.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(f.app);
+    f.app.OpenPath("C:\\home\\alpha", false);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+    KITE_EXPECT_EQ(f.pane()->tabs.size(), size_t{ 2 });
+
+    const Theme& th = f.app.theme();
+    const RectF pane = f.paneRect();
+    const float y = pane.t + th.tabBarHeight * 0.5f;
+    // Tabs are clamped to 190 px wide, so the second one starts past 190.
+    f.Press(pane.l + 250.0f, y);
+    f.Drag(f.renderer.size.w + 60.0f, y);
+    f.Release(f.renderer.size.w + 60.0f, y);
+    test::PumpUntilSettled(f.app);
+
+    KITE_EXPECT_EQ(f.host.newWindows.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(f.host.newWindows[0], std::string("C:\\home\\alpha"));
+    KITE_EXPECT_EQ(f.pane()->tabs.size(), size_t{ 1 });
+}
+
+// The bars are inside the window; a tab let go over one of them is not being
+// pulled out, and it is not being dropped into a pane either.
+KITE_TEST(appui, a_tab_dropped_on_the_session_bar_stays_where_it_was) {
+    Fixture f;
+    f.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(f.app);
+    f.app.OpenPath("C:\\home\\alpha", false);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    const Theme& th = f.app.theme();
+    const RectF pane = f.paneRect();
+    f.Press(pane.l + 120.0f, pane.t + th.tabBarHeight * 0.5f);
+    f.Drag(600.0f, th.sessionBarHeight * 0.5f);
+    f.Release(600.0f, th.sessionBarHeight * 0.5f);
+    test::PumpUntilSettled(f.app);
+
+    KITE_EXPECT_EQ(f.host.newWindows.size(), size_t{ 0 });
+    KITE_EXPECT_EQ(f.pane()->tabs.size(), size_t{ 2 });
+    KITE_EXPECT_EQ(f.pane()->tabs[1]->path, std::string("C:\\home\\alpha"));
+}

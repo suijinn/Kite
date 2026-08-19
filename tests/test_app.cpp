@@ -1232,13 +1232,86 @@ KITE_TEST(app, closing_the_last_tab_closes_the_window) {
     KITE_EXPECT_EQ(h.app.workspace().closedTabs.size(), size_t{ 0 });
 }
 
-KITE_TEST(app, the_last_tab_closes_the_window_even_with_panes_and_sessions_left) {
+KITE_TEST(app, a_tab_pulled_out_opens_a_window_on_its_folder_and_leaves_the_bar) {
+    Harness h;
+    h.app.Execute(Cmd::NewTab);
+    h.Settle();
+    h.app.OpenPath("C:\\home\\alpha", false);
+    h.Settle();
+    KITE_EXPECT_EQ(h.pane()->tabs.size(), size_t{ 2 });
+
+    KITE_EXPECT(h.app.DetachTabToNewWindow(h.pane(), 1));
+    h.Settle();
+    KITE_EXPECT_EQ(h.host.newWindows.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.host.newWindows[0], std::string("C:\\home\\alpha"));
+    KITE_EXPECT_EQ(h.pane()->tabs.size(), size_t{ 1 });
+    // It moved rather than closed: handing it back with Ctrl+Shift+T would mean
+    // the same folder in two windows.
+    KITE_EXPECT_EQ(h.app.workspace().closedTabs.size(), size_t{ 0 });
+}
+
+KITE_TEST(app, a_tab_that_could_not_open_a_window_stays_where_it_is) {
+    Harness h;
+    h.app.Execute(Cmd::NewTab);
+    h.Settle();
+    h.host.canOpenNewWindow = false;
+
+    KITE_EXPECT_FALSE(h.app.DetachTabToNewWindow(h.pane(), 1));
+    KITE_EXPECT_EQ(h.pane()->tabs.size(), size_t{ 2 });
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.new_window_failed"));
+}
+
+KITE_TEST(app, pulling_out_the_last_tab_of_a_split_pane_folds_the_pane_away) {
     Harness h;
     h.app.Execute(Cmd::SplitLeftRight);
+    h.Settle();
+    KITE_EXPECT_EQ(h.session()->Panes().size(), size_t{ 2 });
+
+    KITE_EXPECT(h.app.DetachTabToNewWindow(h.pane(), 0));
+    h.Settle();
+    KITE_EXPECT_EQ(h.host.newWindows.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.session()->Panes().size(), size_t{ 1 });
+}
+
+KITE_TEST(app, the_only_tab_in_the_window_cannot_be_pulled_out) {
+    Harness h;
+    KITE_EXPECT_EQ(h.pane()->tabs.size(), size_t{ 1 });
+
+    // The window it would open is the window it is already in.
+    KITE_EXPECT_FALSE(h.app.DetachTabToNewWindow(h.pane(), 0));
+    KITE_EXPECT_EQ(h.host.newWindows.size(), size_t{ 0 });
+    KITE_EXPECT_EQ(h.pane()->tabs.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.cannot_detach_last"));
+}
+
+KITE_TEST(app, the_last_tab_of_a_split_pane_folds_the_pane_away) {
+    Harness h;
+    h.app.Execute(Cmd::SplitLeftRight);
+    h.Settle();
+    KITE_EXPECT_EQ(h.session()->Panes().size(), size_t{ 2 });
+    KITE_EXPECT_EQ(h.pane()->tabs.size(), size_t{ 1 });
+
+    h.app.Execute(Cmd::CloseTab);
+    h.Settle();
+    // The window stays: the other pane still has something to show.
+    KITE_EXPECT_EQ(h.host.closeCount, 0);
+    KITE_EXPECT_EQ(h.session()->Panes().size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.app.workspace().closedTabs.size(), size_t{ 1 });
+
+    // Down to one pane holding one tab, the same key closes the window.
+    h.app.Execute(Cmd::CloseTab);
+    KITE_EXPECT_EQ(h.host.closeCount, 1);
+}
+
+KITE_TEST(app, the_last_tab_closes_the_window_even_with_sessions_left) {
+    Harness h;
     h.app.Execute(Cmd::NewSession);
     h.Settle();
     KITE_EXPECT_EQ(h.app.workspace().sessions.size(), size_t{ 2 });
+    KITE_EXPECT_EQ(h.session()->Panes().size(), size_t{ 1 });
 
+    // Only the pane step is taken. A session holds panes that are not on
+    // screen, so running one pane empty must not close it.
     h.app.Execute(Cmd::CloseTab);
     KITE_EXPECT_EQ(h.host.closeCount, 1);
     KITE_EXPECT_EQ(h.app.workspace().sessions.size(), size_t{ 2 });

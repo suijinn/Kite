@@ -48,6 +48,17 @@ const AppUi::Region* AppUi::Pick(float x, float y) const {
     return nullptr;
 }
 
+// Whether a point is off the window altogether. The pointer keeps reporting
+// while the button is held (the platform captures it), so this stays answerable
+// out past the edge, where the numbers go negative or run past the surface.
+//
+// A frame that has never been painted has no size to compare against; say "in"
+// there rather than treating the whole plane as outside.
+bool AppUi::OutsideWindow(float x, float y) const {
+    if (surface_.w <= 0.0f || surface_.h <= 0.0f) return false;
+    return x < 0.0f || y < 0.0f || x >= surface_.w || y >= surface_.h;
+}
+
 // Is the pointer on this thing, as far as highlighting goes?
 //
 // Nothing is lit while something is being dragged: during a splitter or tab
@@ -97,6 +108,7 @@ void AppUi::Paint(Renderer& r) {
     const Theme& th = app_.theme();
     const SizeF size = r.surfaceSize();
     const RectF full = { 0.0f, 0.0f, size.w, size.h };
+    surface_ = size;
 
     r.FillRect(full, th.windowBg);
 
@@ -2177,6 +2189,19 @@ bool AppUi::ResolveTabDrop(float x, float y, Pane** outPane, int* outIndex) cons
 }
 
 void AppUi::FinishTabDrag() {
+    // Let go out past the edge: pull the tab into a window of its own. Decided
+    // before anything else, because there is no pane under the pointer to fall
+    // back on and the last one it passed over is not an answer.
+    if (dropTabOutside_ && dragTabPane_ && dragTabIndex_ >= 0) {
+        Pane* from = dragTabPane_;
+        const int index = dragTabIndex_;
+        // App may close the pane out from under us, so let go of it first.
+        CancelDrag();
+        app_.DetachTabToNewWindow(from, index);
+        app_.host().Invalidate();
+        return;
+    }
+
     Session* session = app_.workspace().activeSession();
     if (!session || !dragTabPane_ || !dropTabPane_ || dragTabIndex_ < 0) {
         CancelDrag();
@@ -2352,6 +2377,7 @@ void AppUi::CancelDrag() {
     dropTabPane_ = nullptr;
     dropTabIndex_ = -1;
     dropTabMarker_ = {};
+    dropTabOutside_ = false;
 }
 
 std::string AppUi::DropTargetAt(float x, float y) const {
@@ -2487,9 +2513,16 @@ bool AppUi::OnMouse(const MouseEvent& e) {
         }
 
         if (drag_ == Drag::Tab) {
+            // Off the window entirely: the tab is asking for a window of its
+            // own, so no slot in this one is being proposed.
+            dropTabOutside_ = OutsideWindow(e.x, e.y);
+            dropTabPane_ = nullptr;
+            dropTabIndex_ = -1;
+            dropTabMarker_ = {};
+
             Pane* pane = nullptr;
             int index = 0;
-            if (ResolveTabDrop(e.x, e.y, &pane, &index)) {
+            if (!dropTabOutside_ && ResolveTabDrop(e.x, e.y, &pane, &index)) {
                 dropTabPane_ = pane;
                 dropTabIndex_ = index;
                 // Draw the insertion caret on the boundary this slot means:
@@ -2497,7 +2530,6 @@ bool AppUi::OnMouse(const MouseEvent& e) {
                 // one before it when inserting at the end. Which edge that is
                 // follows the bar's orientation.
                 const bool vertical = (app_.tabBarPosition() == TabBarPosition::Left);
-                dropTabMarker_ = {};
                 for (const Region& candidate : regions_) {
                     if (candidate.kind != Hit::TabItem || candidate.pane != pane) continue;
                     const RectF& box = candidate.rect;
