@@ -400,6 +400,17 @@ public:
     /// @param[in] pane フォーカスするペイン。nullptr なら何もしない
     void FocusPane(Pane* pane);
 
+    /// @brief タブを引き抜いて新しいウィンドウで開く。
+    /// @param[in] pane タブを持っているペイン。nullptr なら何もしない
+    /// @param[in] index 引き抜くタブの添字
+    /// @return 引き抜けたら true。開けなかった・引き抜けない最後の 1 枚なら false
+    /// @note UI 層はタブをウィンドウの外へ落としたときにここを呼ぶ。新しい
+    ///       ウィンドウは別プロセスなので渡るのはフォルダだけで、履歴も表示状態も
+    ///       残らない（`Cmd::NewWindow` と同じ道を通る）
+    /// @note その 1 枚しか無いウィンドウでは断る ─ 引き抜いた先が今の
+    ///       ウィンドウと同じものになるだけで、元の窓は空にできない
+    bool DetachTabToNewWindow(Pane* pane, int index);
+
     /// @brief フォーカス中のペインのタブを切り替える。
     /// @param[in] index アクティブにするタブの添字。負値なら最後のタブ
     /// @note 一覧を解放したタブ（背面に回っていたセッションのもの）を選んだときに

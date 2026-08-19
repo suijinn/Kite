@@ -154,6 +154,7 @@ private:
     const Region* Pick(float x, float y) const;
 
     bool PointerOver(const RectF& box) const;
+    bool OutsideWindow(float x, float y) const;
     bool Hovered(const RectF& box) const;
     static bool IsTabBarHit(Hit kind);
 
@@ -239,6 +240,10 @@ private:
     Hit hoverKind_ = Hit::None;
     RectF hoverRect_{};
 
+    // How big the surface was last frame. Only a drag that left the window needs
+    // it, and a drag cannot start before a frame has been painted.
+    SizeF surface_{};
+
     Drag drag_ = Drag::None;
     float dragStartX_ = 0.0f;
     float dragStartY_ = 0.0f;
@@ -293,6 +298,10 @@ private:
     Pane* dropTabPane_ = nullptr;
     int dropTabIndex_ = -1;
     RectF dropTabMarker_{};
+    // Carried past the edge of the window: letting go out there asks for a
+    // window of its own. Measured against the surface, not the hit list - "no
+    // region here" also happens over the bars, and those are not outside.
+    bool dropTabOutside_ = false;
 
     bool dropActive_ = false;
     RectF dropHighlight_{};
