@@ -5,6 +5,8 @@
 #include <shlobj.h>
 #include <shlwapi.h>
 
+#include <iterator>
+
 #include "core/base/PathUtil.h"
 #include "core/fs/VirtualPath.h"
 #include "platform/win/VirtualNames.h"
@@ -142,6 +144,52 @@ bool WinShell::RestoreDeleted(const std::vector<std::string>& originalPaths) {
 
 bool WinShell::Open(const std::string& path) {
     return ShellExecuteVerb(hwnd_, path, nullptr, SEE_MASK_FLAG_NO_UI);
+}
+
+bool WinShell::ResolveShortcut(const std::string& linkPath, std::string& target) {
+    if (linkPath.empty() || vfs::IsVirtual(linkPath) || !EnsureOle()) return false;
+
+    IShellLinkW* link = nullptr;
+    if (FAILED(::CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW,
+                                  reinterpret_cast<void**>(&link)))) {
+        return false;
+    }
+
+    bool ok = false;
+    IPersistFile* file = nullptr;
+    if (SUCCEEDED(link->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&file)))) {
+        // Plain, not ToExtendedPath: this is shell code, and the shell does not
+        // take the "\\?\\" spelling. A link buried deeper than MAX_PATH simply
+        // fails to load, and the file goes to the shell the way it always did.
+        const std::wstring w = ToWide(linkPath);
+        if (SUCCEEDED(file->Load(w.c_str(), STGM_READ))) {
+            // No SLR_ANY_MATCH and no dialog: the answer only decides whether
+            // Kite navigates or hands the file to the shell, and letting the
+            // resolver go hunting for a moved target would stall on that.
+            link->Resolve(nullptr, SLR_NO_UI | SLR_NOSEARCH | SLR_NOTRACK | SLR_NOUPDATE);
+
+            wchar_t buffer[MAX_PATH * 4] = {};
+            // A link can point at something with no path at all (a control
+            // panel item, a namespace extension); GetPath answers S_FALSE and
+            // leaves the buffer empty, which is a "no" here.
+            if (link->GetPath(buffer, static_cast<int>(std::size(buffer)), nullptr, SLGP_RAWPATH) ==
+                    S_OK &&
+                buffer[0]) {
+                std::wstring expanded(buffer);
+                // Raw so that environment variables survive the round trip
+                // through the link file; they have to be expanded by hand.
+                wchar_t full[MAX_PATH * 4] = {};
+                const DWORD n = ::ExpandEnvironmentStringsW(expanded.c_str(), full,
+                                                           static_cast<DWORD>(std::size(full)));
+                if (n > 0 && n <= std::size(full)) expanded.assign(full);
+                target = ToUtf8(expanded);
+                ok = !target.empty();
+            }
+        }
+        file->Release();
+    }
+    link->Release();
+    return ok;
 }
 
 bool WinShell::OpenWith(const std::string& path) {

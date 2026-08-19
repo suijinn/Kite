@@ -243,6 +243,11 @@ private:
     float dragStartX_ = 0.0f;
     float dragStartY_ = 0.0f;
 
+    // A press on a row that was already marked keeps the marks - the press may
+    // be the start of a drag, and a drag carries the selection - so dropping
+    // them waits for the release that turns out to be a plain click.
+    bool pendingUnmark_ = false;
+
     SplitNode* dragSplitter_ = nullptr;
     float dragOrigin_ = 0.0f;
     float dragRatio_ = 0.5f;

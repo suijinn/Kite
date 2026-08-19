@@ -223,6 +223,61 @@ struct Fixture {
 
 }  // namespace
 
+// Pressing a row used to drop every other mark before the drag had a chance to
+// start, so a selection of six files arrived at the destination as one.
+KITE_TEST(appui, dragging_from_a_marked_row_carries_the_whole_selection) {
+    Fixture f;
+    f.Paint();
+    f.Click(f.RowPoint(1).x, f.RowPoint(1).y, kModCtrl);
+    f.Click(f.RowPoint(2).x, f.RowPoint(2).y, kModCtrl);
+    KITE_EXPECT_EQ(f.tab()->MarkedCount(), 2);
+
+    const PointF start = f.RowPoint(1);
+    f.Press(start.x, start.y);
+    f.Drag(start.x + 40.0f, start.y + 40.0f);
+
+    KITE_EXPECT_EQ(f.host.lastDrag.size(), size_t{ 2 });
+}
+
+// The other half of that bargain: a press that turns out to be a plain click
+// still means "just this one", it just has to wait for the release to say so.
+KITE_TEST(appui, a_click_on_a_marked_row_drops_the_rest_of_the_selection) {
+    Fixture f;
+    f.Paint();
+    f.Click(f.RowPoint(1).x, f.RowPoint(1).y, kModCtrl);
+    f.Click(f.RowPoint(2).x, f.RowPoint(2).y, kModCtrl);
+
+    const PointF p = f.RowPoint(1);
+    f.Press(p.x, p.y);
+    KITE_EXPECT_EQ(f.tab()->MarkedCount(), 2);  // still whole, in case this is a drag
+    f.Release(p.x, p.y);
+    KITE_EXPECT_EQ(f.tab()->MarkedCount(), 0);
+    KITE_EXPECT_EQ(f.tab()->cursor, 1);
+}
+
+// Ctrl+X changes nothing else on screen, so the fade is the only lasting sign
+// that the clipboard is holding a move.
+KITE_TEST(appui, a_cut_row_is_drawn_faded) {
+    Fixture f;
+    f.Paint();
+    const test::FakeRenderer::Text* before = f.TextNamed("alpha");
+    KITE_EXPECT(before != nullptr);
+    const float full = before ? before->color.a : 0.0f;
+
+    f.app.Execute(Cmd::Cut);  // the cursor starts on alpha, below ".."
+    f.Paint();
+
+    const test::FakeRenderer::Text* cut = f.TextNamed("alpha");
+    const test::FakeRenderer::Text* other = f.TextNamed("beta");
+    KITE_EXPECT(cut != nullptr);
+    KITE_EXPECT(other != nullptr);
+    if (cut && other) {
+        KITE_EXPECT(cut->color.a < full);
+        // And only that row: the fade names one item, not the folder.
+        KITE_EXPECT_NEAR(other->color.a, full, 0.01f);
+    }
+}
+
 KITE_TEST(appui, nothing_is_hovered_before_the_pointer_arrives) {
     Fixture f;
     f.Paint();

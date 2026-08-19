@@ -81,7 +81,7 @@ public:
     void FillTriangle(PointF a, PointF b, PointF c, const Color& color) override;
 
     /// @copydoc ui::Renderer::DrawIcon
-    void DrawIcon(uint32_t iconId, const RectF& box) override;
+    void DrawIcon(uint32_t iconId, const RectF& box, float opacity = 1.0f) override;
 
     /// @brief アイコンの画素を受け取り、描画に使えるようにする。
     /// @param[in] iconId 識別子。同じ値で呼ぶと差し替わる

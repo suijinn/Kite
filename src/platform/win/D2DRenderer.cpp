@@ -357,7 +357,7 @@ void D2DRenderer::ClearIcons() {
     icons_.clear();
 }
 
-void D2DRenderer::DrawIcon(uint32_t iconId, const RectF& box) {
+void D2DRenderer::DrawIcon(uint32_t iconId, const RectF& box, float opacity) {
     if (!drawing_ || iconId == 0 || box.empty()) return;
     auto it = icons_.find(iconId);
     if (it == icons_.end() || !it->second) return;
@@ -374,8 +374,8 @@ void D2DRenderer::DrawIcon(uint32_t iconId, const RectF& box) {
 
     // Linear filtering: the source is 16 or 32 px and the cell is whatever DPI
     // and the row height make it, so the common case is a slight downscale.
-    context_->DrawBitmap(it->second, D2D1::RectF(x, y, x + w, y + h), 1.0f,
-                         D2D1_INTERPOLATION_MODE_LINEAR, nullptr);
+    context_->DrawBitmap(it->second, D2D1::RectF(x, y, x + w, y + h),
+                         std::clamp(opacity, 0.0f, 1.0f), D2D1_INTERPOLATION_MODE_LINEAR, nullptr);
 }
 
 IDWriteTextFormat* D2DRenderer::FormatFor(ui::FontRole role) const {

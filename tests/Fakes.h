@@ -292,6 +292,17 @@ public:
         opened.push_back(path);
         return true;
     }
+    // Which .lnk points where, as the tests choose to say it. Anything not in
+    // the map is not a shortcut, which is also what the real one answers for a
+    // link whose target has no filesystem path.
+    std::map<std::string, std::string> shortcuts;
+
+    bool ResolveShortcut(const std::string& linkPath, std::string& target) override {
+        auto it = shortcuts.find(linkPath);
+        if (it == shortcuts.end()) return false;
+        target = it->second;
+        return true;
+    }
     bool OpenWith(const std::string&) override { return true; }
     bool ShowProperties(const std::string&) override { return true; }
     bool RevealInExplorer(const std::string&) override { return true; }
@@ -423,6 +434,7 @@ public:
         RectF rect;
         uint32_t id = 0;
         size_t seq = 0;
+        float opacity = 1.0f;  ///< 切り取られた項目は薄く描かれる
     };
 
     /// One run of text, with the box its glyphs actually cover - the layout rect
@@ -436,6 +448,7 @@ public:
         std::string text;
         ui::FontRole role = ui::FontRole::Ui;
         size_t seq = 0;
+        Color color{};  ///< 切り取られた行のように、明度だけで語る表現を検査するため
     };
 
     std::vector<Fill> fills;
@@ -452,7 +465,9 @@ public:
     void StrokeRect(const RectF&, const Color&, float) override {}
     void DrawLine(float, float, float, float, const Color&, float) override {}
     void FillTriangle(PointF, PointF, PointF, const Color&) override {}
-    void DrawIcon(uint32_t id, const RectF& r) override { icons.push_back({ r, id, seq_++ }); }
+    void DrawIcon(uint32_t id, const RectF& r, float opacity = 1.0f) override {
+        icons.push_back({ r, id, seq_++, opacity });
+    }
     void DrawText(std::string_view utf8, const RectF& r, const Color& c, ui::FontRole role,
                   ui::TextAlign align) override {
         // The same conditions the real renderer draws nothing under.
@@ -464,7 +479,7 @@ public:
             const float mid = (r.l + r.r) * 0.5f;
             ink = { mid - w * 0.5f, r.t, mid + w * 0.5f, r.b };
         }
-        texts.push_back({ ink, r, std::string(utf8), role, seq_++ });
+        texts.push_back({ ink, r, std::string(utf8), role, seq_++, c });
     }
     // Proportional enough for layout code to behave as it would on screen; the
     // exact number only has to be stable.
