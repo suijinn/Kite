@@ -897,6 +897,9 @@ void App::FocusPane(Pane* pane) {
 void App::SetWindowActive(bool active) {
     if (windowActive_ == active) return;
     windowActive_ = active;
+    // Coming back from another window is the one moment Kite can find out that
+    // its cut was overtaken by someone else's copy.
+    if (active) SyncCutMarks();
     // The focus ring and the cursor row are drawn from this, so what is on
     // screen is now wrong. Guarded above because the platform layer gets told
     // about activation far more often than it actually changes.
@@ -992,11 +995,80 @@ void App::ActivateEntry(int visibleIndex, bool newTab) {
     const std::string full = fs::EntryPath(t->path, e);
     if (e.isDir()) {
         OpenPath(full, newTab);
-    } else {
-        // Never read the file here: a cloud placeholder must be hydrated by the
-        // shell, on the shell's terms.
-        shell_.Open(full);
+        return;
     }
+    // A shortcut to a folder is a folder as far as opening goes. Handing the
+    // .lnk to the shell instead makes it open the target in Explorer, which is
+    // the one thing Kite is here to replace - and the tab the user was standing
+    // in stays where it was.
+    //
+    // Not in a virtual listing, though: what an item there holds is not
+    // necessarily the path an operation acts on - a deleted .lnk is a hidden $R
+    // copy - and following it would walk out of the bin into a live folder.
+    std::string target;
+    if (!vfs::IsVirtual(t->path) && ShortcutFolder(full, target)) {
+        OpenPath(target, newTab);
+        return;
+    }
+    // Never read the file here: a cloud placeholder must be hydrated by the
+    // shell, on the shell's terms.
+    shell_.Open(full);
+}
+
+bool App::IsCut(const std::string& path) const {
+    // Sorted when it was filled: a cut of ten thousand files is one Ctrl+X, and
+    // every visible row asks this question on every frame.
+    return !cutPaths_.empty() &&
+           std::binary_search(cutPaths_.begin(), cutPaths_.end(), path);
+}
+
+void App::ClearCutMarks() {
+    if (cutPaths_.empty()) return;
+    cutPaths_.clear();
+    cutPaths_.shrink_to_fit();
+    host_.Invalidate();
+}
+
+void App::SyncCutMarks() {
+    if (cutPaths_.empty()) return;
+    std::vector<std::string> onClipboard;
+    bool cut = false;
+    if (!shell_.GetClipboardFiles(onClipboard, &cut)) {
+        // No files on the clipboard at all - text, an image, or nothing. Either
+        // way the cut is over. A momentary failure to read looks the same from
+        // here, and losing the dimming is the cheaper of the two mistakes.
+        ClearCutMarks();
+        return;
+    }
+    if (cut && onClipboard.size() == cutPaths_.size()) {
+        // Case-folded because the answer comes back through the OS, which is
+        // free to spell a path with the casing on disk rather than the casing
+        // the listing used.
+        std::vector<std::string> mine;
+        std::vector<std::string> theirs;
+        mine.reserve(cutPaths_.size());
+        theirs.reserve(onClipboard.size());
+        for (const std::string& p : cutPaths_) mine.push_back(utf8::ToLowerAscii(p));
+        for (const std::string& p : onClipboard) theirs.push_back(utf8::ToLowerAscii(p));
+        std::sort(mine.begin(), mine.end());
+        std::sort(theirs.begin(), theirs.end());
+        if (mine == theirs) return;
+    }
+    ClearCutMarks();
+}
+
+bool App::ShortcutFolder(const std::string& path, std::string& target) {
+    // Asked by extension first so that opening an ordinary file costs nothing:
+    // resolving means COM, a file read and a stat, per double-click.
+    if (path::Extension(path) != "lnk") return false;
+    std::string resolved;
+    if (!shell_.ResolveShortcut(path, resolved) || resolved.empty()) return false;
+    bool isDir = false;
+    // A link to a file stays the shell's business: it may name a program, and
+    // running it is exactly what the shell does with the .lnk itself.
+    if (!fs_.Exists(resolved, &isDir) || !isDir) return false;
+    target = resolved;
+    return true;
 }
 
 void App::RefreshFocused() {
@@ -1964,6 +2036,9 @@ void App::DoPaste() {
         ReportFailure(cut ? "ui.move_failed" : "ui.copy_failed", err);
     } else {
         RecordTransfer(paths, dest, existedBefore, cut);
+        // The cut has been spent. Left up, the dimming would go on pointing at
+        // files that have already moved.
+        ClearCutMarks();
     }
     RefreshFocused();
 }
@@ -2311,10 +2386,13 @@ void App::Execute(Cmd cmd) {
             }
             break;
         case Cmd::SelectNone:
-            if (tab) {
-                tab->ClearMarks();
-                host_.Invalidate();
-            }
+            // Escape lands here, and in Explorer that is also how a cut is
+            // called off. Nothing can un-cut the clipboard from outside it, but
+            // the screen can at least stop claiming those rows are going
+            // anywhere.
+            ClearCutMarks();
+            if (tab) tab->ClearMarks();
+            host_.Invalidate();
             break;
         case Cmd::InvertSelection:
             if (tab) {
@@ -2737,8 +2815,19 @@ void App::Execute(Cmd cmd) {
             // failed and one that worked look exactly alike from here.
             const bool cut = (cmd == Cmd::Cut);
             if (!shell_.SetClipboardFiles(paths, cut)) {
+                // The marks stay: the write failed, so whatever was on the
+                // clipboard before - possibly an earlier cut of ours - is still
+                // there, and the rows drawn dimmed are still telling the truth.
                 SetStatus(strings_.Get("ui.clipboard_failed"));
                 break;
+            }
+            // Explorer dims what it cut, and so does Kite: the status line says
+            // it once, and the rows go on saying it until the paste. A copy
+            // clears the marks for the same reason - the clipboard has moved on.
+            ClearCutMarks();
+            if (cut) {
+                cutPaths_ = paths;
+                std::sort(cutPaths_.begin(), cutPaths_.end());
             }
             SetStatus(strings_.Get(cut ? "ui.cut_files" : "ui.copied_files"));
             break;

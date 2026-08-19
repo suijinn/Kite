@@ -1100,14 +1100,23 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
                            fs::Has(e.attrs, fs::Attr::Offline);
         if (e.isHidden()) nameColor = nameColor.alpha(0.55f);
 
+        // Cut, and waiting for a paste. Explorer says this by fading the whole
+        // row, and it is the only place the clipboard's contents are visible at
+        // all - Ctrl+X changes nothing else on screen. A wash of the row would
+        // have to compete with the selection and the cursor, both of which are
+        // still legitimate answers about this same row.
+        const std::string full = fs::EntryPath(tab->path, e);
+        const float ink = app_.IsCut(full) ? 0.45f : 1.0f;
+        if (ink < 1.0f) nameColor = nameColor.alpha(nameColor.a * ink);
+
         // The real icon arrives a frame or two later, and carries any overlay
         // (version control, cloud sync) with it. Until then the drawn glyph
         // holds the space, so rows never shift when it lands.
-        const uint32_t shellIcon = app_.IconFor(fs::EntryPath(tab->path, e));
+        const uint32_t shellIcon = app_.IconFor(full);
         if (shellIcon) {
-            r.DrawIcon(shellIcon, icon.inset(1.0f));
+            r.DrawIcon(shellIcon, icon.inset(1.0f), ink);
         } else if (ghost) {
-            glyph::Cloud(r, icon, th.textDim);
+            glyph::Cloud(r, icon, th.textDim.alpha(th.textDim.a * ink));
         } else if (e.isDir()) {
             glyph::Folder(r, icon, nameColor);
         } else {
@@ -1120,22 +1129,23 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
         const bool editingRow = renaming && isCursor;
         if (!editingRow) r.DrawText(e.name, nameBox, nameColor, FontRole::Ui, TextAlign::Left);
 
+        // The other columns fade with the name. Leaving them bright would split
+        // one row into two answers about whether it is going anywhere.
+        Color detail = marked ? th.rowSelectedText : th.textDim;
+        if (ink < 1.0f) detail = detail.alpha(detail.a * ink);
         if (wide && colExt.w() > 0.0f) {
             const std::string ext = e.isDir() ? std::string() : path::Extension(e.name);
-            r.DrawText(ext, { colExt.l + 4.0f, row.t, colExt.r, row.b },
-                       marked ? th.rowSelectedText : th.textDim, FontRole::UiSmall,
-                       TextAlign::Left);
+            r.DrawText(ext, { colExt.l + 4.0f, row.t, colExt.r, row.b }, detail,
+                       FontRole::UiSmall, TextAlign::Left);
         }
         if (medium && colSize.w() > 0.0f) {
             const std::string sizeText = e.isDir() ? str.Get("ui.dir_marker") : FormatSize(e.size);
-            r.DrawText(sizeText, { colSize.l, row.t, colSize.r - 6.0f, row.b },
-                       marked ? th.rowSelectedText : th.textDim, FontRole::UiSmall,
-                       TextAlign::Right);
+            r.DrawText(sizeText, { colSize.l, row.t, colSize.r - 6.0f, row.b }, detail,
+                       FontRole::UiSmall, TextAlign::Right);
         }
         if (wide && colDate.w() > 0.0f) {
             r.DrawText(FormatDateTime(e.mtime), { colDate.l + 6.0f, row.t, colDate.r, row.b },
-                       marked ? th.rowSelectedText : th.textDim, FontRole::UiSmall,
-                       TextAlign::Left);
+                       detail, FontRole::UiSmall, TextAlign::Left);
         }
 
         Add(row, Hit::ListRow, i, pane);
@@ -2001,10 +2011,21 @@ bool AppUi::HandleListClick(const Region& region, const MouseEvent& e) {
     } else if (e.mods & kModShift) {
         tab->ExtendTo(index);
     } else {
-        // A right-click on an unmarked row selects it first, so the shell menu
-        // acts on what the user is pointing at.
-        const bool keep = (e.button == 1) && tab->marked[entry];
-        if (!keep) tab->ClearMarks();
+        // A press on a row that is already marked leaves the marks alone,
+        // whichever button it was: the right button is about to open a menu for
+        // the whole selection, and the left one may be the start of a drag,
+        // which carries the selection too. Dropping them here is what made a
+        // multi-file drag arrive as a single file.
+        //
+        // The left button still owes an answer - a plain click on one of several
+        // marked rows means "just this one" - so the answer waits for the
+        // release that turns out not to be a drag.
+        const bool keep = tab->marked[entry] != 0;
+        if (!keep) {
+            tab->ClearMarks();
+        } else if (e.button == 0) {
+            pendingUnmark_ = true;
+        }
         tab->cursor = index;
         tab->ResetAnchor();
     }
@@ -2308,6 +2329,7 @@ void AppUi::FinishSectionDrag() {
 
 void AppUi::CancelDrag() {
     drag_ = Drag::None;
+    pendingUnmark_ = false;
     dragSessionIndex_ = -1;
     dropSessionIndex_ = -1;
     dropSessionMarker_ = {};
@@ -2596,7 +2618,16 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             return true;
         }
         const bool wasMarquee = (drag_ == Drag::Marquee);
+        // Never moved far enough to be a drag, so the press on an already
+        // marked row was the plain click it looked like: it means that row and
+        // nothing else.
+        const bool unmark = (drag_ == Drag::PendingFile) && pendingUnmark_;
         CancelDrag();
+        if (unmark) {
+            if (Tab* t = app_.workspace().focusedTab()) t->ClearMarks();
+            app_.host().Invalidate();
+            return true;
+        }
         if (wasMarquee) {
             app_.host().Invalidate();
             return true;

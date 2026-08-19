@@ -52,6 +52,12 @@ public:
     /// @copydoc IShellIntegration::Open
     bool Open(const std::string& path) override;
 
+    /// @copydoc IShellIntegration::ResolveShortcut
+    /// @note 実体は `IShellLink` + `IPersistFile`。シェル拡張 DLL は動かないので
+    ///       自プロセスで構わない ─ 隔離しているのは `IContextMenu` と
+    ///       アイコンオーバーレイのほう
+    bool ResolveShortcut(const std::string& linkPath, std::string& target) override;
+
     /// @copydoc IShellIntegration::OpenWith
     bool OpenWith(const std::string& path) override;
 

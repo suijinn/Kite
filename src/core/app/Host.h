@@ -71,6 +71,17 @@ public:
     /// @return 成功したら true
     virtual bool Open(const std::string& path) = 0;
 
+    /// @brief ショートカット（.lnk）のリンク先を求める。
+    /// @param[in] linkPath ショートカットファイルのパス
+    /// @param[out] target リンク先のパス。失敗時は書き換えない
+    /// @return リンク先が求まったら true。ショートカットでない場合や、リンク先が
+    ///         ファイルシステム上のパスを持たない場合（コントロールパネルの項目
+    ///         など）は false
+    /// @note 探索はしない ─ リンク先が見つからないときに OS の検索ダイアログを
+    ///       出させると、フォルダかどうかを確かめるだけの問い合わせが利用者を
+    ///       待たせることになる
+    virtual bool ResolveShortcut(const std::string& linkPath, std::string& target) = 0;
+
     /// @brief 「プログラムから開く」ダイアログを表示する。
     /// @param[in] path 対象のファイルパス
     /// @return 成功したら true

@@ -431,6 +431,13 @@ public:
     /// @return 持っていれば true。既定は true
     bool windowActive() const { return windowActive_; }
 
+    /// @brief その項目が「切り取り」でクリップボードに入っているかを返す。
+    /// @param[in] path 対象のパス
+    /// @return 切り取り済みなら true
+    /// @note UI が行を薄く描くために毎フレーム呼ぶ。クリップボードは入っている
+    ///       ことを何も言わないので、`Ctrl+X` を押したことが画面に残るのはここだけ
+    bool IsCut(const std::string& path) const;
+
     /// @brief パスを開く。
     /// @param[in] path 開くパス
     /// @param[in] newTab true なら新しいタブで開く
@@ -445,6 +452,8 @@ public:
     /// @param[in] visibleIndex 開く項目。Tab::visible への添字
     /// @param[in] newTab true なら新しいタブで開く（フォルダのみ）
     /// @note 「..」行なら親フォルダへ移動する
+    /// @note フォルダを指すショートカット（.lnk）はフォルダとして扱い、Kite の中で
+    ///       移動する ─ シェルに渡すとリンク先がエクスプローラーで開く
     void ActivateEntry(int visibleIndex, bool newTab);
 
     /// @brief カーソルが画面内に入るようスクロール量を調整する。
@@ -565,6 +574,27 @@ private:
     ///       すべてここを通すこと ─ 書けない場所（Program Files、読み取り専用の
     ///       メディア）に置かれたとき、黙って保存されないのが一番たちが悪い
     bool WriteConfigFile(const char* file, std::string_view data);
+
+    /// @brief 切り取りの印を捨てる。
+    /// @note 印はコピー・切り取りのやり直し、貼り付け、`Escape`、そしてクリップ
+    ///       ボードが別のものに変わったときに消える
+    void ClearCutMarks();
+
+    /// @brief 切り取りの印がまだクリップボードと一致しているかを確かめる。
+    /// @note ウィンドウがフォーカスを取り戻したときに呼ぶ。その間に別のアプリが
+    ///       コピーしていれば、薄いままの行は嘘になる。読めなかったときは触らない
+    ///       ─ 一時的にクリップボードを掴まれているだけのことがある
+    void SyncCutMarks();
+
+    /// @brief フォルダを指すショートカット（.lnk）かを判定し、リンク先を返す。
+    /// @param[in] path 対象のパス
+    /// @param[out] target リンク先のフォルダ。false を返すときは書き換えない
+    /// @return リンク先が実在するフォルダなら true
+    /// @note 拡張子で先に振り分ける ─ 解決には COM とファイル読み取りと存在確認が
+    ///       要るので、ただのファイルを開くたびに払う代金ではない
+    /// @note ファイルを指すショートカットは false。プログラムを名指していることが
+    ///       あり、それを起動するのはまさにシェルが .lnk に対して行う仕事
+    bool ShortcutFolder(const std::string& path, std::string& target);
 
     /// @brief 表示中の場所が Kite 自身の書き込みを拒むかを判定する。
     /// @return 仮想フォルダなら true。そのときステータス行に理由を出す
@@ -696,6 +726,10 @@ private:
     float fontScale_ = 1.0f;
     bool windowActive_ = true;
     bool darkTheme_ = true;
+    // 「切り取り」でクリップボードに入れた項目。エクスプローラーと同じく、その行を
+    // 薄く描くためだけに覚えている ─ クリップボードは自分が何を持っているかを
+    // 知らせてこないので、覚えていなければ画面は何も言えない
+    std::vector<std::string> cutPaths_;
     bool shellIcons_ = true;
     bool standalone_ = false;
     NewTabPosition newTabPosition_ = NewTabPosition::End;

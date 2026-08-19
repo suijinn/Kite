@@ -1023,6 +1023,121 @@ KITE_TEST(app, cut_marks_the_clipboard_as_a_move) {
     KITE_EXPECT(h.shell.clipboardCut);
 }
 
+// The clipboard never says what it is holding, so what was cut is remembered
+// here - it is the only thing the listing can draw the fade from.
+KITE_TEST(app, cut_remembers_its_items_and_copy_forgets_them) {
+    Harness h;
+    h.app.Execute(Cmd::CursorBottom);  // notes.txt
+    h.app.Execute(Cmd::Cut);
+    KITE_EXPECT(h.app.IsCut("C:\\home\\notes.txt"));
+    KITE_EXPECT_FALSE(h.app.IsCut("C:\\home\\alpha"));
+
+    h.app.Execute(Cmd::Copy);
+    KITE_EXPECT_FALSE(h.app.IsCut("C:\\home\\notes.txt"));
+}
+
+KITE_TEST(app, a_whole_selection_is_cut_at_once) {
+    Harness h;
+    h.app.Execute(Cmd::ToggleSelection);  // alpha, and the cursor steps on
+    h.app.Execute(Cmd::ToggleSelection);  // beta
+    h.app.Execute(Cmd::Cut);
+    KITE_EXPECT(h.app.IsCut("C:\\home\\alpha"));
+    KITE_EXPECT(h.app.IsCut("C:\\home\\beta"));
+}
+
+KITE_TEST(app, pasting_ends_the_cut) {
+    Harness h;
+    h.app.Execute(Cmd::CursorBottom);
+    h.app.Execute(Cmd::Cut);
+    h.shell.clipboardFiles = { "C:\\home\\notes.txt" };
+    h.shell.clipboardCut = true;
+
+    h.app.NavigateFocused("C:\\home\\beta");
+    h.Settle();
+    h.app.Execute(Cmd::Paste);
+    h.Settle();
+    KITE_EXPECT_FALSE(h.app.IsCut("C:\\home\\notes.txt"));
+}
+
+// Escape is Cmd::SelectNone, and calling off a cut is what it does in Explorer.
+KITE_TEST(app, escape_drops_the_cut_marks) {
+    Harness h;
+    h.app.Execute(Cmd::CursorBottom);
+    h.app.Execute(Cmd::Cut);
+    h.app.Execute(Cmd::SelectNone);
+    KITE_EXPECT_FALSE(h.app.IsCut("C:\\home\\notes.txt"));
+}
+
+// Another window can take the clipboard while Kite is in the background, and a
+// row still drawn faded would be claiming something that is no longer true.
+KITE_TEST(app, coming_back_to_a_changed_clipboard_drops_the_cut_marks) {
+    Harness h;
+    h.app.Execute(Cmd::CursorBottom);
+    h.app.Execute(Cmd::Cut);
+
+    h.app.SetWindowActive(false);
+    h.shell.clipboardFiles = { "C:\\elsewhere\\other.txt" };
+    h.shell.clipboardCut = false;
+    h.app.SetWindowActive(true);
+    KITE_EXPECT_FALSE(h.app.IsCut("C:\\home\\notes.txt"));
+}
+
+KITE_TEST(app, coming_back_to_the_same_cut_keeps_the_marks) {
+    Harness h;
+    h.app.Execute(Cmd::CursorBottom);
+    h.app.Execute(Cmd::Cut);
+
+    h.app.SetWindowActive(false);
+    h.app.SetWindowActive(true);
+    KITE_EXPECT(h.app.IsCut("C:\\home\\notes.txt"));
+}
+
+// A .lnk that names a folder is a folder here: handing it to the shell is what
+// made the target open in Explorer, in a window the user did not ask for.
+KITE_TEST(app, a_folder_shortcut_opens_inside_kite) {
+    Harness h;
+    h.files.AddFile("C:\\home", "beta.lnk", 200, 4000);
+    h.shell.shortcuts["C:\\home\\beta.lnk"] = "C:\\home\\beta";
+    h.app.Execute(Cmd::Refresh);
+    h.Settle();
+
+    h.app.NavigateFocused("C:\\home");
+    h.Settle();
+    for (int i = 0; i < h.tab()->ItemCount(); ++i) {
+        const fs::Entry* e = h.tab()->EntryAt(i);
+        if (e && e->name == "beta.lnk") {
+            h.app.ActivateEntry(i, false);
+            break;
+        }
+    }
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home\\beta"));
+    KITE_EXPECT(h.shell.opened.empty());  // the shell was never asked
+}
+
+// A link to a file is still the shell's business: it may well name a program,
+// and starting it is exactly what the shell does with the .lnk itself.
+KITE_TEST(app, a_file_shortcut_still_goes_to_the_shell) {
+    Harness h;
+    h.files.AddFile("C:\\home", "notes.lnk", 200, 4000);
+    h.shell.shortcuts["C:\\home\\notes.lnk"] = "C:\\home\\notes.txt";
+    h.app.Execute(Cmd::Refresh);
+    h.Settle();
+
+    h.app.NavigateFocused("C:\\home");
+    h.Settle();
+    for (int i = 0; i < h.tab()->ItemCount(); ++i) {
+        const fs::Entry* e = h.tab()->EntryAt(i);
+        if (e && e->name == "notes.lnk") {
+            h.app.ActivateEntry(i, false);
+            break;
+        }
+    }
+    KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home"));
+    KITE_EXPECT_EQ(h.shell.opened.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.shell.opened[0], std::string("C:\\home\\notes.lnk"));
+}
+
 KITE_TEST(app, copy_path_puts_full_paths_on_the_clipboard) {
     Harness h;
     h.app.Execute(Cmd::CursorBottom);
