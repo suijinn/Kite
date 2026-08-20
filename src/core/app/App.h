@@ -703,6 +703,17 @@ private:
     void GotoBookmark(int index);
     void DoDelete(bool permanent);
     void DoPaste();
+
+    /// @brief 同じフォルダの中に複製を作る。
+    /// @param[in] sources 複製する項目のパス列。すべて自分の親フォルダに残る
+    /// @return 1 件も作れなかったとき false。利用者が中断した場合は true
+    /// @note 同一フォルダへの貼り付け（およびドロップ）の答え。同じ名前は
+    ///       置けないので `a.txt` → `a_copy.txt` と名前を付け直す
+    ///       （`path::DuplicateName` / `path::kCopySuffix`）
+    /// @note 名前は Kite が決めてから `IFileSystem::CopyAs()` に渡す。シェルに
+    ///       解決させると出来上がった名前が誰にも分からず、取り消し履歴が
+    ///       「この操作が作ったもの」を指せなくなる
+    bool DuplicateInPlace(const std::vector<std::string>& sources);
     void DoUndo();
     void RebuildFocused();
 

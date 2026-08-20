@@ -74,6 +74,12 @@ public:
     bool CopyTo(const std::vector<std::string>& paths, const std::string& destDir, bool move,
                 std::string* err) override;
 
+    /// @copydoc fs::IFileSystem::CopyAs
+    /// @note `FOF_MULTIDESTFILES` で 1 回の `SHFileOperation` にまとめる。1 件ずつ
+    ///       呼ぶと、複数を複製したときに進捗ダイアログが件数ぶん開いて閉じる
+    bool CopyAs(const std::vector<std::string>& paths, const std::vector<std::string>& destPaths,
+                std::string* err) override;
+
 private:
     /// @brief 仮想フォルダ 1 つ分をホストに列挙させる。
     /// @param[in] dir `virtual:` 付きのパス

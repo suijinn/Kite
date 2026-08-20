@@ -190,6 +190,27 @@ KITE_TEST(undo, a_pasted_copy_is_thrown_out_again) {
     KITE_EXPECT_EQ(h.Status(), h.Text("ui.undone_copy"));
 }
 
+// A duplicate is a copy like any other, and undo may throw it out: the name it
+// went to was picked precisely because nothing held it.
+KITE_TEST(undo, a_duplicate_made_in_place_is_thrown_out_again) {
+    Harness h;
+    h.app.Execute(Cmd::CursorBottom);  // notes.txt
+    h.app.Execute(Cmd::Copy);
+    h.app.Execute(Cmd::Paste);
+    h.Settle();
+    KITE_EXPECT(h.files.Exists("C:\\home\\notes_copy.txt"));
+
+    h.app.Execute(Cmd::Undo);
+    h.Settle();
+    KITE_EXPECT_FALSE(h.files.Exists("C:\\home\\notes_copy.txt"));
+    // What was copied is not what undo touches.
+    KITE_EXPECT(h.files.Exists("C:\\home\\notes.txt"));
+    KITE_EXPECT_EQ(h.Status(), h.Text("ui.undone_copy"));
+    // To the Recycle Bin: a duplicated folder can have been filled since.
+    KITE_EXPECT_EQ(h.files.deleteRecycle.size(), size_t{ 1 });
+    KITE_EXPECT(h.files.deleteRecycle[0]);
+}
+
 KITE_TEST(undo, a_paste_that_replaced_a_file_records_nothing) {
     Harness h;
     // beta already holds a notes.txt. Whatever sits at that name after the

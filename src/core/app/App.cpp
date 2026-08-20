@@ -93,6 +93,13 @@ std::vector<bool> DestinationsExist(fs::IFileSystem& fs, const std::vector<std::
     return out;
 }
 
+// Whether an item already sits in this folder. Both spellings go through
+// Normalize() so that the answer does not turn on which separator or which case
+// the clipboard happened to hand over.
+bool LivesIn(const std::string& path, const std::string& dir) {
+    return utf8::EqualsIgnoreCaseAscii(path::Normalize(path::Parent(path)), path::Normalize(dir));
+}
+
 const char* SortKeyName(SortKey k) {
     switch (k) {
         case SortKey::Ext: return "ext";
@@ -1164,14 +1171,27 @@ bool App::PerformDrop(const std::vector<std::string>& paths, const std::string& 
         return false;
     }
 
-    // Moving something into the folder it already lives in is a no-op, not an
-    // error; drop those silently rather than letting the shell complain.
+    // Items already in the destination cannot be handed to the shell as they
+    // are: a move there is a no-op, and a copy would collide with itself. The
+    // copy becomes a duplicate under a new name, the same as pasting into the
+    // folder the items were copied from.
     std::vector<std::string> sources;
+    std::vector<std::string> here;
     for (const std::string& p : paths) {
-        if (move && utf8::EqualsIgnoreCaseAscii(path::Parent(p), destDir)) continue;
+        if (LivesIn(p, destDir)) {
+            if (!move) here.push_back(p);
+            continue;
+        }
         sources.push_back(p);
     }
-    if (sources.empty()) return false;
+    if (sources.empty() && here.empty()) return false;
+
+    if (!here.empty() && !DuplicateInPlace(here)) return false;
+    if (sources.empty()) {
+        RefreshTabsShowing(destDir);
+        host_.Invalidate();
+        return true;
+    }
 
     const std::vector<bool> existedBefore = DestinationsExist(fs_, sources, destDir);
 
@@ -2162,18 +2182,109 @@ void App::DoPaste() {
         return;
     }
     const std::string dest = t->path;
-    const std::vector<bool> existedBefore = DestinationsExist(fs_, paths, dest);
+
+    // What was copied from this very folder is a case of its own, and one the
+    // shell cannot be handed as it stands: the name would collide with itself,
+    // and the whole batch fails over it. Explorer's answer to that is a
+    // duplicate under a new name; a cut, having nowhere to go, is a no-op.
+    std::vector<std::string> incoming;
+    std::vector<std::string> here;
+    for (const std::string& p : paths) {
+        if (LivesIn(p, dest)) {
+            here.push_back(p);
+        } else {
+            incoming.push_back(p);
+        }
+    }
+
+    bool ok = true;
+    bool acted = false;
+    if (!cut && !here.empty()) {
+        ok = DuplicateInPlace(here);
+        acted = ok;
+    }
+
+    if (!incoming.empty()) {
+        const std::vector<bool> existedBefore = DestinationsExist(fs_, incoming, dest);
+        std::string err;
+        if (!fs_.CopyTo(incoming, dest, cut, &err)) {
+            ReportFailure(cut ? "ui.move_failed" : "ui.copy_failed", err);
+            ok = false;
+        } else {
+            RecordTransfer(incoming, dest, existedBefore, cut);
+            acted = true;
+        }
+    }
+
+    // Spent only if something actually moved. A cut whose every item is already
+    // here did nothing, and the fade still has a folder to be pasted into.
+    if (ok && acted) ClearCutMarks();
+    RefreshFocused();
+}
+
+bool App::DuplicateInPlace(const std::vector<std::string>& sources) {
+    if (sources.empty()) return true;
+
+    std::vector<std::string> targets;
+    for (const std::string& src : sources) {
+        const std::string dir = path::Parent(src);
+        // A folder keeps its whole name: ".2026" in "backup.2026" is nobody's
+        // extension, the same call Cmd::Rename makes when it selects the stem.
+        bool isDir = false;
+        fs_.Exists(src, &isDir);
+
+        std::string dest;
+        // Bounded, because the answer comes from the disk: a folder that claims
+        // every name is taken would otherwise spin here on the UI thread.
+        for (int attempt = 0; attempt < 1000; ++attempt) {
+            std::string candidate =
+                path::Join(dir, path::DuplicateName(path::FileName(src), attempt, isDir));
+            if (fs_.Exists(candidate)) continue;
+            // Names chosen earlier in this same batch are not on disk yet, and
+            // two items can reach for one: with "a_copy.txt" already there, both
+            // it and "a.txt" arrive at "a_copy2.txt".
+            bool planned = false;
+            for (const std::string& taken : targets) {
+                if (utf8::EqualsIgnoreCaseAscii(taken, candidate)) {
+                    planned = true;
+                    break;
+                }
+            }
+            if (planned) continue;
+            dest = std::move(candidate);
+            break;
+        }
+        if (dest.empty()) {
+            ReportFailure("ui.copy_failed", {});
+            return false;
+        }
+        targets.push_back(std::move(dest));
+    }
 
     std::string err;
-    if (!fs_.CopyTo(paths, dest, cut, &err)) {
-        ReportFailure(cut ? "ui.move_failed" : "ui.copy_failed", err);
-    } else {
-        RecordTransfer(paths, dest, existedBefore, cut);
-        // The cut has been spent. Left up, the dimming would go on pointing at
-        // files that have already moved.
-        ClearCutMarks();
+    if (!fs_.CopyAs(sources, targets, &err)) {
+        ReportFailure("ui.copy_failed", err);
+        return false;
     }
-    RefreshFocused();
+
+    // The same boundary as any other transfer - what was not there before and is
+    // there now. Every name here was picked because nothing held it, so all that
+    // is left to ask is whether the copy arrived.
+    UndoAction action;
+    action.kind = UndoKind::Copy;
+    for (const std::string& target : targets) {
+        if (fs_.Exists(target)) action.targets.push_back(target);
+    }
+    const size_t made = action.targets.size();
+    // Nothing arrived: the shell was told to go ahead and the user said no in its
+    // own dialog. That is not a failure, and not something to count out loud.
+    if (made == 0) return true;
+    undo_.Push(std::move(action));
+
+    // The listing says so too, but the new row can be anywhere in it - the name
+    // is one Kite chose, so it is worth saying that it chose one.
+    SetStatus(strings_.Format("ui.duplicated", { std::to_string(made) }));
+    return true;
 }
 
 void App::RecordTransfer(const std::vector<std::string>& sources, const std::string& destDir,

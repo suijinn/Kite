@@ -50,6 +50,25 @@ std::string Extension(std::string_view p);
 /// @return 拡張子を除いた名前
 std::string Stem(std::string_view p);
 
+/// @brief 複製の名前に足す印。
+/// @note ASCII・空白なしで固定してある。**表示言語で変えてはならない** ─ ディスクに
+///       残る名前なので、言語を切り替えたら同じ操作が別の名前を作ることになる。
+///       空白と多バイト文字を避けるのは、この名前がコマンドラインやスクリプトへ
+///       そのまま渡される先だから（エクスプローラーの `- コピー` を真似していない
+///       唯一の場所）
+constexpr std::string_view kCopySuffix = "_copy";
+
+/// @brief 同一フォルダ内に作る複製の名前を組み立てる。
+/// @param[in] name 元の名前。パスを渡した場合は末尾の要素だけを見る
+/// @param[in] attempt 何度目の候補か。0 なら "名前_copy"、1 以降は "名前_copy2" の
+///                    ように連番が付く（利用者から見た数え方は 2 から）
+/// @param[in] wholeName true なら拡張子で分けず名前ぜんぶを語幹として扱う
+/// @return 組み立てた名前。ディレクトリ部分は付かない
+/// @note `wholeName` はフォルダのためにある。`Stem()` を通すと `backup.2026` の
+///       `.2026` が拡張子として切り離され、誰も拡張子だと思っていないものが
+///       末尾に残る（`Cmd::Rename` が語幹だけを選ぶときと同じ判断）
+std::string DuplicateName(std::string_view name, int attempt, bool wholeName);
+
 /// @brief 1 つ前の構成要素の先頭位置を返す。
 /// @param[in] p 対象のパス
 /// @param[in] pos 現在位置。バイト添字。`p` の長さを超える値は末尾に丸める

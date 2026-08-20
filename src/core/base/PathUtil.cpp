@@ -88,6 +88,22 @@ std::string Stem(std::string_view p) {
     return name.substr(0, dot);
 }
 
+std::string DuplicateName(std::string_view name, int attempt, bool wholeName) {
+    const std::string leaf = FileName(name);
+    const std::string stem = wholeName ? leaf : Stem(leaf);
+    // Not Extension(): that answers in lower case, which would rewrite ".TXT"
+    // on its way past. What is wanted here is the bytes the name already has.
+    const std::string ext = leaf.substr(stem.size());
+
+    std::string out = stem;
+    out += kCopySuffix;
+    // The first copy carries no number, so the second is the one that reads "2" -
+    // the count the user sees, not the attempt.
+    if (attempt > 0) out += std::to_string(attempt + 1);
+    out += ext;
+    return out;
+}
+
 size_t PrevSegment(std::string_view p, size_t pos) {
     size_t i = pos < p.size() ? pos : p.size();
     while (i > 0 && IsSep(p[i - 1])) --i;

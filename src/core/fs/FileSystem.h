@@ -198,6 +198,20 @@ public:
     /// @return 成功したら true。利用者が中断した場合も true を返す
     virtual bool CopyTo(const std::vector<std::string>& paths, const std::string& destDir,
                         bool move, std::string* err) = 0;
+
+    /// @brief 転送先の名前を 1 件ずつ指定してコピーする。
+    /// @param[in] paths 対象のパス列
+    /// @param[in] destPaths 転送先のフルパス列。`paths` と同じ長さ・同じ順
+    /// @param[out] err 失敗理由。不要なら nullptr
+    /// @return 成功したら true。利用者が中断した場合も true を返す
+    /// @note 同一フォルダ内の複製（`a.txt` → `a_copy.txt`）のためにある。
+    ///       CopyTo() は行き先のフォルダしか言えないので、元と同じ名前で置くこと
+    ///       しかできず、同じフォルダへ向けると必ず名前がぶつかる
+    /// @note 名前を決めるのは呼び出し側。ここで衝突を解決させると、出来上がった
+    ///       名前が誰にも分からなくなり、取り消し履歴が「この操作が作ったもの」を
+    ///       指せなくなる
+    virtual bool CopyAs(const std::vector<std::string>& paths,
+                        const std::vector<std::string>& destPaths, std::string* err) = 0;
 };
 
 }  // namespace kite::fs

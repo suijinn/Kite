@@ -45,6 +45,11 @@ public:
         bool move = false;
     };
     std::vector<CopyCall> copyCalls;
+    struct CopyAsCall {
+        std::vector<std::string> paths;
+        std::vector<std::string> destPaths;
+    };
+    std::vector<CopyAsCall> copyAsCalls;
     std::vector<std::vector<std::string>> deleteCalls;
     std::vector<bool> deleteRecycle;
     int listCalls = 0;
@@ -227,6 +232,32 @@ public:
                 AddFile(destDir, leaf);
             }
             if (move) Remove(p);
+        }
+        return true;
+    }
+
+    bool CopyAs(const std::vector<std::string>& paths, const std::vector<std::string>& destPaths,
+                std::string* err) override {
+        if (paths.size() != destPaths.size()) {
+            if (err) *err = "count mismatch";
+            return false;
+        }
+        for (const std::string& p : paths) {
+            if (Refuse(p, err)) return false;
+        }
+        for (const std::string& p : destPaths) {
+            if (Refuse(p, err)) return false;
+        }
+        copyAsCalls.push_back({ paths, destPaths });
+        for (size_t i = 0; i < paths.size(); ++i) {
+            bool isDir = false;
+            const bool sourceIsDir = Exists(paths[i], &isDir) && isDir;
+            Remove(destPaths[i]);
+            if (sourceIsDir) {
+                AddDir(destPaths[i]);
+            } else {
+                AddFile(kite::path::Parent(destPaths[i]), kite::path::FileName(destPaths[i]));
+            }
         }
         return true;
     }

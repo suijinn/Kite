@@ -95,7 +95,12 @@ KITE_TEST(drop, moving_into_the_current_parent_is_dropped_as_a_no_op) {
     KITE_EXPECT_FALSE(app.PerformDrop({ "C:\\home\\notes.txt" }, "C:\\home", true));
     KITE_EXPECT_EQ(files.copyCalls.size(), size_t{ 0 });
 
-    // The same drop as a copy is meaningful, so it goes through.
+    // The same drop as a copy is meaningful, but it cannot be handed over as
+    // it stands - the name would collide with itself. It becomes a duplicate,
+    // the way Explorer answers a copy dropped where the item already lives.
     KITE_EXPECT(app.PerformDrop({ "C:\\home\\notes.txt" }, "C:\\home", false));
-    KITE_EXPECT_EQ(files.copyCalls.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(files.copyCalls.size(), size_t{ 0 });
+    KITE_EXPECT_EQ(files.copyAsCalls.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(files.copyAsCalls[0].destPaths[0],
+                   std::string("C:\\home\\notes_copy.txt"));
 }
