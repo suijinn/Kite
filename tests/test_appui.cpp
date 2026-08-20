@@ -1810,7 +1810,7 @@ KITE_TEST(appui, nothing_on_the_bookmark_list_is_drawn_on_top_of_anything_else) 
     Fixture f;
     GiveBookmarks(f.app);
     f.renderer.size = { 560.0f, 420.0f };
-    f.app.Execute(Cmd::ShowBookmarks);
+    f.app.Execute(Cmd::ShowPlaces);
     f.Paint();
 
     const std::vector<test::FakeRenderer::Text> panel =
@@ -1832,7 +1832,7 @@ KITE_TEST(appui, the_bookmark_list_survives_a_window_with_no_room_in_it) {
     Fixture f;
     GiveBookmarks(f.app);
     f.renderer.size = { 240.0f, 160.0f };
-    f.app.Execute(Cmd::ShowBookmarks);
+    f.app.Execute(Cmd::ShowPlaces);
     f.Paint();
 
     const std::vector<test::FakeRenderer::Text> panel =
@@ -1853,7 +1853,7 @@ KITE_TEST(appui, pressing_a_bookmark_row_goes_there_and_closes_the_panel) {
     Fixture f;
     GiveBookmarks(f.app);
     f.renderer.size = { 900.0f, 640.0f };
-    f.app.Execute(Cmd::ShowBookmarks);
+    f.app.Execute(Cmd::ShowPlaces);
     f.Paint();
 
     // Down the middle of the panel, which is rows all the way. Pressing outside
@@ -1862,7 +1862,7 @@ KITE_TEST(appui, pressing_a_bookmark_row_goes_there_and_closes_the_panel) {
     f.Press(450.0f, 320.0f);
     test::PumpUntilSettled(f.app);
 
-    KITE_EXPECT_FALSE(f.app.bookmarkPicker().visible());
+    KITE_EXPECT_FALSE(f.app.placePicker().visible());
     bool landed = false;
     for (const Bookmark& b : f.app.workspace().bookmarks) {
         if (b.path == f.tab()->path) landed = true;
@@ -1876,14 +1876,14 @@ KITE_TEST(appui, pressing_outside_the_bookmark_list_closes_it) {
     Fixture f;
     GiveBookmarks(f.app);
     f.renderer.size = { 900.0f, 640.0f };
-    f.app.Execute(Cmd::ShowBookmarks);
+    f.app.Execute(Cmd::ShowPlaces);
     f.Paint();
 
     const std::string before = f.tab()->path;
     f.Press(6.0f, 630.0f);
     test::PumpUntilSettled(f.app);
 
-    KITE_EXPECT_FALSE(f.app.bookmarkPicker().visible());
+    KITE_EXPECT_FALSE(f.app.placePicker().visible());
     KITE_EXPECT_EQ(f.tab()->path, before);
 }
 
@@ -1893,19 +1893,294 @@ KITE_TEST(appui, the_wheel_moves_the_bookmark_list_and_not_the_list_behind_it) {
     Fixture f;
     GiveBookmarks(f.app);
     f.renderer.size = { 560.0f, 300.0f };
-    f.app.Execute(Cmd::ShowBookmarks);
+    f.app.Execute(Cmd::ShowPlaces);
     f.Paint();
 
     const float listScroll = f.tab()->scroll;
-    KITE_EXPECT_EQ(f.app.bookmarkPicker().scroll(), 0);
+    KITE_EXPECT_EQ(f.app.placePicker().scroll(), 0);
 
     f.Wheel(280.0f, 150.0f, -3.0f);
     f.Paint();
 
     KITE_EXPECT_NEAR(f.tab()->scroll, listScroll, 0.01f);
-    KITE_EXPECT(f.app.bookmarkPicker().scroll() > 0);
+    KITE_EXPECT(f.app.placePicker().scroll() > 0);
 }
 
+// The palette's rows carry three things - the label, the group and the chords -
+// and the same rule applies as on the bookmark list: what does not fit is dropped,
+// never stacked. Rects that overlap put the text on top of each other.
+KITE_TEST(appui, nothing_on_the_command_palette_is_drawn_on_top_of_anything_else) {
+    Fixture f;
+    f.renderer.size = { 560.0f, 420.0f };
+    f.app.Execute(Cmd::ShowCommandPalette);
+    f.Paint();
+
+    const std::vector<test::FakeRenderer::Text> panel =
+        f.renderer.TextsAfterFill(f.app.theme().overlayScrim);
+    KITE_EXPECT(panel.size() > 5);
+
+    for (size_t i = 0; i < panel.size(); ++i) {
+        for (size_t j = i + 1; j < panel.size(); ++j) {
+            if (test::FakeRenderer::Overlaps(panel[i].ink, panel[j].ink)) {
+                KITE_FAIL("\"" + panel[i].text + "\" and \"" + panel[j].text + "\" overlap");
+            }
+        }
+    }
+}
+
+// Narrow enough that the group and the chords cannot both fit next to the label.
+KITE_TEST(appui, the_command_palette_survives_a_window_with_no_room_in_it) {
+    Fixture f;
+    f.renderer.size = { 240.0f, 160.0f };
+    f.app.Execute(Cmd::ShowCommandPalette);
+    f.Paint();
+
+    const std::vector<test::FakeRenderer::Text> panel =
+        f.renderer.TextsAfterFill(f.app.theme().overlayScrim);
+    for (size_t i = 0; i < panel.size(); ++i) {
+        KITE_EXPECT(panel[i].ink.r >= panel[i].ink.l);
+        for (size_t j = i + 1; j < panel.size(); ++j) {
+            if (test::FakeRenderer::Overlaps(panel[i].ink, panel[j].ink)) {
+                KITE_FAIL("\"" + panel[i].text + "\" and \"" + panel[j].text + "\" overlap");
+            }
+        }
+    }
+}
+
+// One click runs it, the way a bookmark row goes on one click. Filtered down to a
+// single command first, so what the press lands on is known - the row is found by
+// the label it drew, which is also the proof that the label made it to the screen.
+KITE_TEST(appui, pressing_a_command_palette_row_runs_it_and_closes_the_panel) {
+    Fixture f;
+    f.renderer.size = { 900.0f, 640.0f };
+    f.app.Execute(Cmd::ShowCommandPalette);
+    for (char c : std::string("view.toggle_hidden")) f.app.OnChar(static_cast<uint32_t>(c));
+    f.Paint();
+
+    const bool hidden = f.tab()->view.showHidden;
+    const std::string label = f.app.strings().Get("cmd.toggle_hidden");
+    bool pressed = false;
+    for (const test::FakeRenderer::Text& t : f.renderer.TextsAfterFill(f.app.theme().overlayScrim)) {
+        if (t.text != label) continue;
+        f.Press(t.ink.l + 2.0f, (t.ink.t + t.ink.b) * 0.5f);
+        pressed = true;
+        break;
+    }
+    KITE_EXPECT(pressed);
+    test::PumpUntilSettled(f.app);
+
+    KITE_EXPECT_FALSE(f.app.commandPalette().visible());
+    KITE_EXPECT_EQ(f.tab()->view.showHidden, !hidden);
+}
+
+// Pressing outside is the same as Escape, and nothing behind the panel takes that
+// press - least of all a command.
+KITE_TEST(appui, pressing_outside_the_command_palette_closes_it) {
+    Fixture f;
+    f.renderer.size = { 900.0f, 640.0f };
+    f.app.Execute(Cmd::ShowCommandPalette);
+    f.Paint();
+
+    const std::string before = f.tab()->path;
+    const size_t tabs = f.app.workspace().focusedPane()->tabs.size();
+    f.Press(6.0f, 630.0f);
+    test::PumpUntilSettled(f.app);
+
+    KITE_EXPECT_FALSE(f.app.commandPalette().visible());
+    KITE_EXPECT_EQ(f.tab()->path, before);
+    KITE_EXPECT_EQ(f.app.workspace().focusedPane()->tabs.size(), tabs);
+}
+
+// Typing must not move the panel. Sized to the matches, it shrank towards the
+// centre of the window on every keystroke - and the field being typed into moved
+// with it, which is the one thing that has to stay still.
+KITE_TEST(appui, filtering_the_command_palette_does_not_move_the_field) {
+    Fixture f;
+    f.renderer.size = { 900.0f, 640.0f };
+    f.app.Execute(Cmd::ShowCommandPalette);
+    f.Paint();
+
+    const std::string title = f.app.strings().Get("ui.command_palette_title");
+    const auto titleInk = [&]() {
+        for (const test::FakeRenderer::Text& t : f.renderer.texts) {
+            if (t.text == title) return t.ink;
+        }
+        return RectF{};
+    };
+    const RectF before = titleInk();
+    KITE_EXPECT(before.w() > 0.0f);
+
+    // Down to a handful of rows: the old panel would have collapsed around them.
+    for (char c : std::string("session")) f.app.OnChar(static_cast<uint32_t>(c));
+    f.Paint();
+
+    const RectF after = titleInk();
+    KITE_EXPECT_NEAR(after.l, before.l, 0.01f);
+    KITE_EXPECT_NEAR(after.t, before.t, 0.01f);
+}
+
+// The keys.ini name is on the row. The filter matches it, so leaving it off the
+// screen made the one spelling that does not move with the language invisible.
+KITE_TEST(appui, a_command_palette_row_shows_its_keys_ini_name) {
+    Fixture f;
+    f.renderer.size = { 900.0f, 640.0f };
+    f.app.Execute(Cmd::ShowCommandPalette);
+    for (char c : std::string("view.toggle_hidden")) f.app.OnChar(static_cast<uint32_t>(c));
+    f.Paint();
+
+    bool shown = false;
+    for (const test::FakeRenderer::Text& t : f.renderer.TextsAfterFill(f.app.theme().overlayScrim)) {
+        if (t.text == "view.toggle_hidden") shown = true;
+    }
+    KITE_EXPECT(shown);
+}
+
+// The typed text is drawn in the body font, not the small print the bookmark list
+// uses for its filter: this field is being edited rather than read.
+KITE_TEST(appui, the_command_palette_field_is_drawn_at_body_size) {
+    Fixture f;
+    f.renderer.size = { 900.0f, 640.0f };
+    f.app.Execute(Cmd::ShowCommandPalette);
+    for (char c : std::string("tab")) f.app.OnChar(static_cast<uint32_t>(c));
+    f.Paint();
+
+    bool found = false;
+    for (const test::FakeRenderer::Text& t : f.renderer.TextsAfterFill(f.app.theme().overlayScrim)) {
+        if (t.text != "tab") continue;
+        found = true;
+        KITE_EXPECT(t.role == ui::FontRole::Ui);
+    }
+    KITE_EXPECT(found);
+}
+
+// The wheel belongs to the panel while it is up. Every command is in this list, so
+// there is always more of it than a window shows.
+KITE_TEST(appui, the_wheel_moves_the_command_palette_and_not_the_list_behind_it) {
+    Fixture f;
+    f.renderer.size = { 560.0f, 300.0f };
+    f.app.Execute(Cmd::ShowCommandPalette);
+    f.Paint();
+
+    const float listScroll = f.tab()->scroll;
+    KITE_EXPECT_EQ(f.app.commandPalette().scroll(), 0);
+
+    f.Wheel(280.0f, 150.0f, -3.0f);
+    f.Paint();
+
+    KITE_EXPECT_NEAR(f.tab()->scroll, listScroll, 0.01f);
+    KITE_EXPECT(f.app.commandPalette().scroll() > 0);
+}
+
+
+// The bookmark list is drawn in the same frame as the palette, so it holds still
+// while being typed at too - the panel is sized from the unfiltered count.
+KITE_TEST(appui, filtering_the_bookmark_list_does_not_move_the_field) {
+    Fixture f;
+    GiveBookmarks(f.app);
+    f.renderer.size = { 900.0f, 640.0f };
+    f.app.Execute(Cmd::ShowPlaces);
+    f.Paint();
+
+    const std::string title = f.app.strings().Get("ui.goto_title");
+    const auto titleInk = [&]() {
+        for (const test::FakeRenderer::Text& t : f.renderer.texts) {
+            if (t.text == title) return t.ink;
+        }
+        return RectF{};
+    };
+    const RectF before = titleInk();
+    KITE_EXPECT(before.w() > 0.0f);
+
+    for (char c : std::string("mark1")) f.app.OnChar(static_cast<uint32_t>(c));
+    f.Paint();
+
+    const RectF after = titleInk();
+    KITE_EXPECT_NEAR(after.l, before.l, 0.01f);
+    KITE_EXPECT_NEAR(after.t, before.t, 0.01f);
+}
+
+// Both choosers are the same panel in the same place, whatever they hold. The
+// bookmark list used to be sized to its bookmarks, so choosing "bookmark.list"
+// from the palette dropped the field somewhere else on screen - out from under the
+// fingers that had just been typing into it.
+KITE_TEST(appui, the_bookmark_list_and_the_palette_share_one_panel) {
+    Fixture f;
+    GiveBookmarks(f.app);
+    f.renderer.size = { 900.0f, 640.0f };
+
+    // The panel is the fill in the overlay's own background colour.
+    const auto panelOf = [&]() {
+        RectF found{};
+        for (const test::FakeRenderer::Fill& fill : f.renderer.fills) {
+            if (test::FakeRenderer::SameColor(fill.color, f.app.theme().overlayBg)) {
+                found = fill.rect;
+            }
+        }
+        return found;
+    };
+
+    f.app.Execute(Cmd::ShowCommandPalette);
+    f.Paint();
+    const RectF palette = panelOf();
+    KITE_EXPECT(palette.w() > 0.0f);
+
+    // Straight from one to the other, the way running bookmark.list does it.
+    f.app.Execute(Cmd::ShowCommandPalette);
+    f.app.Execute(Cmd::ShowPlaces);
+    f.Paint();
+    const RectF bookmarks = panelOf();
+
+    KITE_EXPECT_NEAR(bookmarks.l, palette.l, 0.01f);
+    KITE_EXPECT_NEAR(bookmarks.t, palette.t, 0.01f);
+    KITE_EXPECT_NEAR(bookmarks.r, palette.r, 0.01f);
+    KITE_EXPECT_NEAR(bookmarks.b, palette.b, 0.01f);
+}
+
+// One bookmark or fifty, the panel does not change - the count decides nothing
+// about the frame.
+KITE_TEST(appui, the_bookmark_list_panel_does_not_follow_the_bookmark_count) {
+    const auto panelWith = [](int bookmarks) {
+        Fixture f;
+        f.renderer.size = { 900.0f, 640.0f };
+        for (int i = 0; i < bookmarks; ++i) {
+            f.app.workspace().bookmarks.push_back(
+                { "mark" + std::to_string(i), "C:\\home\\alpha" });
+        }
+        f.app.Execute(Cmd::ShowPlaces);
+        f.Paint();
+        RectF found{};
+        for (const test::FakeRenderer::Fill& fill : f.renderer.fills) {
+            if (test::FakeRenderer::SameColor(fill.color, f.app.theme().overlayBg)) {
+                found = fill.rect;
+            }
+        }
+        return found;
+    };
+
+    const RectF one = panelWith(1);
+    const RectF many = panelWith(40);
+    KITE_EXPECT(one.h() > 0.0f);
+    KITE_EXPECT_NEAR(one.t, many.t, 0.01f);
+    KITE_EXPECT_NEAR(one.b, many.b, 0.01f);
+}
+
+// And its filter is a field at body size, not small print in the title row.
+KITE_TEST(appui, the_bookmark_list_field_is_drawn_at_body_size) {
+    Fixture f;
+    GiveBookmarks(f.app);
+    f.renderer.size = { 900.0f, 640.0f };
+    f.app.Execute(Cmd::ShowPlaces);
+    for (char c : std::string("mark")) f.app.OnChar(static_cast<uint32_t>(c));
+    f.Paint();
+
+    bool found = false;
+    for (const test::FakeRenderer::Text& t : f.renderer.TextsAfterFill(f.app.theme().overlayScrim)) {
+        if (t.text != "mark") continue;
+        found = true;
+        KITE_EXPECT(t.role == ui::FontRole::Ui);
+    }
+    KITE_EXPECT(found);
+}
 
 // Carried off the window and let go: the tab asks for a window of its own.
 // Coordinates outside the surface keep arriving because the platform captures

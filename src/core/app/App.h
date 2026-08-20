@@ -12,7 +12,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "core/app/BookmarkPicker.h"
+#include "core/app/PlacePicker.h"
+#include "core/app/CommandPalette.h"
 #include "core/app/Host.h"
 #include "core/app/IconProvider.h"
 #include "core/app/SettingsEditor.h"
@@ -296,21 +297,42 @@ public:
     ///       動かしたら必ずそれを呼ぶこと
     SettingsEditor& settingsEditor() { return settingsEditor_; }
 
-    /// @brief ブックマーク一覧の状態を返す。
-    /// @return ブックマーク一覧への参照
-    const BookmarkPicker& bookmarkPicker() const { return bookmarkPicker_; }
+    /// @brief 行き先の一覧（`Ctrl+P`）の状態を返す。
+    /// @return 一覧への参照
+    const PlacePicker& placePicker() const { return placePicker_; }
 
     /// @brief ブックマーク一覧の状態を返す（変更可能）。
     /// @return ブックマーク一覧への参照
     /// @note UI 層がマウス操作（行の選択、ホイール）と 1 画面の行数の通知に使う。
-    ///       行を選んで実際に移動するのは App::ChooseBookmark() ─ 移動は
+    ///       行を選んで実際に移動するのは App::ChoosePlace() ─ 移動は
     ///       ワークスペースを動かすので、画面の側に持たせない
-    BookmarkPicker& bookmarkPicker() { return bookmarkPicker_; }
+    PlacePicker& placePicker() { return placePicker_; }
 
-    /// @brief ブックマーク一覧で選ばれている行へ移動し、一覧を閉じる。
-    /// @param[in] newTab true なら新しいタブで開く
+    /// @brief 行き先の一覧で選ばれている行へ行き、一覧を閉じる。
+    /// @param[in] newTab true ならブックマークを新しいタブで開く
     /// @note UI 層が行のクリックで呼ぶ。キーボードは Enter / Ctrl+Enter で同じ道を通る
-    void ChooseBookmark(bool newTab);
+    /// @note ブックマークの行なら移動、**開いているタブの行ならそのタブへ移る**
+    ///       （フォーカスもそのペインへ動く）─ 開いてあるものを選んだのだから、
+    ///       同じフォルダをもう 1 枚開くのでは答えになっていない
+    /// @note newTab はタブの行では無視する。すでに開いているタブに «新しいタブで» は無い
+    void ChoosePlace(bool newTab);
+
+    /// @brief コマンドパレットの状態を返す。
+    /// @return パレットへの参照
+    const CommandPalette& commandPalette() const { return commandPalette_; }
+
+    /// @brief コマンドパレットの状態を返す（変更可能）。
+    /// @return パレットへの参照
+    /// @note UI 層がマウス操作（行の選択、ホイール）と 1 画面の行数の通知に使う。
+    ///       行を選んで実際に実行するのは App::RunPaletteCommand() ─ 実行は
+    ///       この画面の外の話なので、画面の側に持たせない
+    CommandPalette& commandPalette() { return commandPalette_; }
+
+    /// @brief パレットで選ばれているコマンドを実行し、パレットを閉じる。
+    /// @note UI 層が行のクリックで呼ぶ。キーボードは Enter で同じ道を通る
+    /// @note 閉じてから実行する ─ 実行したコマンドが入力欄を出したり別の
+    ///       オーバーレイを開いたりするので、パレットが上に残っていてはならない
+    void RunPaletteCommand();
 
     /// @brief 設定画面で変わった値を反映し、settings.ini へ書き出す。
     /// @note SettingsEditor::changed() が指す 1 項目だけを反映する。何も変わって
@@ -399,6 +421,14 @@ public:
     /// @brief ペインにフォーカスを移す。
     /// @param[in] pane フォーカスするペイン。nullptr なら何もしない
     void FocusPane(Pane* pane);
+
+    /// @brief 行き先の一覧に並べる «開いているタブ» を集める。
+    /// @return アクティブなセッションのタブ。今いるタブは含まない
+    /// @note 今いるタブを外すのは、「ここへ行く」が行き先の答えにならないから。
+    ///       他のペインのアクティブなタブは残す ─ 分割中はそれも立派な行き先
+    /// @note 背面のセッションのタブは入れない。あちらへ移るのはセッションの切り替えで、
+    ///       画面に出ていないペインごと入れ替わる別の操作（ROADMAP P3-12）
+    std::vector<PlacePicker::OpenTab> CollectOpenTabs() const;
 
     /// @brief タブを引き抜いて新しいウィンドウで開く。
     /// @param[in] pane タブを持っているペイン。nullptr なら何もしない
@@ -699,7 +729,8 @@ private:
     KeyMap keymap_;
     KeyEditor keyEditor_;
     SettingsEditor settingsEditor_;
-    BookmarkPicker bookmarkPicker_;
+    PlacePicker placePicker_;
+    CommandPalette commandPalette_;
     Strings strings_;
     Theme theme_;
     Ini settings_;

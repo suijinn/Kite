@@ -34,6 +34,10 @@ const DefaultBinding kDefaults[] = {
     { Cmd::ShowKeySettings,     "Ctrl+F1" },
     // 設定画面と、その中身が書かれるフォルダ。同じキーに Alt を足すと後者になる。
     { Cmd::ShowSettings,        "Ctrl+Comma" },
+    // どのエディタでもコマンドパレットはここにある。他と揃える先が Kite の中に無い
+    // 機能なので、外の作法をそのまま借りる ─ 覚えていない人のための入口が、
+    // その人が唯一知っている和音でないのでは順序が逆になる。
+    { Cmd::ShowCommandPalette,  "Ctrl+Shift+P" },
     { Cmd::CancelOverlay,       "Escape" },
 
     // Navigation
@@ -143,12 +147,17 @@ const DefaultBinding kDefaults[] = {
     // Bookmarks
     { Cmd::AddBookmark,         "Ctrl+D" },
     { Cmd::RemoveBookmark,      "Ctrl+Shift+D" },
-    // 番号が尽きた先。9 個目以降のブックマークにキーボードで届く道はこれだけなので、
-    // 数字の列（Alt+Shift+<桁>）に揃えるより打ちやすさを取って修飾を 1 つにしてある。
-    // Ctrl+B のほうがブラウザ流だが、あちらは既にサイドバーの表示切り替え ─ 既定を
-    // 移すと、その行を持つ既存の keys.ini と 1 つの和音を取り合う。
+    // 行き先の窓口（ブックマーク＋開いているタブ）。**移動はファイラーの主動詞**なので、
+    // コマンドパレット（Ctrl+Shift+P）より打ちやすい席をこちらに渡す ─ VS Code が
+    // Ctrl+P を «場所»、Ctrl+Shift+P を «コマンド» に割り当てて短いほうを場所に与えて
+    // いるのと同じ判断（ROADMAP P3-12）。番号（Alt+Shift+<桁>）が尽きた先へ届く唯一の
+    // 道でもある。
+    // **Alt+B から移した。** 既存の keys.ini には bookmark.list の行が書かれているので、
+    // 和音が移るのは新規の環境だけ（Ctrl+N と同じ罠 ─ 案内するときはそれを踏まえて）。
+    // Ctrl+B にはしない ─ あちらは既にサイドバーの表示切り替えで、既定を移すとその行を
+    // 持つ既存の keys.ini と 1 つの和音を取り合う。
     // 文字キー単独と Shift+<文字> は空けたまま残す（ROADMAP P3-4 の型入力ジャンプ）。
-    { Cmd::ShowBookmarks,       "Alt+B" },
+    { Cmd::ShowPlaces,          "Ctrl+P" },
     { Cmd::Bookmark1,           "Alt+Shift+1" },
     { Cmd::Bookmark2,           "Alt+Shift+2" },
     { Cmd::Bookmark3,           "Alt+Shift+3" },

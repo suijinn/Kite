@@ -58,6 +58,10 @@ Windows エクスプローラーの代替を目指す、C++ 製の軽量ファ�
   大きくしても文字が切れない
 - ダーク／ライトテーマ（タイトルバーとシェルメニューも追従）、設定ファイルで配色変更可
 - 日本語／英語 UI（OS 設定から自動判定、`lang.<code>.ini` で追加・上書き可能）
+- 行き先の検索（`Ctrl+P`）── ブックマークと開いているタブを 1 つの入力欄で絞り込んで飛ぶ。
+  番号（`Alt+Shift+1..8`）が尽きた先へキーボードで届く道でもある
+- コマンドパレット（`Ctrl+Shift+P`）── 全コマンドを絞り込んで実行。ラベル・分類・
+  `keys.ini` 上の名前のどれでも当たるので、割り当てを覚えていなくても全操作に届く
 - キーバインドの一覧（`F1`）と GUI 設定（`Ctrl+F1`）、`keys.ini` による変更
 - 設定画面（`Ctrl+,`）── テーマ・言語・文字サイズ・サイドバー・シェルアイコン・
   新しいタブの位置・新しいタブの既定表示。変えた時点で効き、そのまま保存される
@@ -96,6 +100,8 @@ Windows エクスプローラーの代替を目指す、C++ 製の軽量ファ�
 | 戻る／進む | `Alt+Left` / `Alt+Right`（マウスの戻る／進むボタンも可） |
 | パスを編集 | `Ctrl+L` |
 | 絞り込み | `Ctrl+F` |
+| 行き先の一覧（ブックマーク・開いているタブ） | `Ctrl+P` |
+| コマンドパレット | `Ctrl+Shift+P` |
 | コンテキストメニュー | `Menu` キー、または右クリック |
 | 拡張コンテキストメニュー | `Shift+F10`、または `Shift`+右クリック |
 | 現在のフォルダーのコンテキストメニュー | `Ctrl+Menu`（拡張は `Ctrl+Shift+F10`） |
@@ -162,7 +168,8 @@ font_scale = 1.0    ; Ctrl++ / Ctrl+- が書き換える倍率。上の値に掛
 ## ビルドとテスト
 
 Visual Studio 2022（C++ ワークロード）だけあればよい。CMake・Ninja・ctest はすべて
-VS に同梱されているので、追加インストールは不要。**Developer PowerShell for VS 2022** で:
+VS に同梱されているので、追加インストールは不要。**x64 Native Tools Command Prompt
+for VS 2022** から:
 
 ```bash
 cmake --preset release
@@ -171,10 +178,20 @@ ctest --preset release
 ```
 
 出力は `build\release\` に `kite.exe`・`kite_shellhost.exe`・`kite_tests.exe`。
-`debug` プリセットも同じ 3 コマンドで使える。開発者プロンプトでない普通の
-PowerShell からは、MSVC 環境を自前で読み込む `build.ps1 -Run` を使う。
+`debug` プリセットも同じ 3 コマンドで使える。
 
-テストは 18 スイート・348 ケース。リンクするのは `kite_core`（`core/` と `ui/`）
+**Kite は x64 のみで、シェルもそれに合わせる必要がある。** 素の
+「Developer PowerShell for VS 2022」は既定で **x86** を向くので（ショートカットが
+`Launch-VsDevShell.ps1` を引数なしで呼ぶ）、そこからビルドするとコンパイルは通って
+リンクだけが `error LNK2001: 外部シンボル _purecall は未解決です` で落ちる ─ `LIB` が
+32 ビットの CRT を指しているだけで、コードは何も悪くない。Developer PowerShell を使うなら
+`-Arch amd64 -HostArch amd64` を付けて起動する。CMake は configure の時点でこれを検出して
+止めるので、`_purecall` を見る前に理由が出る。
+
+開発者プロンプトを使わない普通の PowerShell からは、`vcvars64.bat` を自前で読み込む
+`build.ps1 -Run` を使う（こちらは常に x64）。
+
+テストは 24 スイート・610 ケース。リンクするのは `kite_core`（`core/` と `ui/`）
 だけで、OS 非依存のはずの層に Windows ヘッダが紛れ込めばテストのビルドが壊れる、
 という形でレイヤ分離そのものを検査している。個別に走らせる場合:
 

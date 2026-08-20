@@ -420,7 +420,10 @@ void App::LoadConfig() {
     }
     keyEditor_.Close();
     // The rows hold positions in the bookmark list that is about to be replaced.
-    bookmarkPicker_.Close();
+    placePicker_.Close();
+    // And these hold labels and chords from the language and keymap being replaced
+    // right now - a palette left open would be offering the previous ones.
+    commandPalette_.Close();
 
     workspace_.bookmarks.clear();
     Ini bookmarksIni;
@@ -1831,8 +1834,13 @@ bool App::OnChar(uint32_t cp) {
     // 設定画面は絞り込みを持たないが、打鍵は残らず飲み込む ─ 出しっぱなしの
     // 画面の裏でプロンプトが文字を受け取っては困る。
     if (settingsEditor_.visible()) return true;
-    if (bookmarkPicker_.visible()) {
-        if (!bookmarkPicker_.HandleChar(cp)) return false;
+    if (placePicker_.visible()) {
+        if (!placePicker_.HandleChar(cp)) return false;
+        host_.Invalidate();
+        return true;
+    }
+    if (commandPalette_.visible()) {
+        if (!commandPalette_.HandleChar(cp)) return false;
         host_.Invalidate();
         return true;
     }
@@ -1932,21 +1940,38 @@ bool App::OnKey(const Chord& chord) {
         host_.Invalidate();
         return consumed;
     }
-    if (bookmarkPicker_.visible()) {
+    if (placePicker_.visible()) {
         // Its own chord still toggles it shut, so the key that opened the list is
         // also the key that leaves it - the same exit the other overlays have.
-        if (keymap_.Lookup(chord) == Cmd::ShowBookmarks) {
-            Execute(Cmd::ShowBookmarks);
+        if (keymap_.Lookup(chord) == Cmd::ShowPlaces) {
+            Execute(Cmd::ShowPlaces);
             return true;
         }
-        switch (bookmarkPicker_.HandleKey(chord)) {
-            case BookmarkPicker::Action::Open: ChooseBookmark(false); break;
-            case BookmarkPicker::Action::OpenNewTab: ChooseBookmark(true); break;
-            case BookmarkPicker::Action::Close: bookmarkPicker_.Close(); break;
-            case BookmarkPicker::Action::None: break;
+        switch (placePicker_.HandleKey(chord)) {
+            case PlacePicker::Action::Open: ChoosePlace(false); break;
+            case PlacePicker::Action::OpenNewTab: ChoosePlace(true); break;
+            case PlacePicker::Action::Close: placePicker_.Close(); break;
+            case PlacePicker::Action::None: break;
         }
         // Everything reaching here was swallowed: picking a folder is not a state
         // to fire unrelated shortcuts from.
+        host_.Invalidate();
+        return true;
+    }
+    if (commandPalette_.visible()) {
+        // Its own chord still toggles it shut, the same exit the other overlays
+        // have. Everything else the palette decides.
+        if (keymap_.Lookup(chord) == Cmd::ShowCommandPalette) {
+            Execute(Cmd::ShowCommandPalette);
+            return true;
+        }
+        switch (commandPalette_.HandleKey(chord)) {
+            case CommandPalette::Action::Run: RunPaletteCommand(); break;
+            case CommandPalette::Action::Close: commandPalette_.Close(); break;
+            case CommandPalette::Action::None: break;
+        }
+        // Swallowed like the bookmark list: a chord reaching the keymap from here
+        // would run one command while another is being picked.
         host_.Invalidate();
         return true;
     }
@@ -2032,19 +2057,84 @@ void App::GotoBookmark(int index) {
     NavigateFocused(workspace_.bookmarks[index].path);
 }
 
-void App::ChooseBookmark(bool newTab) {
-    const int index = bookmarkPicker_.selectedIndex();
-    // The path is taken before the screen goes, because the screen is what holds
-    // the answer to "which one".
-    const std::string target =
-        (index >= 0 && index < static_cast<int>(workspace_.bookmarks.size()))
-            ? workspace_.bookmarks[index].path
-            : std::string();
-    // Closed first: the folder that is about to load may have something to say in
-    // the status line, and a panel still covering the list would be answering a
-    // question the user has already finished asking.
-    bookmarkPicker_.Close();
-    if (!target.empty()) OpenPath(target, newTab);
+// Every tab of the active session except the one being looked at.
+//
+// The pane index is the position in Session::Panes(), which is display order and
+// stable for as long as the chooser is up - nothing can move a pane while an
+// overlay is swallowing the keyboard. The names come from here rather than from
+// the chooser because a tab's display name is App's business (a virtual folder is
+// called whatever the listing brought back).
+std::vector<PlacePicker::OpenTab> App::CollectOpenTabs() const {
+    std::vector<PlacePicker::OpenTab> out;
+    const Session* session = workspace_.activeSession();
+    if (!session) return out;
+
+    const std::vector<Pane*> panes = session->Panes();
+    for (size_t p = 0; p < panes.size(); ++p) {
+        const Pane* pane = panes[p];
+        if (!pane) continue;
+        const bool focused = (pane == session->focus);
+        for (size_t t = 0; t < pane->tabs.size(); ++t) {
+            const Tab* tab = pane->tabs[t].get();
+            if (!tab) continue;
+            // Where the cursor already is. "Go here" is not an answer to
+            // "go where", and offering it would put the initial selection on a
+            // row whose Enter does nothing.
+            if (focused && static_cast<int>(t) == pane->active) continue;
+            PlacePicker::OpenTab open;
+            open.pane = static_cast<int>(p);
+            open.tab = static_cast<int>(t);
+            open.focused = focused;
+            open.name = DisplayName(*tab);
+            open.path = tab->path;
+            out.push_back(std::move(open));
+        }
+    }
+    return out;
+}
+
+void App::ChoosePlace(bool newTab) {
+    // Copied before the screen goes, because the screen is what holds the answer
+    // to "which one" - Close() drops the rows.
+    const PlacePicker::Row* selected = placePicker_.selectedRow();
+    const PlacePicker::Row row = selected ? *selected : PlacePicker::Row{};
+    const bool hasRow = (selected != nullptr);
+
+    // Closed first: what happens next may have something to say in the status line,
+    // and a panel still covering the list would be answering a question the user
+    // has already finished asking.
+    placePicker_.Close();
+    if (!hasRow) {
+        host_.Invalidate();
+        return;
+    }
+
+    if (row.kind == PlacePicker::Kind::Tab) {
+        Session* session = workspace_.activeSession();
+        const std::vector<Pane*> panes = session ? session->Panes() : std::vector<Pane*>{};
+        if (row.pane >= 0 && row.pane < static_cast<int>(panes.size())) {
+            Pane* pane = panes[static_cast<size_t>(row.pane)];
+            // Activated before the focus moves, so the load FocusPane asks for is
+            // the tab that was chosen rather than the one that pane was showing.
+            pane->Activate(row.tab);
+            FocusPane(pane);
+        }
+        host_.Invalidate();
+        return;
+    }
+
+    if (!row.path.empty()) OpenPath(row.path, newTab);
+    host_.Invalidate();
+}
+
+void App::RunPaletteCommand() {
+    const Cmd cmd = commandPalette_.selectedCommand();
+    // Closed before the command runs, not after: what runs may open a prompt on a
+    // row, another overlay, or a shell menu, and every one of those would come up
+    // underneath a panel that is no longer answering anything. The palette's own
+    // command is not in the list, so this cannot loop back in here.
+    commandPalette_.Close();
+    if (cmd != Cmd::None) Execute(cmd);
     host_.Invalidate();
 }
 
@@ -2272,7 +2362,8 @@ void App::Execute(Cmd cmd) {
             if (keyHelp_) {
                 keyEditor_.Close();
                 settingsEditor_.Close();
-                bookmarkPicker_.Close();
+                placePicker_.Close();
+                commandPalette_.Close();
             }
             host_.Invalidate();
             break;
@@ -2284,7 +2375,8 @@ void App::Execute(Cmd cmd) {
                 // them on screen at once would only be confusing.
                 keyHelp_ = false;
                 settingsEditor_.Close();
-                bookmarkPicker_.Close();
+                placePicker_.Close();
+                commandPalette_.Close();
                 keyEditor_.Open(strings_, keymap_);
             }
             host_.Invalidate();
@@ -2295,7 +2387,8 @@ void App::Execute(Cmd cmd) {
             } else {
                 keyHelp_ = false;
                 keyEditor_.Close();
-                bookmarkPicker_.Close();
+                placePicker_.Close();
+                commandPalette_.Close();
                 // 開くたびに現在値から作り直す。設定は画面の外（Ctrl+Shift+M の
                 // テーマ切り替え、Ctrl++ の文字サイズ）からも変わる。
                 settingsEditor_.Open(strings_, CollectSettings());
@@ -2303,9 +2396,25 @@ void App::Execute(Cmd cmd) {
             }
             host_.Invalidate();
             break;
+        case Cmd::ShowCommandPalette:
+            if (commandPalette_.visible()) {
+                commandPalette_.Close();
+            } else {
+                keyHelp_ = false;
+                keyEditor_.Close();
+                settingsEditor_.Close();
+                placePicker_.Close();
+                // 開くたびに作り直す。ラベルは言語で変わり、和音は Ctrl+F1 で変わり、
+                // 番号で指す 8 個に添える行き先は Ctrl+D で変わる。
+                commandPalette_.Open(strings_, keymap_, workspace_.bookmarks);
+            }
+            host_.Invalidate();
+            break;
         case Cmd::CancelOverlay:
-            if (bookmarkPicker_.visible()) {
-                bookmarkPicker_.Close();
+            if (commandPalette_.visible()) {
+                commandPalette_.Close();
+            } else if (placePicker_.visible()) {
+                placePicker_.Close();
             } else if (settingsEditor_.visible()) {
                 settingsEditor_.Close();
             } else if (keyEditor_.visible()) {
@@ -2788,19 +2897,25 @@ void App::Execute(Cmd cmd) {
                 dirty_ = true;
             }
             break;
-        case Cmd::ShowBookmarks:
-            if (bookmarkPicker_.visible()) {
-                bookmarkPicker_.Close();
-            } else if (workspace_.bookmarks.empty()) {
-                // An empty panel is the same as a key that does nothing, except it
-                // also has to be dismissed. Say what is missing and how to add it.
-                SetStatus(strings_.Get("ui.no_bookmarks"));
+        case Cmd::ShowPlaces:
+            if (placePicker_.visible()) {
+                placePicker_.Close();
             } else {
-                keyHelp_ = false;
-                keyEditor_.Close();
-                settingsEditor_.Close();
-                bookmarkPicker_.Open(workspace_.bookmarks, keymap_,
-                                     tab ? tab->path : std::string());
+                std::vector<PlacePicker::OpenTab> tabs = CollectOpenTabs();
+                if (workspace_.bookmarks.empty() && tabs.empty()) {
+                    // An empty panel is the same as a key that does nothing, except
+                    // it also has to be dismissed. Say what is missing and how to
+                    // add it - with no bookmarks and nothing else open, that is the
+                    // only thing left to say.
+                    SetStatus(strings_.Get("ui.goto_none"));
+                } else {
+                    keyHelp_ = false;
+                    keyEditor_.Close();
+                    settingsEditor_.Close();
+                    commandPalette_.Close();
+                    placePicker_.Open(strings_, keymap_, workspace_.bookmarks, tabs,
+                                         tab ? tab->path : std::string());
+                }
             }
             host_.Invalidate();
             break;
