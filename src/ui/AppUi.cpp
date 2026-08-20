@@ -110,6 +110,10 @@ bool AppUi::IsTabBarHit(Hit kind) {
 
 void AppUi::Paint(Renderer& r) {
     regions_.clear();
+    // 決め直すのは毎フレーム。入力欄は開いたり閉じたりするので、前のフレームの
+    // 位置が残っていると、閉じた欄のあった場所に IME の窓が出る。
+    caretInField_ = false;
+    listCaretValid_ = false;
     const Theme& th = app_.theme();
     const SizeF size = r.surfaceSize();
     const RectF full = { 0.0f, 0.0f, size.w, size.h };
@@ -174,6 +178,11 @@ void AppUi::Paint(Renderer& r) {
     if (app_.settingsEditor().visible()) PaintSettings(r, full);
     if (app_.placePicker().visible()) PaintPlaces(r, full);
     if (app_.commandPalette().visible()) PaintCommandPalette(r, full);
+
+    // 入力欄が 1 つも出ていないフレームの答えは、フォーカスされた一覧のカーソル行。
+    // 型入力ジャンプ（ROADMAP P3-4）は名前を IME で打てるので、変換窓の行き先が
+    // 要る ─ 前に開いていた欄の跡地に出すよりは、今まさに探している行の脇に出す。
+    if (!caretInField_ && listCaretValid_) caret_ = listCaret_;
 }
 
 void AppUi::PaintDragOverlay(Renderer& r) {
@@ -1097,6 +1106,13 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
         const RectF icon = { row.l + 6.0f, row.t, row.l + 6.0f + IconCell(th), row.b };
         const RectF nameBox = { icon.r + 6.0f, row.t, colName.r, row.b };
 
+        // 入力欄が 1 つも出ていないときの IME の行き先（Paint() が拾う）。型入力
+        // ジャンプは名前を IME で打てるので、変換窓は «今探している行» の脇に出す。
+        if (isCursor && focused) {
+            listCaret_ = { nameBox.l, row.t, nameBox.l, row.b };
+            listCaretValid_ = true;
+        }
+
         if (!entry) {
             // The ".." row. No shell icon is asked for: the arrow says "up" more
             // plainly than the parent folder's own icon would, and the row is a
@@ -1229,7 +1245,13 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
     // the field is already sitting on.
     std::string right;
     const Prompt& p = app_.prompt();
-    if (p.isInline() && p.kind != PromptKind::Path && !p.labelKey.empty()) {
+    // 入力欄を持たない画面で変換している ─ 一覧の上での型入力ジャンプがこれ。行の
+    // どれも書き換わらないので、ここで言わなければ打った文字はどこにも出ない
+    // （打ちかけの文字列をステータス行に出しているのと同じ理由で、しかも変換中は
+    // ジャンプすら起きていない）。欄が描いたのならそちらが答えなので出さない。
+    if (app_.composition().active() && !caretInField_) {
+        right = str.Format("ui.composing", { app_.composition().text });
+    } else if (p.isInline() && p.kind != PromptKind::Path && !p.labelKey.empty()) {
         right = str.Get(p.labelKey);
     } else if (!app_.statusMessage().empty() && !app_.statusExpired()) {
         right = app_.statusMessage();
@@ -1249,28 +1271,93 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
 void AppUi::PaintPromptField(Renderer& r, const RectF& field, FontRole role) {
     const Theme& th = app_.theme();
     const Prompt& p = app_.prompt();
+    const Composition& comp = app_.composition();
+
+    // 変換中の文字列は、確定を待たずに «入力欄の中身» として描く。IME に描かせると、
+    // その窓は自前のフォントと行送りで文字を置くので、同じ行の中で数ピクセルずれた
+    // 位置に出て、確定した瞬間に跳ぶ。
+    //
+    // 見せるのは «確定した後の形» ─ 選択があればそれは置き換えられるので、変換中から
+    // 消しておく。Enter を押して初めて消えるのでは、何が起きるのかが押すまで分からない。
+    std::string shown = p.text;
+    size_t at = p.caret;
+    if (comp.active()) {
+        at = p.selBegin();
+        shown.erase(at, p.selEnd() - p.selBegin());
+        shown.insert(at, comp.text);
+    }
+    // 幅は必ず «画面に出ている 1 本の文字列» の接頭辞から測る。断片を別々に測って
+    // 足すと、詰め（カーニング）が入った瞬間に全体の幅と合わなくなる。
+    auto widthTo = [&](size_t bytes) {
+        return field.l + r.MeasureText(std::string_view(shown).substr(0, bytes), role);
+    };
+
+    CompositionRun run;
+    if (comp.active()) {
+        run.from = widthTo(at);
+        run.to = widthTo(at + comp.text.size());
+        if (comp.hasTarget()) {
+            run.targetFrom = widthTo(at + comp.targetBegin);
+            run.targetTo = widthTo(at + comp.targetEnd);
+        }
+    }
 
     // The selection goes under the text rather than recolouring it: one
     // DrawText call cannot paint a run in two colours, and splitting the string
     // into three would measure each piece on its own - which drifts apart from
     // the whole once kerning is involved.
-    if (p.hasSelection()) {
-        const float from =
-            r.MeasureText(std::string_view(p.text).substr(0, p.selBegin()), role);
-        const float to = r.MeasureText(std::string_view(p.text).substr(0, p.selEnd()), role);
-        r.FillRect({ field.l + from, field.t + 3.0f, field.l + to, field.b - 3.0f },
+    if (p.hasSelection() && !comp.active()) {
+        r.FillRect({ widthTo(p.selBegin()), field.t + 3.0f, widthTo(p.selEnd()), field.b - 3.0f },
                    th.textSelection);
     }
+    PaintCompositionBack(r, field, run, role);
 
-    r.DrawText(p.text, field, th.text, role, TextAlign::Left);
+    r.DrawText(shown, field, th.text, role, TextAlign::Left);
+    PaintCompositionMarks(r, field, run, role);
 
     // The caret is the text colour, not the accent: it is a letter-shaped mark
     // in a run of letters, and every field on the desktop draws it that way.
     // The accent says where the keyboard is; the bar's own border already does.
-    const float caretX =
-        field.l + r.MeasureText(std::string_view(p.text).substr(0, p.caret), role);
+    const float caretX = widthTo(comp.active() ? at + comp.caret : p.caret);
     r.FillRect({ caretX, field.t + 4.0f, caretX + 1.5f, field.b - 4.0f }, th.text);
-    caret_ = { caretX, field.t };
+    caret_ = { caretX, field.t, caretX, field.b };
+    caretInField_ = true;
+}
+
+// 変換中の文字列に印を付ける «行» ─ 器の下端ではなく、文字が実際に載っている高さ。
+//
+// チューザの入力欄は行の 1.6 倍の高さがあり、文字はその真ん中に置かれるので、器の
+// 下辺に下線を引くと下線だけが文字から離れて浮く。
+static RectF CompositionLine(Renderer& r, const RectF& field, FontRole role) {
+    const float h = std::min(field.h(), r.LineHeight(role));
+    const float mid = field.center().y;
+    return { field.l, mid - h * 0.5f, field.r, mid + h * 0.5f };
+}
+
+// 変換中の文字列の下敷き。文字より先に塗るので、下線とは別の関数になっている。
+//
+// 注目節（今まさに変換している節）だけを一段強く見せる ─ 節が 2 つ以上あるとき、
+// どれを変換しているのかは IME の窓を消した以上ここでしか分からない。色に
+// textSelection を使うのは、入力欄の中で «今この範囲の話をしている» と言う色が
+// すでにそれだから（一覧の行の選択とは別の問いなので、そちらの無彩色ではない）。
+void AppUi::PaintCompositionBack(Renderer& r, const RectF& field, const CompositionRun& run,
+                                 FontRole role) {
+    if (!run.active() || !run.hasTarget()) return;
+    const RectF line = CompositionLine(r, field, role);
+    r.FillRect({ run.targetFrom, line.t, run.targetTo, line.b }, app_.theme().textSelection);
+}
+
+// 下線 1 本が «まだ確定していない» の共通語彙。注目節はもう一段太く、アクセント色で
+// 引く ─ 変換対象がどれかは、下敷きだけでは縞の乗った行の上で読み取りにくい。
+void AppUi::PaintCompositionMarks(Renderer& r, const RectF& field, const CompositionRun& run,
+                                  FontRole role) {
+    if (!run.active()) return;
+    const Theme& th = app_.theme();
+    const RectF line = CompositionLine(r, field, role);
+    r.FillRect({ run.from, line.b - 1.0f, run.to, line.b }, th.textDim);
+    if (run.hasTarget()) {
+        r.FillRect({ run.targetFrom, line.b - 2.0f, run.targetTo, line.b }, th.accent);
+    }
 }
 
 // A field drawn over the thing it is editing - a list row, or a session chip.
@@ -1570,12 +1657,16 @@ void AppUi::PaintKeySettings(Renderer& r, const RectF& area) {
     r.DrawText(title, { titleBox.l, titleBox.t, titleBox.l + titleW, titleBox.b }, th.text,
                FontRole::UiBold, TextAlign::Left);
 
-    const std::string search =
-        editor.filter().empty() ? str.Get("ui.key_settings_search_hint")
-                                : str.Format("ui.key_settings_filter", { editor.filter() });
+    // 変換中の文字列も続けて出す。ここは入力欄の形をしていないので下線も引かないが、
+    // 黙っていると «キーが効いていない» と見分けが付かない ─ ラベルは日本語なので、
+    // この絞り込みこそ IME で打たれる。
+    const std::string typed = editor.filter() + app_.composition().text;
+    const std::string search = typed.empty()
+                                   ? str.Get("ui.key_settings_search_hint")
+                                   : str.Format("ui.key_settings_filter", { typed });
     if (titleW + r.MeasureText(search, FontRole::UiSmall) <= titleBox.w()) {
         r.DrawText(search, { titleBox.l + titleW, titleBox.t, titleBox.r, titleBox.b },
-                   editor.filter().empty() ? th.textDim.alpha(0.6f) : th.text, FontRole::UiSmall,
+                   typed.empty() ? th.textDim.alpha(0.6f) : th.text, FontRole::UiSmall,
                    TextAlign::Right);
     }
 
@@ -1884,17 +1975,41 @@ AppUi::PickerFrame AppUi::PaintPickerFrame(Renderer& r, const RectF& area,
     r.StrokeRect(fieldBox, th.accent, 1.0f);
 
     const RectF inner = fieldBox.inset(10.0f, 0.0f);
-    if (chrome.filter.empty()) {
+    // 変換中の文字列は絞り込みの末尾に続けて描く（この入力欄のキャレットは常に末尾に
+    // ある）。確定するまで PickerList には渡さない ─ 未確定の文字で一覧が虫食いに
+    // なると、変換を確定する前に候補が全部消えたように見える。
+    const Composition& comp = app_.composition();
+    const std::string shown = chrome.filter + comp.text;
+    auto widthTo = [&](size_t bytes) {
+        return inner.l + r.MeasureText(std::string_view(shown).substr(0, bytes), FontRole::Ui);
+    };
+
+    CompositionRun run;
+    if (comp.active()) {
+        run.from = widthTo(chrome.filter.size());
+        run.to = widthTo(shown.size());
+        if (comp.hasTarget()) {
+            run.targetFrom = widthTo(chrome.filter.size() + comp.targetBegin);
+            run.targetTo = widthTo(chrome.filter.size() + comp.targetEnd);
+        }
+    }
+    PaintCompositionBack(r, fieldBox, run, FontRole::Ui);
+
+    if (shown.empty()) {
         // Past the caret, so the two do not sit on the same pixel.
         r.DrawText(chrome.placeholder, { inner.l + 12.0f, inner.t, inner.r, inner.b },
                    th.textDim.alpha(0.6f), FontRole::Ui, TextAlign::Left);
     } else {
-        r.DrawText(chrome.filter, inner, th.text, FontRole::Ui, TextAlign::Left);
+        r.DrawText(shown, inner, th.text, FontRole::Ui, TextAlign::Left);
     }
+    PaintCompositionMarks(r, fieldBox, run, FontRole::Ui);
+
     // The caret is the text colour, not the accent: it is a letter-shaped mark in
     // a run of letters, and the border already says where the keyboard is.
-    const float caretX = inner.l + r.MeasureText(chrome.filter, FontRole::Ui) + 1.0f;
+    const float caretX = widthTo(chrome.filter.size() + comp.caret) + 1.0f;
     r.FillRect({ caretX, fieldBox.t + 5.0f, caretX + 1.5f, fieldBox.b - 5.0f }, th.text);
+    caret_ = { caretX, fieldBox.t, caretX, fieldBox.b };
+    caretInField_ = true;
 
     const RectF footer = { panel.l + 20.0f, panel.b - 26.0f, panel.r - 20.0f, panel.b - 6.0f };
     r.DrawText(chrome.hint, footer, th.textDim, FontRole::UiSmall, TextAlign::Left);

@@ -162,12 +162,6 @@ public:
     ///       読まず、終了時にも書かない（App::SetStandalone()）
     virtual bool OpenNewWindow(const std::string& dir) = 0;
 
-    /// @brief IME の変換候補ウィンドウを出す位置を指定する。
-    /// @param[in] x クライアント座標の X（DIP）
-    /// @param[in] y クライアント座標の Y（DIP）
-    /// @note 日本語入力が画面の隅に取り残されないようにするために必要
-    virtual void SetImePosition(float x, float y) = 0;
-
     /// @brief マウスカーソルの形状を設定する。
     /// @param[in] shape 0=矢印、1=ハンド、2=左右リサイズ、3=上下リサイズ
     virtual void SetCursorShape(int shape) = 0;

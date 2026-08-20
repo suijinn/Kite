@@ -2458,3 +2458,75 @@ KITE_TEST(app, a_folder_that_goes_away_under_the_cursor_drops_its_rows) {
     KITE_EXPECT(h.tab()->listing.status == fs::Status::NotFound);
     KITE_EXPECT_EQ(h.tab()->ItemCount(), 0);
 }
+
+// ---------------------------------------------------------------------------
+// IME composition
+//
+// 未確定の文字列は App が預かり、UI 層が入力欄の中に描く（IME には描かせない）。
+// ここで検査するのは «誰から受け取り、いつ捨てるか» のほうで、どう見えるかは
+// test_appui.cpp が見ている。
+// ---------------------------------------------------------------------------
+
+KITE_TEST(app, a_composition_is_kept_even_with_no_field_to_put_it_in) {
+    Harness h;
+    // 一覧の上で変換していることがある ─ 型入力ジャンプの名前は IME で打てる。
+    // IME に描かせる道を残していない以上（WinWindow の WM_IME_SETCONTEXT）、ここで
+    // 捨てるとその文字はどこにも出ない。出す先はステータス行のほう。
+    KITE_EXPECT_FALSE(h.app.acceptsText());
+    h.app.SetComposition("にほんご", 12, 0, 0);
+    KITE_EXPECT(h.app.composition().active());
+
+    // 入力欄が開けば «文字を受け取る先» ができ、描くのはそちらになる。
+    h.app.Execute(Cmd::Rename);
+    KITE_EXPECT(h.app.acceptsText());
+    h.app.SetComposition("にほんご", 12, 0, 6);
+    KITE_EXPECT_EQ(h.app.composition().text, std::string("にほんご"));
+    KITE_EXPECT(h.app.composition().hasTarget());
+}
+
+KITE_TEST(app, the_confirmation_prompt_takes_keys_rather_than_text) {
+    Harness h;
+    h.app.Execute(Cmd::CursorDown);
+    h.app.Execute(Cmd::DeleteToRecycle);
+    KITE_EXPECT(h.app.prompt().isConfirm());
+    // あそこの文字列は件数であって、編集するものではない。
+    KITE_EXPECT_FALSE(h.app.acceptsText());
+}
+
+KITE_TEST(app, the_composition_is_dropped_when_the_field_goes_away) {
+    Harness h;
+    h.app.Execute(Cmd::Rename);
+    h.app.SetComposition("あ", 3, 0, 3);
+    KITE_EXPECT(h.app.composition().active());
+
+    // 欄そのものが消えた以上、未確定の文字列は行き場を失う。残しておくと、次に
+    // 開いた欄の中にそれが現れる。
+    h.app.CancelInlineEdit();
+    KITE_EXPECT_FALSE(h.app.composition().active());
+    h.app.Execute(Cmd::Rename);
+    KITE_EXPECT_FALSE(h.app.composition().active());
+}
+
+KITE_TEST(app, committing_a_conversion_puts_the_characters_in_the_field) {
+    Harness h;
+    h.app.Execute(Cmd::Rename);
+    h.app.prompt().SelectAll();
+    h.app.SetComposition("あ", 3, 0, 3);
+
+    // プラットフォーム側の順序どおり ─ 未確定を捨ててから、確定した文字を
+    // 1 文字ずつ OnChar へ。選択は最初の 1 文字が置き換える。
+    h.app.EndComposition();
+    h.app.OnChar(0x3042);  // あ
+    KITE_EXPECT_FALSE(h.app.composition().active());
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("あ"));
+}
+
+KITE_TEST(app, a_composition_never_points_past_its_own_text) {
+    Harness h;
+    h.app.Execute(Cmd::Rename);
+    // IME が数えるのは UTF-16 の符号単位で、こちらはバイト。取り違えた値が来ても
+    // 添字として使える形に丸めてから預かる ─ 描く側は毎フレームこれで文字列を切る。
+    h.app.SetComposition("あ", 99, 50, 99);
+    KITE_EXPECT_EQ(h.app.composition().caret, size_t{ 3 });
+    KITE_EXPECT_EQ(h.app.composition().targetEnd, size_t{ 3 });
+}
