@@ -71,9 +71,6 @@ public:
     ///       ─ 開いたウィンドウは開いた側より長生きしてよい
     bool OpenNewWindow(const std::string& dir) override;
 
-    /// @copydoc IHost::SetImePosition
-    void SetImePosition(float x, float y) override;
-
     /// @copydoc IHost::SetCursorShape
     void SetCursorShape(int shape) override;
 
@@ -100,6 +97,10 @@ private:
     void DispatchMouse(ui::MouseEvent::Type type, int button, int clicks, WPARAM wparam,
                        LPARAM lparam, bool screenCoords = false);
     void ApplyDarkTitleBar();
+    void UpdateImeWindow();
+    void ReadComposition();
+    void CommitComposition();
+    void CancelComposition();
     void SavePlacement();
     void EnableDragAndDrop();
     void RunPendingDrop();
@@ -116,7 +117,12 @@ private:
     int titleBarDark_ = -1;  ///< タイトルバーに適用済みのテーマ。-1 は未適用
     std::wstring title_;     ///< 最後に指定されたタイトル。ウィンドウ作成前の指定も保持する
     uint32_t highSurrogate_ = 0;
-    PointF imeCaret_{ 0.0f, 0.0f };
+    /// キャレットが立っている場所。IME の窓（変換窓・候補一覧）はここを基準に置く。
+    RectF imeCaret_{};
+    /// 変換中か。未確定の文字列を描くのは常に Kite 自身なので、IME の窓は出ていない
+    bool composing_ = false;
+    /// その変換が入力欄の中で始まったか。欄が畳まれたら道連れにするかの判断に使う
+    bool compositionInField_ = false;
     int cursorShape_ = 0;
 
     /// WM_MOUSELEAVE を予約済みか。TrackMouseEvent は 1 回で 1 通しか送らない

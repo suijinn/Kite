@@ -121,6 +121,30 @@ struct Prompt {
     }
 };
 
+/// @brief IME で変換中（未確定）の文字列。
+///
+/// 確定するまで Prompt::text にも絞り込み文字列にも入らない ─ 未確定の文字は
+/// IME の都合で丸ごと消えうるので、入れてしまうと `Backspace` の意味も一覧の
+/// 絞り込み結果も変換の途中経過で揺れる。
+///
+/// **描くのは Kite 自身で、IME には描かせない。** IME の変換窓は自前のフォントと
+/// 行送りで文字を置くので、入力欄の中の文字と数ピクセルずれた位置に出る
+/// （「確定していない状態だと文字の位置がずれる」と報告された形がこれ）。
+struct Composition {
+    std::string text;        ///< 変換中の文字列（UTF-8）。空なら変換中ではない
+    size_t caret = 0;        ///< text 内のキャレット位置。text へのバイト添字
+    size_t targetBegin = 0;  ///< 注目節の先頭。text へのバイト添字
+    size_t targetEnd = 0;    ///< 注目節の終端。targetBegin と等しければ注目節なし
+
+    /// @brief 変換中かを判定する。
+    /// @return 変換中なら true
+    bool active() const { return !text.empty(); }
+
+    /// @brief 注目節（今まさに変換している節）があるかを判定する。
+    /// @return あれば true
+    bool hasTarget() const { return targetBegin < targetEnd && targetEnd <= text.size(); }
+};
+
 /// @brief サイドバーの区画。折り畳みはこの単位で行う。
 enum class SidebarSection : uint8_t {
     QuickAccess,  ///< クイックアクセス
@@ -246,6 +270,32 @@ public:
     /// @brief 入力欄の状態を返す（変更可能）。
     /// @return 入力欄への参照
     Prompt& prompt() { return prompt_; }
+
+    /// @brief IME で変換中の文字列を返す。
+    /// @return 変換中の文字列。変換していなければ Composition::active() が false
+    /// @note 描くのは UI 層。入力欄の文字列のキャレット位置に挿し込んだ形で見せる
+    const Composition& composition() const { return composition_; }
+
+    /// @brief IME で変換中の文字列を差し替える。
+    /// @param[in] text 変換中の文字列（UTF-8）。空なら変換の終了と同じ
+    /// @param[in] caret text 内のキャレット位置。バイト添字。末尾に丸める
+    /// @param[in] targetBegin 注目節の先頭。バイト添字
+    /// @param[in] targetEnd 注目節の終端。バイト添字。begin と等しければ注目節なし
+    /// @note 入力欄が出ていないときも受け取る ─ 一覧の上（型入力ジャンプ）で変換して
+    ///       いる場合で、そのときはステータス行が «変換中» として出す。IME に描かせる
+    ///       道を残さない以上、どの画面にも描く先が要る
+    void SetComposition(std::string text, size_t caret, size_t targetBegin, size_t targetEnd);
+
+    /// @brief 変換中の文字列を捨てる。
+    /// @note 確定した文字は OnChar() で 1 文字ずつ入る。ここは «無かったことにする» 側
+    void EndComposition();
+
+    /// @brief 文字入力を受け取る入力欄が画面に出ているかを返す。
+    /// @return 出ていれば true
+    /// @note プラットフォーム層が「入力欄ごと消えた変換を打ち切るか」を決めるのに使う。
+    ///       削除の確認（Yes/No）と、和音を取り込んでいる最中のキー設定画面は false ─
+    ///       どちらも打った «文字» ではなく打った «キー» が答えなので、入力欄ではない
+    bool acceptsText() const;
 
     /// @brief パス入力の補完状態を返す。
     /// @return 補完状態への参照
@@ -757,6 +807,7 @@ private:
     UndoStack undo_;
 
     Prompt prompt_;
+    Composition composition_;
     PathComplete complete_;
     TypeAhead typeAhead_;
     // 直前の打鍵をコマンドが実行した、という印。TranslateMessage は

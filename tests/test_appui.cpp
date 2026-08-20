@@ -2229,3 +2229,138 @@ KITE_TEST(appui, a_tab_dropped_on_the_session_bar_stays_where_it_was) {
     KITE_EXPECT_EQ(f.pane()->tabs.size(), size_t{ 2 });
     KITE_EXPECT_EQ(f.pane()->tabs[1]->path, std::string("C:\\home\\alpha"));
 }
+
+// --- IME の未確定文字列 ------------------------------------------------------
+//
+// 変換中の文字は入力欄の «中身» として描く。IME に描かせると、その窓は自前の
+// フォントと行送りで文字を置くので同じ行の中で数ピクセルずれ、確定した瞬間に跳ぶ
+// （利用者からの報告がこの形）。だから見るのは色ではなく置かれた場所で、ここでしか
+// 検査できない。
+
+KITE_TEST(appui, a_conversion_in_progress_is_drawn_inside_the_field) {
+    Fixture f;
+    f.app.Execute(Cmd::NewFolder);
+    f.app.SetComposition("にほんご", 12, 0, 0);
+    f.Paint();
+
+    // 借りた行の入力欄の中。行の «上» でも窓の下端でもない。
+    const test::FakeRenderer::Text* typed = f.TextNamed("にほんご");
+    KITE_EXPECT(typed != nullptr);
+    if (!typed) return;
+    KITE_EXPECT_FALSE(FieldBoxUnder(f, typed->ink).empty());
+    KITE_EXPECT(f.pane()->listArea.contains(typed->ink.l + 1.0f, typed->ink.center().y));
+
+    // 下線 1 本が «まだ確定していない» の共通語彙。文字の下に、文字の幅だけ引く。
+    const Theme& th = f.app.theme();
+    KITE_EXPECT_EQ(f.renderer.CountFills(th.textDim), 1);
+    for (const test::FakeRenderer::Fill& fill : f.renderer.fills) {
+        if (!test::FakeRenderer::SameColor(fill.color, th.textDim)) continue;
+        KITE_EXPECT_NEAR(fill.rect.l, typed->ink.l, 1.0f);
+        KITE_EXPECT_NEAR(fill.rect.r, typed->ink.r, 1.0f);
+        KITE_EXPECT(fill.rect.h() <= 2.0f);
+    }
+}
+
+KITE_TEST(appui, the_caret_stands_after_the_text_being_converted) {
+    Fixture f;
+    f.app.Execute(Cmd::NewFolder);
+    f.Paint();
+    const RectF empty = f.ui.caretRect();
+
+    // キャレットは変換中の文字列の «中» を指す（IME が数えている位置）。ここが
+    // 動かないと、候補一覧は打ち始めた場所に取り残される。
+    f.app.SetComposition("にほんご", 6, 0, 0);
+    f.Paint();
+    const RectF mid = f.ui.caretRect();
+    KITE_EXPECT(mid.l > empty.l);
+
+    f.app.SetComposition("にほんご", 12, 0, 0);
+    f.Paint();
+    KITE_EXPECT(f.ui.caretRect().l > mid.l);
+    // 高さは行そのもの。候補一覧に «この矩形を避けろ» と言うために要る。
+    KITE_EXPECT(f.ui.caretRect().b > f.ui.caretRect().t);
+}
+
+KITE_TEST(appui, the_clause_being_converted_is_marked_apart_from_the_rest) {
+    Fixture f;
+    f.app.Execute(Cmd::NewFolder);
+    const Theme& th = f.app.theme();
+
+    // 注目節なし ─ 下線だけで、下敷きは無い。
+    f.app.SetComposition("にほんご", 12, 0, 0);
+    f.Paint();
+    KITE_EXPECT_EQ(f.renderer.CountFills(th.textSelection), 0);
+
+    // 後半の節を変換中。節が 2 つ以上あるとき、どれを変換しているのかを言えるのは
+    // IME の窓を消した以上ここだけ。
+    f.app.SetComposition("にほんご", 12, 6, 12);
+    f.Paint();
+    KITE_EXPECT_EQ(f.renderer.CountFills(th.textSelection), 1);
+    const test::FakeRenderer::Text* typed = f.TextNamed("にほんご");
+    KITE_EXPECT(typed != nullptr);
+    if (!typed) return;
+    for (const test::FakeRenderer::Fill& fill : f.renderer.fills) {
+        if (!test::FakeRenderer::SameColor(fill.color, th.textSelection)) continue;
+        // 文字列の後ろ半分だけ。全体に敷いたのでは «どれを» の答えになっていない。
+        KITE_EXPECT(fill.rect.l > typed->ink.l);
+        KITE_EXPECT_NEAR(fill.rect.r, typed->ink.r, 1.0f);
+    }
+}
+
+KITE_TEST(appui, converting_over_a_selection_shows_what_the_commit_will_leave) {
+    Fixture f;
+    const std::string name = f.tab()->CursorEntry()->name;
+    f.app.Execute(Cmd::Rename);
+    f.app.prompt().SelectAll();
+    f.app.SetComposition("にほんご", 12, 0, 0);
+    f.Paint();
+
+    // 確定すれば選択は置き換えられる。Enter を押すまで元の名前が残っていると、
+    // 何が起きるのかが押すまで分からない。
+    KITE_EXPECT(f.TextNamed("にほんご") != nullptr);
+    KITE_EXPECT(f.TextNamed(name) == nullptr);
+}
+
+KITE_TEST(appui, the_palette_shows_the_conversion_without_filtering_on_it) {
+    Fixture f;
+    f.app.Execute(Cmd::ShowCommandPalette);
+    f.Paint();
+    const int rowsBefore = static_cast<int>(f.app.commandPalette().rows().size());
+
+    f.app.SetComposition("たぶ", 6, 0, 6);
+    f.Paint();
+
+    KITE_EXPECT(f.TextNamed("たぶ") != nullptr);
+    // 未確定の文字で一覧を削らない。確定する前に候補が全部消えたように見える。
+    KITE_EXPECT(f.app.commandPalette().filter().empty());
+    KITE_EXPECT_EQ(static_cast<int>(f.app.commandPalette().rows().size()), rowsBefore);
+}
+
+KITE_TEST(appui, a_conversion_over_the_list_is_read_out_in_the_status_bar) {
+    Fixture f;
+    // 一覧の上での変換 ─ 型入力ジャンプの名前は IME で打てる。行はどれも
+    // 書き換わらないので、ここで言わなければ打った文字はどこにも出ない。
+    f.app.SetComposition("にほんご", 12, 0, 0);
+    f.Paint();
+
+    const std::string said = f.app.strings().Format("ui.composing", { "にほんご" });
+    const test::FakeRenderer::Text* status = f.TextNamed(said);
+    KITE_EXPECT(status != nullptr);
+    if (!status) return;
+    KITE_EXPECT(status->ink.t >= f.renderer.size.h - f.app.theme().statusBarHeight - 0.01f);
+}
+
+KITE_TEST(appui, with_no_field_open_the_ime_is_pointed_at_the_cursor_row) {
+    Fixture f;
+    f.Paint();
+
+    // 型入力ジャンプは名前を IME で打てるので、変換窓の行き先が要る。前に開いて
+    // いた欄の跡地ではなく、今まさに探している行の脇。
+    const test::FakeRenderer::Text* row = f.TextNamed(f.tab()->CursorEntry()->name);
+    KITE_EXPECT(row != nullptr);
+    if (!row) return;
+    const RectF caret = f.ui.caretRect();
+    KITE_EXPECT(caret.t <= row->ink.center().y);
+    KITE_EXPECT(caret.b >= row->ink.center().y);
+    KITE_EXPECT_NEAR(caret.l, row->ink.l, 1.0f);
+}

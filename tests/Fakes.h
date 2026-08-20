@@ -424,7 +424,6 @@ public:
         newWindows.push_back(dir);
         return canOpenNewWindow;
     }
-    void SetImePosition(float, float) override {}
     void SetCursorShape(int) override {}
     bool ClientToScreen(float x, float y, int& screenX, int& screenY) override {
         lastClientX = x;

@@ -1471,6 +1471,7 @@ void App::BeginPrompt(PromptKind kind, const char* labelKey, const std::string& 
     prompt_.text = initial;
     prompt_.SetCaret(initial.size());
     prompt_.pendingPaths.clear();
+    composition_ = Composition{};
     complete_.Reset();
     completeToken_ = 0;
     completeRequested_.clear();
@@ -1490,9 +1491,49 @@ void App::CancelPrompt() {
         }
     }
     prompt_ = Prompt{};
+    // 欄そのものが消えるので、そこで変換していた未確定文字列も行き場を失う。
+    composition_ = Composition{};
     complete_.Reset();
     completeToken_ = 0;
     completeRequested_.clear();
+    host_.Invalidate();
+}
+
+// ---------------------------------------------------------------------------
+// IME composition
+//
+// The composition string is drawn by Kite, in the field it is being typed into,
+// which is why it has to live here at all: the platform hands it over instead of
+// letting the IME paint its own window over the client area.
+// ---------------------------------------------------------------------------
+
+bool App::acceptsText() const {
+    // 設定画面は値を選ぶ画面で、打鍵は残らず飲み込む ─ 文字を入れる先が無い。
+    if (settingsEditor_.visible()) return false;
+    // 和音の取り込み中は、押された «キー» そのものが答え。変換に渡せば、
+    // 割り当てたい打鍵が IME に食われて設定にならない。
+    if (keyEditor_.visible()) return !keyEditor_.capturing();
+    if (placePicker_.visible() || commandPalette_.visible()) return true;
+    // 削除の確認は Yes/No で、あそこの文字列は件数であって編集するものではない。
+    return prompt_.active() && !prompt_.isConfirm();
+}
+
+void App::SetComposition(std::string text, size_t caret, size_t targetBegin, size_t targetEnd) {
+    if (text.empty()) {
+        EndComposition();
+        return;
+    }
+    composition_.text = std::move(text);
+    const size_t size = composition_.text.size();
+    composition_.caret = std::min(caret, size);
+    composition_.targetBegin = std::min(targetBegin, size);
+    composition_.targetEnd = std::min(targetEnd, size);
+    host_.Invalidate();
+}
+
+void App::EndComposition() {
+    if (!composition_.active()) return;
+    composition_ = Composition{};
     host_.Invalidate();
 }
 
@@ -1564,6 +1605,8 @@ void App::ApplyPrompt() {
     const std::string text = prompt_.text;
     std::vector<std::string> pending = prompt_.pendingPaths;
     prompt_ = Prompt{};
+    // 欄そのものが消えるので、そこで変換していた未確定文字列も行き場を失う。
+    composition_ = Composition{};
     complete_.Reset();
     completeToken_ = 0;
     completeRequested_.clear();

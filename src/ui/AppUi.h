@@ -67,8 +67,13 @@ public:
     bool OnMouse(const MouseEvent& e);
 
     /// @brief IME の変換候補を出すべき位置を返す。
-    /// @return クライアント座標（DIP）
-    PointF caretPosition() const { return caret_; }
+    /// @return キャレットの矩形（クライアント座標・DIP）。幅は持たず、上端と下端は
+    ///         キャレットが立っている行の高さ
+    /// @note 高さまで返すのは、候補ウィンドウに «この矩形を避けろ» と言うため ─
+    ///       変換している当の文字の上に候補一覧が乗ると、選んでいる相手が見えない。
+    ///       入力欄が出ていないときは、フォーカスされた一覧のカーソル行を指す
+    ///       （型入力ジャンプの変換もどこかに出るので、隅に取り残さない）
+    RectF caretRect() const { return caret_; }
 
     /// @brief 望ましいマウスカーソル形状を返す。
     /// @return IHost::SetCursorShape() に渡す形状番号
@@ -188,6 +193,29 @@ private:
     void PaintSidebar(Renderer& r, const RectF& area);
     void PaintStatusBar(Renderer& r, const RectF& area);
     void PaintPromptField(Renderer& r, const RectF& field, FontRole role = FontRole::Ui);
+    /// 入力欄の中で、変換中の文字列が占めている横位置。
+    ///
+    /// 測るのは «画面に出ている 1 本の文字列» の接頭辞で、断片を別々に測って足さない
+    /// （詰めが入った瞬間に全体の幅と合わなくなる）。中身が空なら active() が false。
+    struct CompositionRun {
+        float from = 0.0f;        ///< 変換中の文字列の左端
+        float to = 0.0f;          ///< 同じく右端
+        float targetFrom = 0.0f;  ///< 注目節の左端
+        float targetTo = 0.0f;    ///< 同じく右端
+
+        /// @brief 変換中かを判定する。
+        /// @return 幅を持っていれば true
+        bool active() const { return to > from; }
+
+        /// @brief 注目節があるかを判定する。
+        /// @return 幅を持っていれば true
+        bool hasTarget() const { return targetTo > targetFrom; }
+    };
+
+    void PaintCompositionBack(Renderer& r, const RectF& field, const CompositionRun& run,
+                              FontRole role);
+    void PaintCompositionMarks(Renderer& r, const RectF& field, const CompositionRun& run,
+                               FontRole role);
     void PaintInlineField(Renderer& r, const RectF& box, FontRole role = FontRole::Ui,
                           float indent = 0.0f);
     void PaintPrompt(Renderer& r, const RectF& area);
@@ -272,7 +300,13 @@ private:
     App& app_;
 
     std::vector<Region> regions_;
-    PointF caret_{ 0.0f, 0.0f };
+    // Where the IME should put its windows. Set while painting, because that is
+    // when the caret's own position is worked out; a field wins over the list's
+    // cursor row, and the row is only the answer when no field is on screen.
+    RectF caret_{};
+    bool caretInField_ = false;
+    RectF listCaret_{};
+    bool listCaretValid_ = false;
     int cursorShape_ = 0;
 
     // Where the pointer is, as of the last event. Painting asks this directly

@@ -26,6 +26,17 @@ constexpr UINT_PTR kDragDropTimerId = 2;
 // drag this soon after launch.
 constexpr UINT kDragDropDelayMs = 200;
 
+// ImmGetContext と ImmReleaseContext の対。IME を触る関数はどれも «無ければ帰る»
+// 経路をいくつも持つので、解放は構造で保証する。
+struct ImeContext {
+    HWND hwnd = nullptr;
+    HIMC imc = nullptr;
+
+    ~ImeContext() {
+        if (imc) ::ImmReleaseContext(hwnd, imc);
+    }
+};
+
 uint8_t ButtonsFrom(WPARAM wparam) {
     uint8_t buttons = ui::kButtonNone;
     if (wparam & MK_LBUTTON) buttons |= ui::kButtonLeft;
@@ -203,7 +214,156 @@ bool WinWindow::OpenNewWindow(const std::string& dir) {
     return true;
 }
 
-void WinWindow::SetImePosition(float x, float y) { imeCaret_ = { x, y }; }
+// --- IME --------------------------------------------------------------------
+//
+// 未確定の文字列を描くのは Kite 自身で、IME には描かせない（App の Composition）。
+// IME の変換窓は自前のフォントと行送りで文字を置くので、入力欄の中の文字とは数
+// ピクセルずれた位置に出て、確定した瞬間に跳ぶ ─ 利用者から「確定していない状態だと
+// 文字の位置がずれる」と報告された形がこれ。
+//
+// **引き取るのは常に。画面によって IME に描かせたり描かせなかったりしない。**
+// 変換窓を出すかどうかを言えるのは WM_IME_SETCONTEXT の ISC_SHOWUICOMPOSITIONWINDOW
+// だけで、そのメッセージが来るのはフォーカスが移るときだけ ─ «入力欄が開いている間は
+// 消す» という切り替え方ができない。半端に分けると、欄を開いてから打った文字が
+// こちらと IME の窓の 2 か所に出る。
+//
+// だから入力欄が無い画面（一覧の上での型入力ジャンプ）にも描く先が要る。そちらは
+// ステータス行が «変換中» として出す（AppUi::PaintStatusBar）。
+
+// キャレットの矩形を IME に教える。位置を決めるのは毎フレームの描画なので、変換の
+// 打鍵ごとに読み直す。
+void WinWindow::UpdateImeWindow() {
+    if (!hwnd_) return;
+    HIMC imc = ::ImmGetContext(hwnd_);
+    if (!imc) return;
+    const ImeContext context{ hwnd_, imc };
+
+    const POINT caret{ std::lround(imeCaret_.l * dpiScale_),
+                       std::lround(imeCaret_.t * dpiScale_) };
+    const LONG bottom = std::lround(imeCaret_.b * dpiScale_);
+
+    COMPOSITIONFORM form{};
+    form.dwStyle = CFS_POINT;
+    form.ptCurrentPos = caret;
+    ::ImmSetCompositionWindow(imc, &form);
+
+    // 候補一覧には «この矩形を避けろ» と言う。変換している当の文字の上に一覧が乗ると、
+    // 選んでいる相手が見えない ─ 変換窓を消した以上、隠れて困るのはこちらの文字。
+    CANDIDATEFORM candidate{};
+    candidate.dwIndex = 0;
+    candidate.dwStyle = CFS_EXCLUDE;
+    candidate.ptCurrentPos = caret;
+    candidate.rcArea = { caret.x, caret.y, caret.x + 1, bottom };
+    ::ImmSetCandidateWindow(imc, &candidate);
+
+    // 変換窓を消せない IME のための保険。ISC_SHOWUICOMPOSITIONWINDOW を落としても
+    // 自前の窓を出すものがあり、そのときフォントが既定のままだと «ずれる» が戻る。
+    if (app_) {
+        LOGFONTW font{};
+        font.lfHeight = -std::lround(app_->theme().fontSize * dpiScale_);
+        font.lfCharSet = DEFAULT_CHARSET;
+        const std::wstring family = ToWide(app_->theme().fontFamily);
+        // LF_FACESIZE には終端を含めて収める。溢れる名前は既定のフォントに任せる。
+        if (family.size() < LF_FACESIZE) {
+            std::copy(family.begin(), family.end(), font.lfFaceName);
+            ::ImmSetCompositionFontW(imc, &font);
+        }
+    }
+}
+
+// 変換中の文字列と、キャレット・注目節の位置を読み取って App へ渡す。
+//
+// IME が数えるのは UTF-16 の符号単位なので、渡す前に «その手前までを UTF-8 にした
+// 長さ» へ直す。core は全面 UTF-8 で、変換の途中経過だけ別の数え方にする理由が無い。
+void WinWindow::ReadComposition() {
+    HIMC imc = ::ImmGetContext(hwnd_);
+    if (!imc) return;
+    const ImeContext context{ hwnd_, imc };
+    const LONG bytes = ::ImmGetCompositionStringW(imc, GCS_COMPSTR, nullptr, 0);
+    if (bytes <= 0) {
+        if (app_) app_->EndComposition();
+        return;
+    }
+    std::wstring wide(static_cast<size_t>(bytes) / sizeof(wchar_t), L'\0');
+    ::ImmGetCompositionStringW(imc, GCS_COMPSTR, wide.data(), static_cast<DWORD>(bytes));
+
+    auto utf8Length = [&wide](size_t units) {
+        return ToUtf8(std::wstring_view(wide).substr(0, std::min(units, wide.size()))).size();
+    };
+
+    const LONG cursor = ::ImmGetCompositionStringW(imc, GCS_CURSORPOS, nullptr, 0);
+    const size_t caret = utf8Length(cursor > 0 ? static_cast<size_t>(cursor) : 0);
+
+    // 注目節 ─ 変換対象になっている 1 節。属性は 1 符号単位に 1 バイトで返る。
+    size_t targetBegin = 0;
+    size_t targetEnd = 0;
+    const LONG attrBytes = ::ImmGetCompositionStringW(imc, GCS_COMPATTR, nullptr, 0);
+    if (attrBytes > 0) {
+        std::vector<uint8_t> attrs(static_cast<size_t>(attrBytes));
+        ::ImmGetCompositionStringW(imc, GCS_COMPATTR, attrs.data(),
+                                   static_cast<DWORD>(attrBytes));
+        size_t first = attrs.size();
+        size_t last = 0;
+        for (size_t i = 0; i < attrs.size(); ++i) {
+            if (attrs[i] != ATTR_TARGET_CONVERTED && attrs[i] != ATTR_TARGET_NOTCONVERTED) {
+                continue;
+            }
+            if (first > i) first = i;
+            last = i + 1;
+        }
+        if (first < last) {
+            targetBegin = utf8Length(first);
+            targetEnd = utf8Length(last);
+        }
+    }
+
+    if (app_) app_->SetComposition(ToUtf8(wide), caret, targetBegin, targetEnd);
+}
+
+// 確定した文字列を、WM_CHAR と同じ道で 1 文字ずつ流し込む。
+//
+// 自分で WM_IME_COMPOSITION を消費している以上、DefWindowProc は WM_CHAR を作らない。
+// ここで渡さなければ、変換した文字はどこにも入らない。
+void WinWindow::CommitComposition() {
+    HIMC imc = ::ImmGetContext(hwnd_);
+    if (!imc) return;
+    const ImeContext context{ hwnd_, imc };
+    const LONG bytes = ::ImmGetCompositionStringW(imc, GCS_RESULTSTR, nullptr, 0);
+    if (bytes <= 0) return;
+    std::wstring wide(static_cast<size_t>(bytes) / sizeof(wchar_t), L'\0');
+    ::ImmGetCompositionStringW(imc, GCS_RESULTSTR, wide.data(), static_cast<DWORD>(bytes));
+
+    // 未確定の文字列は先に捨てる。確定した文字が入るのはそのあとで、順序が逆だと
+    // 1 フレームだけ同じ文字が 2 つ並ぶ。
+    if (app_) app_->EndComposition();
+
+    for (size_t i = 0; i < wide.size(); ++i) {
+        uint32_t codepoint = wide[i];
+        if (codepoint >= 0xD800 && codepoint <= 0xDBFF && i + 1 < wide.size()) {
+            const uint32_t low = wide[i + 1];
+            if (low >= 0xDC00 && low <= 0xDFFF) {
+                codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (low - 0xDC00);
+                ++i;
+            }
+        }
+        if (app_) app_->OnChar(codepoint);
+    }
+}
+
+// 変換を打ち切る。入力欄が消えた（外を押して畳まれた、オーバーレイが閉じた）のに
+// IME だけが変換を続けていると、次に欄を開いた瞬間にその文字列が現れる。
+void WinWindow::CancelComposition() {
+    if (!hwnd_) return;
+    HIMC imc = ::ImmGetContext(hwnd_);
+    if (!imc) return;
+    {
+        const ImeContext context{ hwnd_, imc };
+        ::ImmNotifyIME(imc, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
+    }
+    composing_ = false;
+    compositionInField_ = false;
+    if (app_) app_->EndComposition();
+}
 
 void WinWindow::SetCursorShape(int shape) {
     cursorShape_ = shape;
@@ -266,8 +426,20 @@ void WinWindow::Paint() {
     // the user happens to move the mouse.
     if (icons_ && icons_->hasPendingRequests()) ::InvalidateRect(hwnd_, nullptr, FALSE);
 
-    const PointF caret = ui_->caretPosition();
-    imeCaret_ = caret;
+    // 描き終わって初めてキャレットの位置が決まる。変換中はそのたびに IME へ教え直す
+    // ─ 打つほど右へ伸びるので、始めたときの位置に置いたままでは候補一覧が離れていく。
+    imeCaret_ = ui_->caretRect();
+    if (composing_) {
+        // 入力欄が消えたのに IME だけが変換を続けている（外を押して畳まれた、
+        // オーバーレイが閉じた）。打ちかけの文字列は捨てる ─ 入力欄の «外を押したら
+        // 畳む。打った名前は捨てる» をそのまま変換にも当てる。一覧の上で始まった
+        // 変換は巻き添えにしない（そちらに畳まれる欄は無い）。
+        if (compositionInField_ && !app_->acceptsText()) {
+            CancelComposition();
+        } else {
+            UpdateImeWindow();
+        }
+    }
 
     // Scheduled rather than run here: OLE must stay off the startup path.
     if (!dragDropScheduled_) {
@@ -521,19 +693,45 @@ LRESULT WinWindow::Handle(UINT message, WPARAM wparam, LPARAM lparam) {
             break;
         }
 
-        // --- IME: keep the candidate window next to the text being typed ---
+        // --- IME: the composition is drawn by Kite, in the field being typed
+        // into (see the block above WinWindow::UpdateImeWindow) ---
+        case WM_IME_SETCONTEXT:
+            // 自分で描く以上、IME の変換窓は要らない。落とさないと同じ文字が 2 か所に
+            // 出る（こちらの入力欄と、IME の窓と）。候補一覧のほうは残す。
+            return ::DefWindowProcW(hwnd_, message, wparam,
+                                    lparam & ~static_cast<LPARAM>(ISC_SHOWUICOMPOSITIONWINDOW));
+
         case WM_IME_STARTCOMPOSITION:
+            // まだ 1 文字も来ていないので、位置は直前の描画が決めたキャレットのまま
+            // でよい。以後は Paint() が毎フレーム教え直す。
+            composing_ = true;
+            // 入力欄の中で始まった変換だけが、その欄と運命を共にする（Paint() 参照）。
+            compositionInField_ = app_ && app_->acceptsText();
+            UpdateImeWindow();
+            return 0;
+
         case WM_IME_COMPOSITION: {
-            if (HIMC imc = ::ImmGetContext(hwnd_)) {
-                COMPOSITIONFORM form{};
-                form.dwStyle = CFS_POINT;
-                form.ptCurrentPos.x = static_cast<LONG>(imeCaret_.x * dpiScale_);
-                form.ptCurrentPos.y = static_cast<LONG>(imeCaret_.y * dpiScale_);
-                ::ImmSetCompositionWindow(imc, &form);
-                ::ImmReleaseContext(hwnd_, imc);
+            // 確定が先。節を 1 つ確定して残りの変換を続ける IME があるので、
+            // GCS_RESULTSTR と GCS_COMPSTR は同時に立ちうる ─ どちらか一方にしない。
+            if (lparam & GCS_RESULTSTR) CommitComposition();
+            if (lparam & GCS_COMPSTR) {
+                ReadComposition();
+            } else if (!(lparam & GCS_RESULTSTR) && app_) {
+                // 変換そのものが取り消された（lparam が空で来る）。
+                app_->EndComposition();
             }
-            break;
+            return 0;
         }
+
+        case WM_IME_ENDCOMPOSITION:
+            composing_ = false;
+            compositionInField_ = false;
+            if (app_) app_->EndComposition();
+            break;
+
+        case WM_IME_CHAR:
+            // 確定した文字は GCS_RESULTSTR で受け取っている。ここを通すと二重に入る。
+            return 0;
 
         // --- mouse ---
         case WM_MOUSEMOVE:
