@@ -221,15 +221,14 @@ std::string FileOperationError(int code) {
     return buffer;
 }
 
-bool RunFileOperation(UINT op, const std::vector<std::string>& from, const std::string& to,
-                      FILEOP_FLAGS flags, std::string* err) {
+bool RunFileOperation(UINT op, const std::vector<std::string>& from,
+                      const std::vector<std::string>& to, FILEOP_FLAGS flags, std::string* err) {
     std::wstring fromList = MakeDoubleNullList(from);
+    // A list rather than a single folder, because a duplicate names its own
+    // destination per item (FOF_MULTIDESTFILES). One folder is the one-element
+    // case of the same thing.
     std::wstring toList;
-    if (!to.empty()) {
-        toList = ToWide(to);
-        toList.push_back(L'\0');
-        toList.push_back(L'\0');
-    }
+    if (!to.empty()) toList = MakeDoubleNullList(to);
 
     SHFILEOPSTRUCTW spec{};
     spec.wFunc = op;
@@ -567,7 +566,23 @@ bool WinFileSystem::CopyTo(const std::vector<std::string>& paths, const std::str
     // Keep the shell's progress and conflict UI here: reimplementing it badly
     // is how filers lose data.
     const FILEOP_FLAGS flags = FOF_NOCONFIRMMKDIR | FOF_ALLOWUNDO;
-    return RunFileOperation(move ? FO_MOVE : FO_COPY, paths, destDir, flags, err);
+    return RunFileOperation(move ? FO_MOVE : FO_COPY, paths, { destDir }, flags, err);
+}
+
+bool WinFileSystem::CopyAs(const std::vector<std::string>& paths,
+                           const std::vector<std::string>& destPaths, std::string* err) {
+    if (paths.empty()) return true;
+    // Equal lengths are the whole contract of FOF_MULTIDESTFILES: the shell pairs
+    // the two lists by position, so a short one would hand a name to the wrong
+    // file. Refused rather than trimmed - there is no half of this worth doing.
+    if (paths.size() != destPaths.size()) {
+        if (err) *err = ErrorText(ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    // No FOF_NOCONFIRMATION: nothing held these names a moment ago, but another
+    // window can have taken one since, and that is the shell's dialog to show.
+    const FILEOP_FLAGS flags = FOF_NOCONFIRMMKDIR | FOF_ALLOWUNDO | FOF_MULTIDESTFILES;
+    return RunFileOperation(FO_COPY, paths, destPaths, flags, err);
 }
 
 }  // namespace kite::win

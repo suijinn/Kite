@@ -1017,6 +1017,103 @@ KITE_TEST(app, copy_and_paste_go_through_the_clipboard) {
     KITE_EXPECT_EQ(h.files.copyCalls[0].destDir, std::string("C:\\home\\beta"));
 }
 
+// Pasting where the items were copied from is the one collision the shell
+// cannot resolve on its own: the name is already spoken for by the file being
+// copied. The answer is a duplicate under a new name - the report that led here
+// was a copy and paste in one folder doing nothing at all.
+KITE_TEST(app, pasting_into_the_same_folder_makes_a_duplicate) {
+    Harness h;
+    h.app.Execute(Cmd::CursorBottom);  // notes.txt
+    h.app.Execute(Cmd::Copy);
+    h.app.Execute(Cmd::Paste);
+    h.Settle();
+
+    // Not CopyTo: that can only name the folder, which is how the collision
+    // came about in the first place.
+    KITE_EXPECT_EQ(h.files.copyCalls.size(), size_t{ 0 });
+    KITE_EXPECT_EQ(h.files.copyAsCalls.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.files.copyAsCalls[0].destPaths.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.files.copyAsCalls[0].destPaths[0],
+                   std::string("C:\\home\\notes_copy.txt"));
+    KITE_EXPECT(h.files.Exists("C:\\home\\notes_copy.txt"));
+    // The original stays where it was.
+    KITE_EXPECT(h.files.Exists("C:\\home\\notes.txt"));
+    KITE_EXPECT_EQ(h.app.statusMessage(),
+                   h.app.strings().Format("ui.duplicated", { "1" }));
+}
+
+KITE_TEST(app, a_duplicate_steps_past_the_names_already_taken) {
+    Harness h;
+    h.files.AddFile("C:\\home", "notes_copy.txt");
+    h.files.AddFile("C:\\home", "notes_copy2.txt");
+    h.app.Execute(Cmd::CursorBottom);  // notes.txt
+    h.app.Execute(Cmd::Copy);
+    h.app.Execute(Cmd::Paste);
+    h.Settle();
+
+    KITE_EXPECT_EQ(h.files.copyAsCalls[0].destPaths[0],
+                   std::string("C:\\home\\notes_copy3.txt"));
+}
+
+KITE_TEST(app, a_duplicated_folder_keeps_its_whole_name) {
+    Harness h;
+    h.files.AddDir("C:\\home\\backup.2026");
+    h.app.Execute(Cmd::Refresh);
+    h.Settle();
+    while (h.CursorName() != "backup.2026") h.app.Execute(Cmd::CursorDown);
+    h.app.Execute(Cmd::Copy);
+    h.app.Execute(Cmd::Paste);
+    h.Settle();
+
+    // ".2026" is nobody's extension.
+    KITE_EXPECT_EQ(h.files.copyAsCalls[0].destPaths[0],
+                   std::string("C:\\home\\backup.2026_copy"));
+}
+
+// Two items reaching for one name: the first has not been written yet, so the
+// disk cannot be the one to say the name is taken.
+KITE_TEST(app, duplicates_in_one_batch_do_not_collide_with_each_other) {
+    Harness h;
+    h.shell.clipboardFiles = { "C:\\home\\notes.txt", "C:\\home\\notes.txt" };
+    h.shell.clipboardCut = false;
+    h.app.Execute(Cmd::Paste);
+    h.Settle();
+
+    KITE_EXPECT_EQ(h.files.copyAsCalls.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.files.copyAsCalls[0].destPaths.size(), size_t{ 2 });
+    KITE_EXPECT_NE(h.files.copyAsCalls[0].destPaths[0], h.files.copyAsCalls[0].destPaths[1]);
+}
+
+// A cut has nowhere to go, so nothing happens - and the fade stays up, because
+// the folder it is meant for has not been reached yet.
+KITE_TEST(app, cutting_and_pasting_in_one_folder_does_nothing) {
+    Harness h;
+    h.app.Execute(Cmd::CursorBottom);  // notes.txt
+    h.app.Execute(Cmd::Cut);
+    h.app.Execute(Cmd::Paste);
+    h.Settle();
+
+    KITE_EXPECT_EQ(h.files.copyCalls.size(), size_t{ 0 });
+    KITE_EXPECT_EQ(h.files.copyAsCalls.size(), size_t{ 0 });
+    KITE_EXPECT(h.app.IsCut("C:\\home\\notes.txt"));
+}
+
+// One clipboard, two answers: what came from elsewhere is copied under its own
+// name, what was already here is duplicated.
+KITE_TEST(app, a_mixed_paste_splits_into_a_copy_and_a_duplicate) {
+    Harness h;
+    h.shell.clipboardFiles = { "C:\\home\\notes.txt", "C:\\home\\alpha\\inner.md" };
+    h.shell.clipboardCut = false;
+    h.app.Execute(Cmd::Paste);
+    h.Settle();
+
+    KITE_EXPECT_EQ(h.files.copyAsCalls.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.files.copyAsCalls[0].paths[0], std::string("C:\\home\\notes.txt"));
+    KITE_EXPECT_EQ(h.files.copyCalls.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.files.copyCalls[0].paths[0], std::string("C:\\home\\alpha\\inner.md"));
+    KITE_EXPECT_EQ(h.files.copyCalls[0].destDir, std::string("C:\\home"));
+}
+
 KITE_TEST(app, cut_marks_the_clipboard_as_a_move) {
     Harness h;
     h.app.Execute(Cmd::Cut);

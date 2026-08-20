@@ -220,3 +220,49 @@ KITE_TEST(path, the_threshold_is_measured_in_utf16_units) {
     KITE_EXPECT(p.size() > 240);
     KITE_EXPECT_EQ(path::ToExtended(p), p);
 }
+
+// The name a copy gets when it lands in the folder it came from. Not Explorer's
+// spelling: this one has to stay ASCII and free of spaces, because it is a name
+// on disk that gets typed at a command line - and it must not follow the display
+// language, or switching languages would make the same operation produce a
+// different name.
+KITE_TEST(path, duplicate_name_marks_the_copy_without_spaces) {
+    KITE_EXPECT_EQ(path::DuplicateName("notes.txt", 0, false), std::string("notes_copy.txt"));
+    // Numbered from the second one on: the count the user sees starts at 2,
+    // because the first copy is the unnumbered one.
+    KITE_EXPECT_EQ(path::DuplicateName("notes.txt", 1, false), std::string("notes_copy2.txt"));
+    KITE_EXPECT_EQ(path::DuplicateName("notes.txt", 4, false), std::string("notes_copy5.txt"));
+
+    // No space, and nothing outside ASCII, at any attempt.
+    for (int attempt = 0; attempt < 12; ++attempt) {
+        const std::string name = path::DuplicateName("notes.txt", attempt, false);
+        for (char c : name) {
+            KITE_EXPECT(static_cast<unsigned char>(c) < 0x80);
+            KITE_EXPECT_NE(c, ' ');
+        }
+    }
+}
+
+KITE_TEST(path, duplicate_name_keeps_the_extension_as_written) {
+    // Extension() answers in lower case; rebuilding the name from it would
+    // quietly rewrite ".TXT" on the way past.
+    KITE_EXPECT_EQ(path::DuplicateName("REPORT.TXT", 0, false), std::string("REPORT_copy.TXT"));
+    // Only the last dot separates: "archive.tar" keeps its first one.
+    KITE_EXPECT_EQ(path::DuplicateName("archive.tar.gz", 0, false),
+                   std::string("archive.tar_copy.gz"));
+    // A leading dot is the whole name, not an extension.
+    KITE_EXPECT_EQ(path::DuplicateName(".gitignore", 0, false), std::string(".gitignore_copy"));
+    KITE_EXPECT_EQ(path::DuplicateName("Makefile", 0, false), std::string("Makefile_copy"));
+}
+
+KITE_TEST(path, a_folder_keeps_its_whole_name) {
+    // Nobody thinks ".2026" is an extension, so a folder is not split at the
+    // dot - the same call Cmd::Rename makes when it selects the stem.
+    KITE_EXPECT_EQ(path::DuplicateName("backup.2026", 0, true), std::string("backup.2026_copy"));
+    KITE_EXPECT_EQ(path::DuplicateName("backup.2026", 1, true), std::string("backup.2026_copy2"));
+}
+
+KITE_TEST(path, duplicate_name_answers_about_the_leaf_of_a_path) {
+    KITE_EXPECT_EQ(path::DuplicateName("C:\\home\\notes.txt", 0, false),
+                   std::string("notes_copy.txt"));
+}
