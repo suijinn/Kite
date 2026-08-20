@@ -18,6 +18,11 @@ constexpr float kColExt = 58.0f;
 constexpr float kColSize = 84.0f;
 constexpr float kColDate = 124.0f;
 constexpr float kScrollbarWidth = 10.0f;
+// How wide a filtered chooser's panel is allowed to get (the bookmark list, the
+// command palette). One number for both: they are the same screen with different
+// rows, and a palette that changed size on the way to the bookmark list would
+// move the field being typed into.
+constexpr float kPickerMaxWidth = 860.0f;
 
 std::string SortArrow(bool desc) { return desc ? "\xE2\x96\xBC" : "\xE2\x96\xB2"; }  // ▼ ▲
 
@@ -81,7 +86,7 @@ bool AppUi::PointerOver(const RectF& box) const {
 // key editor take every click, so nothing behind them may look pointable.
 bool AppUi::Hovered(const RectF& box) const {
     if (app_.keyHelpVisible() || app_.keyEditor().visible() || app_.settingsEditor().visible() ||
-        app_.bookmarkPicker().visible()) {
+        app_.placePicker().visible() || app_.commandPalette().visible()) {
         return false;
     }
     // The completion popup covers only part of the window, so it is not an
@@ -167,7 +172,8 @@ void AppUi::Paint(Renderer& r) {
     }
     if (app_.keyEditor().visible()) PaintKeySettings(r, full);
     if (app_.settingsEditor().visible()) PaintSettings(r, full);
-    if (app_.bookmarkPicker().visible()) PaintBookmarks(r, full);
+    if (app_.placePicker().visible()) PaintPlaces(r, full);
+    if (app_.commandPalette().visible()) PaintCommandPalette(r, full);
 }
 
 void AppUi::PaintDragOverlay(Renderer& r) {
@@ -1819,86 +1825,155 @@ bool AppUi::HandleSettingsClick(const MouseEvent& e) {
     return true;
 }
 
-// The bookmark list.
+// One filtered chooser's worth of chrome: the panel, its title and count, the
+// field being typed into, and the rect the rows go in.
 //
-// A third sibling of the shortcut editor and the settings screen: same panel,
-// same row rhythm, same modal manners. It exists because the numbered shortcuts
-// stop at eight - past that, this is the only way to a bookmark without the
-// mouse. A row holds a name, where it goes, and the number key that would have
-// reached it.
-void AppUi::PaintBookmarks(Renderer& r, const RectF& area) {
+// The places list (Ctrl+P) and the command palette (Ctrl+Shift+P) are the same
+// screen with different rows, so the frame is drawn once here rather than twice.
+// PickerList already shares the counting behind them, and the reason is the same
+// one the tab bar has for sharing its wrapping between the two orientations: two
+// copies of a rule mean one of them is always the stale one.
+//
+// Two things this frame decides, both learned from the palette:
+//
+//   * **The window alone decides the panel, so every chooser is the same size.**
+//     Not the row count, filtered or otherwise. Sized to its rows, a panel crept
+//     towards the centre of the window on every keystroke - and the two screens
+//     ended up different heights, so choosing "bookmark.list" from the palette
+//     moved the field out from under the fingers that had just typed into it. The
+//     field is at one place in this app, and it stays there.
+//   * **The filter is a field, not small print in the title row.** It is the one
+//     thing on the panel being edited, so it gets the body font, a caret, and a
+//     border in the accent colour - the same "the keyboard is here" the address
+//     bar draws. The caret shows on an empty field too: nothing else says the
+//     panel is waiting to be typed into.
+AppUi::PickerFrame AppUi::PaintPickerFrame(Renderer& r, const RectF& area,
+                                           const PickerChrome& chrome, Hit panelHit) {
     const Theme& th = app_.theme();
-    const Strings& str = app_.strings();
-    BookmarkPicker& picker = app_.bookmarkPicker();
-
-    r.FillRect(area, th.overlayScrim);
-
-    const std::vector<BookmarkPicker::Row>& rows = picker.rows();
     const float rowH = th.rowHeight;
-    const float chrome = 38.0f + 20.0f + 8.0f + 26.0f + 12.0f;  // title, note, rule, footer, pad
-    // At least one row's worth of body even when the filter matches nothing, so
-    // the panel does not collapse around the "nothing matches" line.
-    const float wanted = chrome + rowH * static_cast<float>(std::max<size_t>(rows.size(), 1));
-
-    const float width = std::clamp(area.w() - 48.0f, 200.0f, 620.0f);
-    const float height = std::min(wanted, std::max(120.0f, area.h() - 48.0f));
+    // Taller than a list row: this one holds text being typed, and a row is the
+    // height of text being read. Derived from the row height so the font scale
+    // reaches it, the way it reaches everything else that holds letters.
+    const float fieldH = std::max(30.0f, rowH * 1.6f);
+    const float width = std::clamp(area.w() - 48.0f, 200.0f, kPickerMaxWidth);
+    const float height = std::max(140.0f, area.h() - 48.0f);
     const float left = std::round(area.center().x - width * 0.5f);
     const float top = std::round(area.center().y - height * 0.5f);
     const RectF panel = { left, top, left + width, top + height };
 
     r.FillRoundRect(panel, 8.0f, th.overlayBg);
     r.StrokeRect(panel, th.border, 1.0f);
-    Add(panel, Hit::BookmarkPanel);
+    Add(panel, panelHit);
 
-    // Title on the left, what is being searched for on the right - and the search
-    // only gets what the title leaves, dropping out rather than landing on top of
-    // it when the window is narrow.
+    // Title on the left, how many of how many on the right - and the count only
+    // gets what the title leaves, dropping out rather than landing on top of it
+    // when the window is narrow. With a filter typed, the count is the only thing
+    // that says the rest are still there.
     const RectF titleBox = { panel.l + 20.0f, panel.t + 8.0f, panel.r - 20.0f, panel.t + 38.0f };
-    const std::string title = str.Get("ui.bookmark_list_title");
-    const float titleW = r.MeasureText(title, FontRole::UiBold) + kPad * 2.0f;
-    r.DrawText(title, { titleBox.l, titleBox.t, titleBox.l + titleW, titleBox.b }, th.text,
+    const float titleW = r.MeasureText(chrome.title, FontRole::UiBold) + kPad * 2.0f;
+    r.DrawText(chrome.title, { titleBox.l, titleBox.t, titleBox.l + titleW, titleBox.b }, th.text,
                FontRole::UiBold, TextAlign::Left);
-
-    const std::string search =
-        picker.filter().empty() ? str.Get("ui.bookmark_list_search_hint")
-                                : str.Format("ui.bookmark_list_filter", { picker.filter() });
-    if (titleW + r.MeasureText(search, FontRole::UiSmall) <= titleBox.w()) {
-        r.DrawText(search, { titleBox.l + titleW, titleBox.t, titleBox.r, titleBox.b },
-                   picker.filter().empty() ? th.textDim.alpha(0.6f) : th.text, FontRole::UiSmall,
-                   TextAlign::Right);
+    if (titleW + r.MeasureText(chrome.count, FontRole::UiSmall) <= titleBox.w()) {
+        r.DrawText(chrome.count, { titleBox.l + titleW, titleBox.t, titleBox.r, titleBox.b },
+                   th.textDim.alpha(0.8f), FontRole::UiSmall, TextAlign::Right);
     }
 
-    // How many are on screen out of how many there are. With a filter typed, this
-    // is the only thing that says the rest are still there.
-    const RectF countBox = { panel.l + 20.0f, titleBox.b, panel.r - 20.0f, titleBox.b + 20.0f };
-    r.DrawText(str.Format("ui.bookmark_list_count",
-                          { std::to_string(rows.size()) + " / " + std::to_string(picker.total()) }),
-               countBox, th.textDim.alpha(0.7f), FontRole::UiSmall, TextAlign::Left);
+    const RectF field = { panel.l + 16.0f, titleBox.b, panel.r - 16.0f, titleBox.b + fieldH };
+    const RectF fieldBox = field.inset(0.0f, 3.0f);
+    r.FillRoundRect(fieldBox, 4.0f, th.listBg);
+    r.StrokeRect(fieldBox, th.accent, 1.0f);
+
+    const RectF inner = fieldBox.inset(10.0f, 0.0f);
+    if (chrome.filter.empty()) {
+        // Past the caret, so the two do not sit on the same pixel.
+        r.DrawText(chrome.placeholder, { inner.l + 12.0f, inner.t, inner.r, inner.b },
+                   th.textDim.alpha(0.6f), FontRole::Ui, TextAlign::Left);
+    } else {
+        r.DrawText(chrome.filter, inner, th.text, FontRole::Ui, TextAlign::Left);
+    }
+    // The caret is the text colour, not the accent: it is a letter-shaped mark in
+    // a run of letters, and the border already says where the keyboard is.
+    const float caretX = inner.l + r.MeasureText(chrome.filter, FontRole::Ui) + 1.0f;
+    r.FillRect({ caretX, fieldBox.t + 5.0f, caretX + 1.5f, fieldBox.b - 5.0f }, th.text);
 
     const RectF footer = { panel.l + 20.0f, panel.b - 26.0f, panel.r - 20.0f, panel.b - 6.0f };
-    r.DrawText(str.Get("ui.bookmark_list_hint"), footer, th.textDim, FontRole::UiSmall,
-               TextAlign::Left);
+    r.DrawText(chrome.hint, footer, th.textDim, FontRole::UiSmall, TextAlign::Left);
 
-    const RectF body = { panel.l + 12.0f, countBox.b + 4.0f, panel.r - 12.0f, footer.t - 4.0f };
+    const RectF body = { panel.l + 12.0f, field.b + 8.0f, panel.r - 12.0f, footer.t - 4.0f };
     r.FillRect({ body.l, body.t, body.r, body.t + 1.0f }, th.border);
 
-    const int pageRows = std::max(1, static_cast<int>((body.h() - 4.0f) / rowH));
+    PickerFrame frame;
+    frame.panel = panel;
+    frame.body = body;
+    frame.pageRows = std::max(1, static_cast<int>((body.h() - 4.0f) / rowH));
+    return frame;
+}
+
+// The thin marker down the side of a chooser's rows. Cannot be grabbed, the same
+// as the listing's own bar (ROADMAP P3-11 makes both draggable at once).
+void AppUi::PaintPickerScrollbar(Renderer& r, const RectF& body, int rows, int pageRows,
+                                 int first) {
+    if (rows <= pageRows) return;
+    const Theme& th = app_.theme();
+    const RectF track = { body.r - 4.0f, body.t + 3.0f, body.r - 1.0f, body.b - 3.0f };
+    const float ratio = static_cast<float>(pageRows) / static_cast<float>(rows);
+    const float thumbH = std::max(24.0f, track.h() * ratio);
+    const float t = static_cast<float>(first) / static_cast<float>(std::max(1, rows - pageRows));
+    const float thumbTop = track.t + (track.h() - thumbH) * t;
+    r.FillRoundRect({ track.l, thumbTop, track.r, thumbTop + thumbH }, 1.5f, th.scrollThumb);
+}
+
+// The list of places (Ctrl+P).
+//
+// A sibling of the shortcut editor, the settings screen and the command palette:
+// same panel, same row rhythm, same modal manners. It exists because the numbered
+// shortcuts stop at eight - past that, this is the only way to a bookmark or a tab
+// without the mouse. A row holds a name, where it goes, which kind of place it is,
+// and the number key that would have reached it.
+void AppUi::PaintPlaces(Renderer& r, const RectF& area) {
+    const Theme& th = app_.theme();
+    const Strings& str = app_.strings();
+    PlacePicker& picker = app_.placePicker();
+
+    r.FillRect(area, th.overlayScrim);
+
+    const std::vector<PlacePicker::Row>& rows = picker.rows();
+    const float rowH = th.rowHeight;
+
+    PickerChrome chrome;
+    chrome.title = str.Get("ui.goto_title");
+    chrome.count =
+        str.Format("ui.goto_count",
+                   { std::to_string(rows.size()) + " / " + std::to_string(picker.total()) });
+    chrome.filter = picker.filter();
+    chrome.placeholder = str.Get("ui.goto_search_hint");
+    chrome.hint = str.Get("ui.goto_hint");
+    const PickerFrame frame = PaintPickerFrame(r, area, chrome, Hit::PlacePanel);
+    const RectF body = frame.body;
     // Told every frame: the panel is sized from the window, so the number of rows
     // a PageDown should cover is only known here.
-    picker.SetPageRows(pageRows);
+    picker.SetPageRows(frame.pageRows);
 
     if (rows.empty()) {
-        r.DrawText(str.Get("ui.bookmark_list_empty"), body.inset(10.0f, 8.0f),
+        r.DrawText(str.Get("ui.goto_empty"), body.inset(10.0f, 8.0f),
                    th.textDim.alpha(0.7f), FontRole::Ui, TextAlign::Left);
         return;
     }
 
     const int first = picker.scroll();
-    const int last = std::min(static_cast<int>(rows.size()) - 1, first + pageRows - 1);
+    const int last = std::min(static_cast<int>(rows.size()) - 1, first + frame.pageRows - 1);
+
+    // The kind column is measured over the rows about to be drawn, the way the
+    // palette measures its own: a fixed width cuts the longest label in half.
+    float kindCol = 0.0f;
+    for (int i = first; i <= last; ++i) {
+        kindCol = std::max(kindCol, r.MeasureText(rows[i].kindLabel, FontRole::UiSmall));
+    }
+    kindCol = std::min(kindCol, 140.0f);
 
     r.PushClip(body);
     for (int i = first; i <= last; ++i) {
-        const BookmarkPicker::Row& row = rows[i];
+        const PlacePicker::Row& row = rows[i];
         const float y = body.t + 3.0f + static_cast<float>(i - first) * rowH;
         const RectF box = { body.l + 4.0f, y, body.r - 6.0f, y + rowH };
 
@@ -1919,6 +1994,16 @@ void AppUi::PaintBookmarks(Renderer& r, const RectF& area) {
             right -= w + 12.0f;
         }
 
+        // Bookmark or open tab. Without it the same folder can appear twice with
+        // nothing to say why - and it is the tab rows that behave differently on
+        // Enter, so the difference has to be visible before it is pressed.
+        if (box.w() > 360.0f && right - box.l - kindCol > 140.0f) {
+            r.DrawText(row.kindLabel, { right - kindCol, box.t, right, box.b },
+                       th.textDim.alpha(selected ? 0.9f : 0.6f), FontRole::UiSmall,
+                       TextAlign::Right);
+            right -= kindCol + 12.0f;
+        }
+
         const float nameLeft = box.l + 10.0f;
         const float nameW = std::min(r.MeasureText(row.name, FontRole::Ui) + 2.0f,
                                      std::max(0.0f, (right - nameLeft) * 0.6f));
@@ -1935,40 +2020,174 @@ void AppUi::PaintBookmarks(Renderer& r, const RectF& area) {
                        FontRole::UiSmall, TextAlign::Right);
         }
 
-        Add(box, Hit::BookmarkRow, i);
+        Add(box, Hit::PlaceRow, i);
     }
     r.PopClip();
 
-    if (static_cast<int>(rows.size()) > pageRows) {
-        const RectF track = { body.r - 4.0f, body.t + 3.0f, body.r - 1.0f, body.b - 3.0f };
-        const float ratio = static_cast<float>(pageRows) / static_cast<float>(rows.size());
-        const float thumbH = std::max(24.0f, track.h() * ratio);
-        const float t = static_cast<float>(first) /
-                        static_cast<float>(std::max(1, static_cast<int>(rows.size()) - pageRows));
-        const float thumbTop = track.t + (track.h() - thumbH) * t;
-        r.FillRoundRect({ track.l, thumbTop, track.r, thumbTop + thumbH }, 1.5f, th.scrollThumb);
-    }
+    PaintPickerScrollbar(r, body, static_cast<int>(rows.size()), frame.pageRows, first);
 }
 
 // Clicks while the bookmark list is up. Nothing behind it is reachable, the same
 // as the other two overlays.
-bool AppUi::HandleBookmarkClick(const MouseEvent& e) {
+bool AppUi::HandlePlaceClick(const MouseEvent& e) {
     const Region* region = Pick(e.x, e.y);
-    if (region && region->kind == Hit::BookmarkRow) {
-        app_.bookmarkPicker().SelectRow(region->index);
+    if (region && region->kind == Hit::PlaceRow) {
+        app_.placePicker().SelectRow(region->index);
         // One click goes, unlike the shortcut editor's rows: there is nothing here
         // for a first click to disambiguate, and someone who pressed a bookmark
         // has already decided. Ctrl reads as it does in the listing - a new tab.
-        if (e.button == 0) app_.ChooseBookmark((e.mods & kModCtrl) != 0);
+        if (e.button == 0) app_.ChoosePlace((e.mods & kModCtrl) != 0);
         app_.host().Invalidate();
         return true;
     }
-    if (region && region->kind == Hit::BookmarkPanel) {
+    if (region && region->kind == Hit::PlacePanel) {
         app_.host().Invalidate();
         return true;
     }
     // Outside the panel: same as pressing Escape.
-    app_.Execute(Cmd::ShowBookmarks);
+    app_.Execute(Cmd::ShowPlaces);
+    return true;
+}
+
+// The command palette.
+//
+// The bookmark list's sibling, drawn in the same frame (PaintPickerFrame): the
+// field, the fixed height and the count all come from there. It exists because a
+// key that has not been learned - or that a background app has taken - leaves a
+// command unreachable, and the F1 sheet only reads them out.
+//
+// A row holds four things: what the command is called, the name it has in
+// keys.ini, which group it belongs to, and the chords that also run it. All four
+// are what the filter matches, which is the reason all four are on the row -
+// filtering on something the screen never shows teaches nobody it can be typed.
+void AppUi::PaintCommandPalette(Renderer& r, const RectF& area) {
+    const Theme& th = app_.theme();
+    const Strings& str = app_.strings();
+    CommandPalette& palette = app_.commandPalette();
+
+    r.FillRect(area, th.overlayScrim);
+
+    const std::vector<CommandPalette::Row>& rows = palette.rows();
+    const float rowH = th.rowHeight;
+
+    PickerChrome chrome;
+    chrome.title = str.Get("ui.command_palette_title");
+    chrome.count = str.Format(
+        "ui.command_palette_count",
+        { std::to_string(rows.size()) + " / " + std::to_string(palette.total()) });
+    chrome.filter = palette.filter();
+    chrome.placeholder = str.Get("ui.command_palette_search_hint");
+    chrome.hint = str.Get("ui.command_palette_hint");
+    const PickerFrame frame = PaintPickerFrame(r, area, chrome, Hit::PalettePanel);
+    const RectF body = frame.body;
+    // Told every frame: the panel is sized from the window, so the number of rows
+    // a PageDown should cover is only known here.
+    palette.SetPageRows(frame.pageRows);
+
+    if (rows.empty()) {
+        r.DrawText(str.Get("ui.command_palette_empty"), body.inset(10.0f, 8.0f),
+                   th.textDim.alpha(0.7f), FontRole::Ui, TextAlign::Left);
+        return;
+    }
+
+    const int first = palette.scroll();
+    const int last = std::min(static_cast<int>(rows.size()) - 1, first + frame.pageRows - 1);
+
+    // The three right-hand columns are measured from the rows about to be drawn,
+    // the way the F1 sheet measures its chord column: a fixed width either cuts
+    // the longest answer in half or leaves a gap on every other row. Measured over
+    // the visible rows only, so scrolling can settle the columns tighter.
+    float chordCol = 0.0f;
+    float nameCol = 0.0f;
+    float groupCol = 0.0f;
+    const std::string unbound = str.Get("ui.command_palette_unbound");
+    for (int i = first; i <= last; ++i) {
+        const CommandPalette::Row& row = rows[i];
+        chordCol = std::max(chordCol, row.chords.empty()
+                                          ? r.MeasureText(unbound, FontRole::UiSmall)
+                                          : r.MeasureText(row.chords, FontRole::Mono));
+        nameCol = std::max(nameCol, r.MeasureText(row.name, FontRole::Mono));
+        groupCol = std::max(groupCol, r.MeasureText(row.group, FontRole::UiSmall));
+    }
+    chordCol = std::min(chordCol, 180.0f);
+    nameCol = std::min(nameCol, 210.0f);
+    groupCol = std::min(groupCol, 130.0f);
+
+    r.PushClip(body);
+    for (int i = first; i <= last; ++i) {
+        const CommandPalette::Row& row = rows[i];
+        const float y = body.t + 3.0f + static_cast<float>(i - first) * rowH;
+        const RectF box = { body.l + 4.0f, y, body.r - 6.0f, y + rowH };
+
+        const bool selected = (i == palette.cursor());
+        if (selected) r.FillRoundRect(box, 4.0f, th.rowSelected);
+        // PointerOver, not Hovered: this panel is the overlay Hovered() blocks.
+        else if (PointerOver(box)) r.FillRoundRect(box, 4.0f, th.rowHover);
+
+        const float labelLeft = box.l + 10.0f;
+        // What is left for the label decides what the row can afford. Columns are
+        // dropped, never stacked - two strings sharing one rectangle overlap, they
+        // do not shrink. The order they go in is "furthest from why the row was
+        // read": the group repeats down the whole list, the keys.ini name is a
+        // second spelling of a label that is already there, and the chords - the
+        // answer to "what runs this, and does anything?" - are the last to go.
+        float right = box.r - 10.0f;
+        const auto affords = [&](float column) { return right - labelLeft - column > 120.0f; };
+
+        if (affords(chordCol)) {
+            const bool bound = !row.chords.empty();
+            const std::string& text = bound ? row.chords : unbound;
+            const FontRole font = bound ? FontRole::Mono : FontRole::UiSmall;
+            r.DrawText(text, { right - chordCol, box.t, right, box.b },
+                       selected ? th.rowSelectedText : th.textDim.alpha(bound ? 1.0f : 0.6f), font,
+                       TextAlign::Right);
+            right -= chordCol + 14.0f;
+        }
+        if (affords(groupCol)) {
+            r.DrawText(row.group, { right - groupCol, box.t, right, box.b },
+                       th.textDim.alpha(selected ? 0.9f : 0.7f), FontRole::UiSmall,
+                       TextAlign::Right);
+            right -= groupCol + 14.0f;
+        }
+        if (affords(nameCol)) {
+            // The name from keys.ini, in the mono font the chords use: it is a
+            // spelling to be copied into a file, not prose. Dim, because the label
+            // beside it is what the row is called.
+            r.DrawText(row.name, { right - nameCol, box.t, right, box.b },
+                       th.textDim.alpha(selected ? 0.9f : 0.8f), FontRole::Mono,
+                       TextAlign::Right);
+            right -= nameCol + 14.0f;
+        }
+
+        r.DrawText(row.label, { labelLeft, box.t, std::max(labelLeft + 1.0f, right), box.b },
+                   selected ? th.rowSelectedText : th.text, FontRole::Ui, TextAlign::Left);
+
+        Add(box, Hit::PaletteRow, i);
+    }
+    r.PopClip();
+
+    PaintPickerScrollbar(r, body, static_cast<int>(rows.size()), frame.pageRows, first);
+}
+
+// Clicks while the palette is up. Nothing behind it is reachable, the same as the
+// other three overlays.
+bool AppUi::HandlePaletteClick(const MouseEvent& e) {
+    const Region* region = Pick(e.x, e.y);
+    if (region && region->kind == Hit::PaletteRow) {
+        app_.commandPalette().SelectRow(region->index);
+        // One click runs it, the way a bookmark row goes on one click: there is
+        // nothing here for a first click to disambiguate, and someone who pressed
+        // a command has already decided.
+        if (e.button == 0) app_.RunPaletteCommand();
+        app_.host().Invalidate();
+        return true;
+    }
+    if (region && region->kind == Hit::PalettePanel) {
+        app_.host().Invalidate();
+        return true;
+    }
+    // Outside the panel: same as pressing Escape.
+    app_.Execute(Cmd::ShowCommandPalette);
     return true;
 }
 
@@ -2671,8 +2890,13 @@ bool AppUi::OnMouse(const MouseEvent& e) {
         // The settings panel holds every row it has, so there is nothing to
         // scroll - but the list behind it must not scroll either.
         if (app_.settingsEditor().visible()) return true;
-        if (app_.bookmarkPicker().visible()) {
-            app_.bookmarkPicker().Scroll(static_cast<int>(-e.wheel * 3.0f));
+        if (app_.placePicker().visible()) {
+            app_.placePicker().Scroll(static_cast<int>(-e.wheel * 3.0f));
+            app_.host().Invalidate();
+            return true;
+        }
+        if (app_.commandPalette().visible()) {
+            app_.commandPalette().Scroll(static_cast<int>(-e.wheel * 3.0f));
             app_.host().Invalidate();
             return true;
         }
@@ -2725,7 +2949,8 @@ bool AppUi::OnMouse(const MouseEvent& e) {
 
     if (app_.settingsEditor().visible()) return HandleSettingsClick(e);
     if (app_.keyEditor().visible()) return HandleKeySettingsClick(e);
-    if (app_.bookmarkPicker().visible()) return HandleBookmarkClick(e);
+    if (app_.placePicker().visible()) return HandlePlaceClick(e);
+    if (app_.commandPalette().visible()) return HandlePaletteClick(e);
 
     if (app_.keyHelpVisible()) {
         app_.Execute(Cmd::ShowKeyHelp);

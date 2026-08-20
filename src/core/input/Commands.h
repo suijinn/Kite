@@ -48,6 +48,7 @@ enum class CmdGroup : uint8_t {
     X(ShowKeyHelp,        "app.key_help",            "cmd.key_help",           App)              \
     X(ShowKeySettings,    "app.key_settings",        "cmd.key_settings",       App)              \
     X(ShowSettings,       "app.settings",            "cmd.settings",           App)              \
+    X(ShowCommandPalette, "app.command_palette",     "cmd.command_palette",    App)              \
     X(CancelOverlay,      "app.cancel",              "cmd.cancel",             App)              \
     /* --- navigation ------------------------------------------------------- */                \
     X(GoUp,               "nav.up",                  "cmd.go_up",              Navigate)         \
@@ -140,7 +141,9 @@ enum class CmdGroup : uint8_t {
     /* --- bookmarks --------------------------------------------------------- */               \
     X(AddBookmark,        "bookmark.add",            "cmd.add_bookmark",       Bookmark)         \
     X(RemoveBookmark,     "bookmark.remove",         "cmd.remove_bookmark",    Bookmark)         \
-    X(ShowBookmarks,      "bookmark.list",           "cmd.show_bookmarks",     Bookmark)         \
+    /* bookmark.list: 既存の keys.ini が持っている名前なので動かせない。画面のほうは */               \
+    /* «行き先» に育ったので、列挙子とラベルだけが Places を名乗る（P3-12）。   */               \
+    X(ShowPlaces,         "bookmark.list",           "cmd.show_places",        Bookmark)         \
     X(Bookmark1,          "bookmark.goto_1",         "cmd.goto_bookmark_1",    Bookmark)         \
     X(Bookmark2,          "bookmark.goto_2",         "cmd.goto_bookmark_2",    Bookmark)         \
     X(Bookmark3,          "bookmark.goto_3",         "cmd.goto_bookmark_3",    Bookmark)         \

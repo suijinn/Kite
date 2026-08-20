@@ -117,8 +117,10 @@ private:
         SettingsRow,
         SettingsPrev,
         SettingsNext,
-        BookmarkPanel,
-        BookmarkRow,
+        PlacePanel,
+        PlaceRow,
+        PalettePanel,
+        PaletteRow,
     };
 
     /// 左ボタンが今おこなっている操作。
@@ -196,8 +198,52 @@ private:
     bool HandleKeySettingsClick(const MouseEvent& e);
     void PaintSettings(Renderer& r, const RectF& area);
     bool HandleSettingsClick(const MouseEvent& e);
-    void PaintBookmarks(Renderer& r, const RectF& area);
-    bool HandleBookmarkClick(const MouseEvent& e);
+    /// @brief 絞り込み付きチューザ 1 枚分の «器» の中身。
+    ///
+    /// 行き先の一覧（`Ctrl+P`）とコマンドパレット（`Ctrl+Shift+P`）は行が違うだけの
+    /// 同じ画面なので、パネル・表題・件数・入力欄はここに 1 組だけ置いて両方が使う。
+    struct PickerChrome {
+        std::string title;        ///< 表題（パネル左上）
+        std::string count;        ///< 件数（表題の右。入る幅が無ければ出さない）
+        std::string filter;       ///< 入力済みの絞り込み。空なら placeholder を出す
+        std::string placeholder;  ///< 絞り込みが空のときに入力欄へ出す案内
+        std::string hint;         ///< パネル下端の案内
+    };
+
+    /// @brief 器を描いた結果、行を描く側が要る寸法。
+    struct PickerFrame {
+        RectF panel;       ///< パネル全体
+        RectF body;        ///< 行を描く領域。上端 1 px は区切り線が塗られている
+        int pageRows = 1;  ///< body に収まる行数。PageUp / PageDown の移動量になる
+    };
+
+    /// @brief 絞り込み付きチューザの器を描く。
+    /// @param[in,out] r 描画先
+    /// @param[in] area ウィンドウ全体の矩形
+    /// @param[in] chrome 表題・件数・絞り込みなど、画面ごとに違う中身
+    /// @param[in] panelHit パネルに登録する当たり判定の種別
+    /// @return 行を描く領域と 1 画面の行数
+    /// @note **寸法は area だけで決まる。** 件数では決まらないので、どのチューザも
+    ///       同じ大きさ・同じ位置に出る ─ パレットからブックマーク一覧を選んでも、
+    ///       打ち込んでいた入力欄が動かない
+    /// @note 1 画面の行数は呼び出し側が自分の PickerList へ渡すこと。渡さないと
+    ///       PageDown の移動量と選択の引き戻しが窓の高さに追随しない
+    PickerFrame PaintPickerFrame(Renderer& r, const RectF& area, const PickerChrome& chrome,
+                                Hit panelHit);
+
+    /// @brief チューザの行の脇に細いつまみを描く。全行が収まっていれば何もしない。
+    /// @param[in,out] r 描画先
+    /// @param[in] body 行を描いている領域
+    /// @param[in] rows 絞り込み後の行数
+    /// @param[in] pageRows 1 画面に収まる行数
+    /// @param[in] first 先頭に出ている行番号
+    /// @todo 掴めない（一覧のスクロールバーと同じ扱い。ROADMAP P3-11）
+    void PaintPickerScrollbar(Renderer& r, const RectF& body, int rows, int pageRows, int first);
+
+    void PaintPlaces(Renderer& r, const RectF& area);
+    bool HandlePlaceClick(const MouseEvent& e);
+    void PaintCommandPalette(Renderer& r, const RectF& area);
+    bool HandlePaletteClick(const MouseEvent& e);
     void PaintNode(Renderer& r, SplitNode* node, const RectF& area);
     void PaintPane(Renderer& r, Pane* pane, const RectF& area);
     void PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused,

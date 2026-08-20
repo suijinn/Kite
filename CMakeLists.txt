@@ -20,6 +20,33 @@ endif()
 # Static CRT: one self-contained exe and a measurably faster cold start.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
+# x64 only, and the shell has to agree.
+#
+# "Developer PowerShell for VS 2022" sets up **x86** unless it is launched with
+# -Arch amd64, so LIB points at the 32-bit CRT while the build tree here is x64.
+# Compiling still works (INCLUDE does not care), and the failure surfaces at the
+# very end as a linker error that names nothing relevant:
+#
+#     error LNK2001: unresolved external symbol _purecall
+#
+# The linker found the x86 libvcruntime.lib, ignored it for an x64 target, and
+# went quiet about why. Caught here instead: a configure runs before every build,
+# including `cmake --preset release`, so this is the last place that can still
+# say something useful. VSCMD_ARG_TGT_ARCH is set by vcvars; CI configures
+# without it (-A x64 through the VS generator) and skips the check.
+if(MSVC AND DEFINED ENV{VSCMD_ARG_TGT_ARCH} AND NOT "$ENV{VSCMD_ARG_TGT_ARCH}" STREQUAL "x64")
+    message(FATAL_ERROR
+        "This shell targets $ENV{VSCMD_ARG_TGT_ARCH}, but Kite builds x64 only.\n"
+        "Open \"x64 Native Tools Command Prompt for VS 2022\", or start the "
+        "Developer PowerShell with -Arch amd64 -HostArch amd64, or just run "
+        ".\\build.ps1 (it loads vcvars64 itself).")
+endif()
+if(MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+    message(FATAL_ERROR
+        "This build tree is configured for 32-bit. Kite is x64 only - delete the "
+        "build directory and configure again from an x64 shell.")
+endif()
+
 # ---------------------------------------------------------------------------
 # Shared compile settings
 # ---------------------------------------------------------------------------
@@ -92,9 +119,11 @@ set_source_files_properties(${KITE_APP_RC} PROPERTIES OBJECT_DEPENDS "${KITE_ICO
 # ---------------------------------------------------------------------------
 add_library(kite_core STATIC
     src/core/app/App.cpp
-    src/core/app/BookmarkPicker.cpp
+    src/core/app/PlacePicker.cpp
+    src/core/app/CommandPalette.cpp
     src/core/app/ConfigDir.cpp
     src/core/app/IconProvider.cpp
+    src/core/app/PickerList.cpp
     src/core/app/SettingsEditor.cpp
     src/core/app/UndoStack.cpp
     src/core/base/Format.cpp
@@ -251,7 +280,8 @@ if(KITE_BUILD_TESTS)
         tests/test_keymap.cpp
         tests/test_keyeditor.cpp
         tests/test_settings.cpp
-        tests/test_bookmarkpicker.cpp
+        tests/test_placepicker.cpp
+        tests/test_commandpalette.cpp
         tests/test_pathcomplete.cpp
         tests/test_typeahead.cpp
         tests/test_configdir.cpp
@@ -272,7 +302,7 @@ if(KITE_BUILD_TESTS)
     # One CTest entry per suite so a failure names the area straight away.
     set(KITE_TEST_SUITES
         utf8 path ini format strings keymap keyeditor settings pathcomplete typeahead theme tab workspace session
-        app appui drop iconcache hostproto config undo bookmarkpicker vfolder)
+        app appui drop iconcache hostproto config undo placepicker palette vfolder)
 
     foreach(suite IN LISTS KITE_TEST_SUITES)
         add_test(NAME ${suite} COMMAND kite_tests --filter ${suite}.)
