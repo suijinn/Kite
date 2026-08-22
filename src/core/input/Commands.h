@@ -61,6 +61,9 @@ enum class CmdGroup : uint8_t {
     X(OpenInNewTab,       "nav.open_new_tab",        "cmd.open_new_tab",       Navigate)         \
     X(EditPath,           "nav.edit_path",           "cmd.edit_path",          Navigate)         \
     X(FocusFilter,        "nav.filter",              "cmd.filter",             Navigate)         \
+    /* nav.places: 画面が «行き先» に育ったので、名前も分類もそちらに揃えてある。 */               \
+    /* 旧名 bookmark.list は CommandFromName() が別名として読み続ける（Commands.cpp）。*/            \
+    X(ShowPlaces,         "nav.places",              "cmd.show_places",        Navigate)         \
     /* --- cursor & selection ------------------------------------------------ */               \
     X(CursorUp,           "sel.up",                  "cmd.cursor_up",          Select)           \
     X(CursorDown,         "sel.down",                "cmd.cursor_down",        Select)           \
@@ -141,9 +144,6 @@ enum class CmdGroup : uint8_t {
     /* --- bookmarks --------------------------------------------------------- */               \
     X(AddBookmark,        "bookmark.add",            "cmd.add_bookmark",       Bookmark)         \
     X(RemoveBookmark,     "bookmark.remove",         "cmd.remove_bookmark",    Bookmark)         \
-    /* bookmark.list: 既存の keys.ini が持っている名前なので動かせない。画面のほうは */               \
-    /* «行き先» に育ったので、列挙子とラベルだけが Places を名乗る（P3-12）。   */               \
-    X(ShowPlaces,         "bookmark.list",           "cmd.show_places",        Bookmark)         \
     X(Bookmark1,          "bookmark.goto_1",         "cmd.goto_bookmark_1",    Bookmark)         \
     X(Bookmark2,          "bookmark.goto_2",         "cmd.goto_bookmark_2",    Bookmark)         \
     X(Bookmark3,          "bookmark.goto_3",         "cmd.goto_bookmark_3",    Bookmark)         \
@@ -209,6 +209,9 @@ const CommandInfo* FindCommand(Cmd id);
 /// @brief 設定ファイル上の名前からコマンドを引く。
 /// @param[in] name keys.ini に書かれる名前。大文字小文字は区別しない
 /// @return 対応するコマンド。未知の名前なら Cmd::None
+/// @note 名前を変えたコマンドの**旧名も読む**（Commands.cpp の別名表）。既存の
+///       keys.ini がその行を持っているので、読まなければ利用者の割り当てが静かに
+///       既定へ戻る。書き出すのは常に現在の名前（KeyMap::ToIni）
 Cmd CommandFromName(std::string_view name);
 
 /// @brief コマンドの設定ファイル上の名前を返す。

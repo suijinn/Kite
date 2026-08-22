@@ -27,6 +27,7 @@
 #include "core/input/KeyEditor.h"
 #include "core/input/KeyMap.h"
 #include "core/input/PathComplete.h"
+#include "core/input/TextField.h"
 #include "core/input/TypeAhead.h"
 #include "core/model/Workspace.h"
 #include "core/theme/Theme.h"
@@ -47,62 +48,18 @@ enum class PromptKind : uint8_t {
 };
 
 /// @brief 入力欄の状態。
-struct Prompt {
+///
+/// 文字列・キャレット・選択と、その上の打鍵は `TextField` が持つ ─ チューザの
+/// 絞り込み欄と同じ数え方でなければ、`Shift+←` の伸ばし方が画面ごとに違う入力欄に
+/// なる。ここが足すのは «何を尋ねているか» だけ。
+struct Prompt : TextField {
     PromptKind kind = PromptKind::None;      ///< 何を尋ねているか
     std::string labelKey;                    ///< 見出しの i18n キー
-    std::string text;                        ///< 入力中の文字列
-    size_t caret = 0;                        ///< キャレット位置。text へのバイト添字
-    size_t anchor = 0;                       ///< 選択範囲のもう一端。caret と等しければ選択なし
     std::vector<std::string> pendingPaths;   ///< 確認待ちの操作対象
 
     /// @brief 入力欄が表示されているかを判定する。
     /// @return 表示中なら true
     bool active() const { return kind != PromptKind::None; }
-
-    /// @brief 文字列が選択されているかを判定する。
-    /// @return 選択されていれば true
-    bool hasSelection() const { return caret != anchor; }
-
-    /// @brief 選択範囲の先頭を返す。
-    /// @return text へのバイト添字
-    size_t selBegin() const { return caret < anchor ? caret : anchor; }
-
-    /// @brief 選択範囲の終端を返す。
-    /// @return text へのバイト添字。選択が無ければ selBegin() と等しい
-    size_t selEnd() const { return caret < anchor ? anchor : caret; }
-
-    /// @brief キャレットを動かし、選択を解除する。
-    /// @param[in] pos 移動先。text へのバイト添字
-    void SetCaret(size_t pos) {
-        caret = pos;
-        anchor = pos;
-    }
-
-    /// @brief 範囲を選択し、キャレットを終端側に置く。
-    /// @param[in] begin 選択の先頭。text へのバイト添字
-    /// @param[in] end 選択の終端。text へのバイト添字。どちらも末尾に丸める
-    /// @note キャレットが終端側なのは、`→` を押せば選択の後ろへ畳めるという
-    ///       入力欄の一般則に合わせるため
-    void SelectRange(size_t begin, size_t end) {
-        anchor = begin < text.size() ? begin : text.size();
-        caret = end < text.size() ? end : text.size();
-    }
-
-    /// @brief 全体を選択する。
-    void SelectAll() { SelectRange(0, text.size()); }
-
-    /// @brief 選択されている範囲を削除する。
-    /// @return 実際に削除したら true
-    /// @note 文字入力・Backspace・Delete がまずこれを呼ぶ。選択したまま打った
-    ///       文字が置き換えではなく挿入になると、全選択が何のためにあるのか
-    ///       分からなくなる
-    bool DeleteSelection() {
-        if (!hasSelection()) return false;
-        const size_t begin = selBegin();
-        text.erase(begin, selEnd() - begin);
-        SetCaret(begin);
-        return true;
-    }
 
     /// @brief 文字入力ではなく Yes/No の確認かを判定する。
     /// @return 確認なら true
@@ -471,6 +428,28 @@ public:
     /// @brief ペインにフォーカスを移す。
     /// @param[in] pane フォーカスするペイン。nullptr なら何もしない
     void FocusPane(Pane* pane);
+
+    /// @brief 行き先の一覧を開く。
+    /// @return 開けたら true。行き先が 1 つも無ければ false（ステータス行で言う）
+    /// @note 他のオーバーレイは閉じる。2 枚重なると、どちらが打鍵を受けるのか読めない
+    bool OpenPlacePicker();
+
+    /// @brief コマンドパレットを開く。
+    /// @note 開くたびに作り直す ─ ラベルは言語で、和音は `Ctrl+F1` で、番号で指す
+    ///       8 個に添える行き先は `Ctrl+D` で変わる
+    void OpenCommandPalette();
+
+    /// @brief 絞り込み欄の先頭の `>` に合わせて、2 つのチューザを入れ替える。
+    /// @note 絞り込み欄を書き換えた直後に必ず呼ぶ（文字入力・削除・貼り付け）。
+    ///       `>` を打てばコマンドパレット、消せば行き先の一覧 ─ VS Code の
+    ///       `Ctrl+P` → `>` と同じ読み方で、**入力欄は動かない**（2 つの画面は同じ
+    ///       寸法で出る）
+    /// @note 入力欄の中身はそのまま持ち越す。持ち越さないと、`>` を打った瞬間に
+    ///       打ちかけの文字列が消える
+    /// @note **混ぜるのではなくモードにする。** 1 つの一覧に行き先とコマンドを
+    ///       並べると、`d` の 1 文字に `file.delete` と `Downloads` が並び、
+    ///       毎日使う行き先が 124 行のコマンド表に薄められる（ROADMAP P3-12）
+    void SyncPickerMode();
 
     /// @brief 行き先の一覧に並べる «開いているタブ» を集める。
     /// @return アクティブなセッションのタブ。今いるタブは含まない

@@ -43,6 +43,73 @@ std::string ClipboardToField(std::string_view text) {
     return out;
 }
 
+// A field on its way to the clipboard.
+//
+// Nothing selected still leaves an obvious thing to copy - the whole line - and
+// copying cannot lose anything. Cut can, so it stays out of the way until there
+// is a range to take.
+//
+// Shared by every field Kite draws: the prompt on a breadcrumb or a row, and the
+// filter box of the two choosers. A field that answered Ctrl+C differently
+// depending on which screen it was on would not be one field.
+bool CopyFieldToClipboard(IShellIntegration& shell, TextField& field, bool cut) {
+    std::string text;
+    if (field.hasSelection()) {
+        text = field.Selection();
+    } else if (!cut) {
+        text = field.text;
+    }
+    if (text.empty()) return false;
+    if (!shell.SetClipboardText(text)) return false;
+    return cut && field.DeleteSelection();
+}
+
+// The clipboard on its way into a field.
+//
+// Files come second: a path copied as text is the common case, and the shell
+// hands back both formats when Explorer copied a file, so asking for text first
+// is what keeps "Copy as path" pasting as itself.
+bool PasteIntoField(IShellIntegration& shell, TextField& field) {
+    std::string text;
+    std::vector<std::string> files;
+    if (!shell.GetClipboardText(text)) {
+        if (!shell.GetClipboardFiles(files, nullptr) || files.empty()) return false;
+        text = files.front();
+    }
+    return field.Insert(ClipboardToField(text));
+}
+
+// The three clipboard chords over a chooser's filter box.
+//
+// Taken here rather than inside PickerList because core reaches the clipboard
+// only through IShellIntegration, and a list of rows has no business holding
+// one. Both choosers wrap the same PickerList, so one template covers them.
+//
+// Left to the keymap these would reach Cmd::Copy and Cmd::Paste and act on the
+// listing behind the panel - the same reason the prompt answers them itself.
+template <class Picker>
+bool PickerClipboardKey(IShellIntegration& shell, Picker& picker, const Chord& chord) {
+    // Each of the three has an Insert/Delete spelling as well, the way the
+    // prompt takes them.
+    enum class Which { No, Copy, Cut, Paste };
+    const Which which =
+        (chord.mods == kModCtrl && chord.key == Key::C)        ? Which::Copy
+        : (chord.mods == kModCtrl && chord.key == Key::Insert) ? Which::Copy
+        : (chord.mods == kModCtrl && chord.key == Key::X)      ? Which::Cut
+        : (chord.mods == kModShift && chord.key == Key::Delete) ? Which::Cut
+        : (chord.mods == kModCtrl && chord.key == Key::V)      ? Which::Paste
+        : (chord.mods == kModShift && chord.key == Key::Insert) ? Which::Paste
+                                                                : Which::No;
+    if (which == Which::No) return false;
+
+    const bool edited =
+        (which == Which::Paste)
+            ? PasteIntoField(shell, picker.filterField())
+            : CopyFieldToClipboard(shell, picker.filterField(), which == Which::Cut);
+    if (edited) picker.FilterEdited();
+    return true;
+}
+
 // Whether a character message is going to follow this chord.
 //
 // Only those chords set the swallow flag. Setting it for the rest would leave
@@ -1723,19 +1790,7 @@ bool App::HandlePromptKey(const Chord& chord) {
     // the listing behind the field - copying files while the caret sits in a
     // half-typed path is never what the keystroke meant.
     auto copyField = [&](bool cut) {
-        // Nothing selected still leaves an obvious thing to copy - the whole
-        // line - and copying cannot lose anything. Cut can, so it stays out of
-        // the way until there is a range to take.
-        std::string text;
-        if (prompt_.hasSelection()) {
-            text = prompt_.text.substr(prompt_.selBegin(), prompt_.selEnd() - prompt_.selBegin());
-        } else if (!cut) {
-            text = prompt_.text;
-        }
-        if (text.empty()) return;
-        if (!shell_.SetClipboardText(text)) return;
-        if (cut) {
-            prompt_.DeleteSelection();
+        if (CopyFieldToClipboard(shell_, prompt_, cut)) {
             syncFilter();
             SyncCompletion(true);
         }
@@ -1743,20 +1798,7 @@ bool App::HandlePromptKey(const Chord& chord) {
     };
 
     auto pasteField = [&] {
-        std::string text;
-        std::vector<std::string> files;
-        // Files come second: a path copied as text is the common case, and the
-        // shell hands back both formats when Explorer copied a file, so asking
-        // for text first is what keeps "Copy as path" pasting as itself.
-        if (!shell_.GetClipboardText(text)) {
-            if (!shell_.GetClipboardFiles(files, nullptr) || files.empty()) return;
-            text = files.front();
-        }
-        const std::string insert = ClipboardToField(text);
-        if (insert.empty()) return;
-        prompt_.DeleteSelection();
-        prompt_.text.insert(prompt_.caret, insert);
-        prompt_.SetCaret(prompt_.caret + insert.size());
+        if (!PasteIntoField(shell_, prompt_)) return;
         syncFilter();
         SyncCompletion(true);
         host_.Invalidate();
@@ -1785,22 +1827,10 @@ bool App::HandlePromptKey(const Chord& chord) {
             MoveCompletion(back ? -1 : 1);
             return true;
         }
-        case Key::Backspace: {
+        case Key::Backspace:
             if (prompt_.isConfirm()) return true;
-            if (prompt_.DeleteSelection()) {
-                syncFilter();
-                SyncCompletion(true);
-            } else if (prompt_.caret > 0) {
-                const size_t start = utf8::PrevBoundary(prompt_.text, prompt_.caret);
-                prompt_.text.erase(start, prompt_.caret - start);
-                prompt_.SetCaret(start);
-                syncFilter();
-                SyncCompletion(true);
-            }
-            host_.Invalidate();
-            return true;
-        }
-        case Key::Delete: {
+            break;
+        case Key::Delete:
             if (prompt_.isConfirm()) return true;
             // Shift+Delete is the other spelling of cut, the way Shift+Insert is
             // the other spelling of paste.
@@ -1808,25 +1838,7 @@ bool App::HandlePromptKey(const Chord& chord) {
                 copyField(true);
                 return true;
             }
-            if (prompt_.DeleteSelection()) {
-                syncFilter();
-                SyncCompletion(true);
-            } else if (prompt_.caret < prompt_.text.size()) {
-                const size_t end = utf8::NextBoundary(prompt_.text, prompt_.caret);
-                prompt_.text.erase(prompt_.caret, end - prompt_.caret);
-                syncFilter();
-                SyncCompletion(true);
-            }
-            host_.Invalidate();
-            return true;
-        }
-        case Key::A:
-            // Select all. The chord is Cmd::SelectAll everywhere else, and it
-            // means the same thing here - the field is what has focus.
-            if (chord.mods != kModCtrl || prompt_.isConfirm()) break;
-            prompt_.SelectAll();
-            host_.Invalidate();
-            return true;
+            break;
         case Key::C:
         case Key::X:
             if (chord.mods != kModCtrl || prompt_.isConfirm()) break;
@@ -1844,51 +1856,29 @@ bool App::HandlePromptKey(const Chord& chord) {
                 pasteField();
             }
             return true;
-        case Key::Left:
-        case Key::Right: {
-            const bool back = (chord.key == Key::Left);
-            const bool extend = (chord.mods & kModShift) != 0;
-            size_t pos;
-            if ((chord.mods & kModCtrl) != 0) {
-                // Ctrl moves by path component. In a field that holds a path,
-                // that is what a "word" is - stopping inside "Users" is never
-                // what anyone reaches for Ctrl+arrow to do.
-                pos = back ? path::PrevSegment(prompt_.text, prompt_.caret)
-                           : path::NextSegment(prompt_.text, prompt_.caret);
-            } else if (!extend && prompt_.hasSelection()) {
-                // Without Shift, an arrow collapses the selection to its edge
-                // rather than also eating a character.
-                pos = back ? prompt_.selBegin() : prompt_.selEnd();
-            } else {
-                pos = back ? utf8::PrevBoundary(prompt_.text, prompt_.caret)
-                           : utf8::NextBoundary(prompt_.text, prompt_.caret);
-            }
-            // Shift keeps the anchor where it was, which is what makes a run of
-            // Shift+arrow grow one selection instead of a series of them.
-            if (extend) {
-                prompt_.caret = pos;
-            } else {
-                prompt_.SetCaret(pos);
-            }
-            SyncCompletion(false);
-            host_.Invalidate();
-            return true;
-        }
-        case Key::Home:
-        case Key::End: {
-            const size_t pos = (chord.key == Key::Home) ? 0 : prompt_.text.size();
-            if ((chord.mods & kModShift) != 0) {
-                prompt_.caret = pos;
-            } else {
-                prompt_.SetCaret(pos);
-            }
-            SyncCompletion(false);
-            host_.Invalidate();
-            return true;
-        }
         default:
             break;
     }
+
+    // What is left is the field itself - the caret, the selection, and the
+    // one-character deletes. The counting lives in TextField, shared with the
+    // choosers' filter box: two spellings of Shift+Left would be two fields.
+    if (!prompt_.isConfirm()) {
+        switch (prompt_.HandleKey(chord)) {
+            case TextField::Edit::Changed:
+                syncFilter();
+                SyncCompletion(true);
+                host_.Invalidate();
+                return true;
+            case TextField::Edit::Moved:
+                SyncCompletion(false);
+                host_.Invalidate();
+                return true;
+            case TextField::Edit::None:
+                break;
+        }
+    }
+
     // Swallow everything else so a stray shortcut cannot fire mid-edit.
     return true;
 }
@@ -1899,11 +1889,14 @@ bool App::OnChar(uint32_t cp) {
     if (settingsEditor_.visible()) return true;
     if (placePicker_.visible()) {
         if (!placePicker_.HandleChar(cp)) return false;
+        // A ">" typed at the front is a request for the other screen.
+        SyncPickerMode();
         host_.Invalidate();
         return true;
     }
     if (commandPalette_.visible()) {
         if (!commandPalette_.HandleChar(cp)) return false;
+        SyncPickerMode();
         host_.Invalidate();
         return true;
     }
@@ -2010,11 +2003,26 @@ bool App::OnKey(const Chord& chord) {
             Execute(Cmd::ShowPlaces);
             return true;
         }
+        // The other mode's chord crosses over rather than being swallowed: the
+        // two screens are one window, and Ctrl+Shift+P means "commands" wherever
+        // it is pressed. The same reading VS Code gives it.
+        if (keymap_.Lookup(chord) == Cmd::ShowCommandPalette) {
+            Execute(Cmd::ShowCommandPalette);
+            return true;
+        }
+        // The filter box is a text field, so the clipboard chords are its own -
+        // and PickerList cannot read the clipboard from where it sits.
+        if (PickerClipboardKey(shell_, placePicker_, chord)) {
+            // A pasted ">" counts the same as a typed one.
+            SyncPickerMode();
+            host_.Invalidate();
+            return true;
+        }
         switch (placePicker_.HandleKey(chord)) {
             case PlacePicker::Action::Open: ChoosePlace(false); break;
             case PlacePicker::Action::OpenNewTab: ChoosePlace(true); break;
             case PlacePicker::Action::Close: placePicker_.Close(); break;
-            case PlacePicker::Action::None: break;
+            case PlacePicker::Action::None: SyncPickerMode(); break;
         }
         // Everything reaching here was swallowed: picking a folder is not a state
         // to fire unrelated shortcuts from.
@@ -2028,10 +2036,20 @@ bool App::OnKey(const Chord& chord) {
             Execute(Cmd::ShowCommandPalette);
             return true;
         }
+        if (keymap_.Lookup(chord) == Cmd::ShowPlaces) {
+            Execute(Cmd::ShowPlaces);
+            return true;
+        }
+        if (PickerClipboardKey(shell_, commandPalette_, chord)) {
+            SyncPickerMode();
+            host_.Invalidate();
+            return true;
+        }
         switch (commandPalette_.HandleKey(chord)) {
             case CommandPalette::Action::Run: RunPaletteCommand(); break;
             case CommandPalette::Action::Close: commandPalette_.Close(); break;
-            case CommandPalette::Action::None: break;
+            // Backspacing the ">" away is the way back to the places list.
+            case CommandPalette::Action::None: SyncPickerMode(); break;
         }
         // Swallowed like the bookmark list: a chord reaching the keymap from here
         // would run one command while another is being picked.
@@ -2154,6 +2172,81 @@ std::vector<PlacePicker::OpenTab> App::CollectOpenTabs() const {
         }
     }
     return out;
+}
+
+bool App::OpenPlacePicker() {
+    std::vector<PlacePicker::OpenTab> tabs = CollectOpenTabs();
+    if (workspace_.bookmarks.empty() && tabs.empty() && roots_.empty()) {
+        // An empty panel is the same as a key that does nothing, except it also
+        // has to be dismissed. Say what is missing and how to add it - with no
+        // bookmarks and nothing else open, that is the only thing left to say. On
+        // a real machine the drives keep this from ever happening.
+        SetStatus(strings_.Get("ui.goto_none"));
+        return false;
+    }
+    keyHelp_ = false;
+    keyEditor_.Close();
+    settingsEditor_.Close();
+    commandPalette_.Close();
+    const Tab* tab = workspace_.focusedTab();
+    placePicker_.Open(strings_, keymap_, workspace_.bookmarks, tabs, roots_,
+                      tab ? tab->path : std::string());
+    return true;
+}
+
+void App::OpenCommandPalette() {
+    keyHelp_ = false;
+    keyEditor_.Close();
+    settingsEditor_.Close();
+    placePicker_.Close();
+    // 開くたびに作り直す。ラベルは言語で変わり、和音は Ctrl+F1 で変わり、
+    // 番号で指す 8 個に添える行き先は Ctrl+D で変わる。
+    commandPalette_.Open(strings_, keymap_, workspace_.bookmarks);
+}
+
+// Which chooser the leading ">" asks for.
+//
+// The two screens are one window with two modes, the way VS Code's Ctrl+P is:
+// type ">" and it is the command list, delete it and it is the places list. The
+// marker lives in the field as a character, so the field says which mode it is in
+// and Backspace is the way back - no extra key, no label of its own.
+//
+// Mixing the rows instead was the alternative, and it makes the frequent side pay:
+// "d" would bring up file.delete next to Downloads, and a hundred-odd commands
+// would dilute the handful of places anyone actually goes to (ROADMAP P3-12). A
+// mode costs one character and keeps both lists honest.
+void App::SyncPickerMode() {
+    const std::string_view marker = CommandPalette::kPrefix;
+    auto commandMode = [&](const std::string& text) {
+        return text.compare(0, marker.size(), marker) == 0;
+    };
+
+    if (placePicker_.visible()) {
+        // Copied before the swap: Open() resets the field, and what was typed has
+        // to survive it - otherwise ">" eats whatever came before it.
+        const TextField carried = placePicker_.field();
+        if (!commandMode(carried.text)) return;
+        placePicker_.Close();
+        OpenCommandPalette();
+        commandPalette_.filterField() = carried;
+        commandPalette_.FilterEdited();
+        host_.Invalidate();
+        return;
+    }
+
+    if (!commandPalette_.visible()) return;
+    const TextField carried = commandPalette_.field();
+    if (commandMode(carried.text)) return;
+    commandPalette_.Close();
+    // Nowhere to go: the places list says so and stays shut rather than coming up
+    // empty. Closed is the honest answer, and the status line carries the reason.
+    if (!OpenPlacePicker()) {
+        host_.Invalidate();
+        return;
+    }
+    placePicker_.filterField() = carried;
+    placePicker_.FilterEdited();
+    host_.Invalidate();
 }
 
 void App::ChoosePlace(bool newTab) {
@@ -2554,13 +2647,7 @@ void App::Execute(Cmd cmd) {
             if (commandPalette_.visible()) {
                 commandPalette_.Close();
             } else {
-                keyHelp_ = false;
-                keyEditor_.Close();
-                settingsEditor_.Close();
-                placePicker_.Close();
-                // 開くたびに作り直す。ラベルは言語で変わり、和音は Ctrl+F1 で変わり、
-                // 番号で指す 8 個に添える行き先は Ctrl+D で変わる。
-                commandPalette_.Open(strings_, keymap_, workspace_.bookmarks);
+                OpenCommandPalette();
             }
             host_.Invalidate();
             break;
@@ -3055,21 +3142,7 @@ void App::Execute(Cmd cmd) {
             if (placePicker_.visible()) {
                 placePicker_.Close();
             } else {
-                std::vector<PlacePicker::OpenTab> tabs = CollectOpenTabs();
-                if (workspace_.bookmarks.empty() && tabs.empty()) {
-                    // An empty panel is the same as a key that does nothing, except
-                    // it also has to be dismissed. Say what is missing and how to
-                    // add it - with no bookmarks and nothing else open, that is the
-                    // only thing left to say.
-                    SetStatus(strings_.Get("ui.goto_none"));
-                } else {
-                    keyHelp_ = false;
-                    keyEditor_.Close();
-                    settingsEditor_.Close();
-                    commandPalette_.Close();
-                    placePicker_.Open(strings_, keymap_, workspace_.bookmarks, tabs,
-                                         tab ? tab->path : std::string());
-                }
+                OpenPlacePicker();
             }
             host_.Invalidate();
             break;

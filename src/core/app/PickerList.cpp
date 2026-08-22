@@ -17,9 +17,14 @@ bool Matches(const std::string& needle, const PickerList::Entry& entry) {
 
 }  // namespace
 
+void PickerList::SetPrefix(std::string prefix) { prefix_ = std::move(prefix); }
+
 void PickerList::Reset(std::vector<Entry> entries, int selectedId) {
     all_ = std::move(entries);
-    filter_.clear();
+    // The marker is part of the text from the start, so the field says which mode
+    // it is in without a label of its own - and deleting it is what leaves.
+    filter_.Clear();
+    filter_.Insert(prefix_);
     scroll_ = 0;
     selected_ = selectedId;
     Rebuild();
@@ -28,14 +33,22 @@ void PickerList::Reset(std::vector<Entry> entries, int selectedId) {
 void PickerList::Clear() {
     all_.clear();
     shown_.clear();
-    filter_.clear();
+    filter_.Clear();
+    query_.clear();
     selected_ = -1;
     cursor_ = -1;
     scroll_ = 0;
 }
 
 void PickerList::Rebuild() {
-    const std::string needle = utf8::ToLowerAscii(filter_);
+    // Only what follows the mode marker is matched. Mid-edit the marker can be
+    // gone for one frame - the caller swaps screens on the next call - so this
+    // has to read the text as it is rather than assume the marker is there.
+    query_ = filter_.text;
+    if (!prefix_.empty() && query_.compare(0, prefix_.size(), prefix_) == 0) {
+        query_.erase(0, prefix_.size());
+    }
+    const std::string needle = utf8::ToLowerAscii(query_);
 
     shown_.clear();
     for (const Entry& entry : all_) {
@@ -127,9 +140,12 @@ PickerList::Action PickerList::HandleKey(const Chord& chord) {
             case Key::Escape:
                 // The filter is the more recent state, so it goes first: a screen
                 // full of a mistyped filter can be cleared without losing the
-                // screen, and a second Escape then leaves.
-                if (!filter_.empty()) {
-                    filter_.clear();
+                // screen, and a second Escape then leaves. It clears back to the
+                // mode marker, not past it - taking the marker too would swap the
+                // screen out from under an Escape that meant "clear what I typed".
+                if (filter_.text.size() > prefix_.size()) {
+                    filter_.Clear();
+                    filter_.Insert(prefix_);
                     Rebuild();
                     return Action::None;
                 }
@@ -138,31 +154,40 @@ PickerList::Action PickerList::HandleKey(const Chord& chord) {
             case Key::Down: MoveCursor(1); return Action::None;
             case Key::PageUp: MoveCursor(-pageRows_); return Action::None;
             case Key::PageDown: MoveCursor(pageRows_); return Action::None;
-            case Key::Home: MoveCursor(0, true); return Action::None;
+            case Key::Home:
             case Key::End:
-                MoveCursor(static_cast<int>(shown_.size()) - 1, true);
-                return Action::None;
-            case Key::Enter: return (cursor_ >= 0) ? Action::Accept : Action::None;
-            case Key::Backspace:
-                if (!filter_.empty()) {
-                    filter_.erase(utf8::PrevBoundary(filter_, filter_.size()));
-                    Rebuild();
+                // Only while there is nothing typed. An empty field has nowhere
+                // to put the caret, so the pair reads as "first row" / "last row"
+                // the way it does on the listing behind; once a filter is being
+                // typed the field is what they belong to, which is what every
+                // other text field on the desktop does.
+                if (filter_.text.size() <= prefix_.size()) {
+                    MoveCursor(chord.key == Key::Home ? 0 : static_cast<int>(shown_.size()) - 1,
+                               true);
+                    return Action::None;
                 }
-                return Action::None;
+                break;
+            case Key::Enter: return (cursor_ >= 0) ? Action::Accept : Action::None;
             default:
                 break;
         }
     }
 
-    // Everything else is swallowed. A stray shortcut firing behind an open chooser
-    // would act on whatever the user is in the middle of leaving.
+    // Everything left is the filter field's: the caret, the selection, and the
+    // one-character deletes. The counting lives in TextField so that this field
+    // and the prompt cannot drift apart.
+    if (filter_.HandleKey(chord) == TextField::Edit::Changed) Rebuild();
+
+    // Anything the field did not want is swallowed too. A stray shortcut firing
+    // behind an open chooser would act on whatever the user is in the middle of
+    // leaving.
     return Action::None;
 }
 
 bool PickerList::HandleChar(uint32_t codepoint) {
     if (codepoint < 0x20 || codepoint == 0x7F) return false;
 
-    utf8::Encode(codepoint, filter_);
+    filter_.Insert(utf8::Encode(codepoint));
     Rebuild();
     return true;
 }

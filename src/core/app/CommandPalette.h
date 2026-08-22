@@ -27,6 +27,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/app/PickerList.h"
@@ -45,6 +46,13 @@ namespace kite {
 /// コマンドのラベル・分類・割り当てられている和音。
 class CommandPalette {
 public:
+    /// @brief コマンドモードの印。入力欄の先頭に常に在る。
+    ///
+    /// 行き先の一覧（`Ctrl+P`）の欄でこれを打てばこちらへ、消せばあちらへ戻る
+    /// （VS Code と同じ読み方。切り替えは `App::SyncPickerMode`）。**印は入力欄の中に
+    /// 文字として在る** ─ «今どちらのモードか» を言うのも、戻る道も、これ 1 つで足りる。
+    static constexpr std::string_view kPrefix = ">";
+
     /// @brief 打鍵を処理した結果、呼び出し側がすべきこと。
     enum class Action : uint8_t {
         None,   ///< 何も起きない。打鍵は消費した
@@ -98,8 +106,24 @@ public:
     int scroll() const;
 
     /// @brief 絞り込み文字列を返す。
-    /// @return 入力済みの文字列。無ければ空
+    /// @return 一致に掛けている文字列（先頭の `>` は含まない）。無ければ空
     const std::string& filter() const;
+
+    /// @brief 絞り込みの入力欄を返す。
+    /// @return キャレットと選択を持つ入力欄
+    /// @note 描く側はこれを見る。キャレットが末尾にあるとは限らない
+    const TextField& field() const { return list_.field(); }
+
+    /// @brief 絞り込みの入力欄を書き換えられる形で返す。
+    /// @return キャレットと選択を持つ入力欄
+    /// @note **書き換えたら FilterEdited() を呼ぶこと。** クリップボードを読み書き
+    ///       できるのは `IShellIntegration` を持つ側だけなので、`Ctrl+C` / `Ctrl+X` /
+    ///       `Ctrl+V` の 3 つだけはここを通って App から編集される
+    TextField& filterField() { return list_.filterField(); }
+
+    /// @brief 外から絞り込み欄を書き換えた後に呼ぶ。
+    /// @note 一致した行を数え直して rows() に反映する
+    void FilterEdited();
 
     /// @brief 選択中のコマンドを返す。
     /// @return 実行するコマンド。選択が無ければ Cmd::None

@@ -1,4 +1,5 @@
-// 行き先の一覧（Ctrl+P）。ブックマークと開いているタブを並べる «次にどこへ» の窓口で、
+// 行き先の一覧（Ctrl+P）。ブックマーク・開いているタブ・ドライブを並べる «次にどこへ»
+// の窓口で、
 // 番号ショートカットが 8 個で打ち止めなので、その先へキーボードだけで届けるかどうかが
 // この画面の存在理由。画面自体は OS に触れないので、ここは全部ウィンドウ無しで動く。
 #include "Fakes.h"
@@ -33,11 +34,28 @@ Strings English() {
     return str;
 }
 
-// ブックマークだけを並べた一覧。タブの行を見るテストだけが tabs を渡す。
+// ブックマークだけを並べた一覧。タブとドライブの行を見るテストだけがそれを渡す。
 void OpenWith(PlacePicker& picker, const std::vector<Bookmark>& marks,
               const std::string& currentPath = {},
-              const std::vector<PlacePicker::OpenTab>& tabs = {}) {
-    picker.Open(English(), Defaults(), marks, tabs, currentPath);
+              const std::vector<PlacePicker::OpenTab>& tabs = {},
+              const std::vector<fs::Root>& drives = {}) {
+    picker.Open(English(), Defaults(), marks, tabs, drives, currentPath);
+}
+
+// サイドバーに出ているのと同じ 2 台。
+std::vector<fs::Root> TwoDrives() {
+    std::vector<fs::Root> drives;
+    fs::Root c;
+    c.path = "C:\\";
+    c.label = "Windows (C:)";
+    c.kind = fs::RootKind::Fixed;
+    drives.push_back(c);
+    fs::Root d;
+    d.path = "D:\\";
+    d.label = "Data (D:)";
+    d.kind = fs::RootKind::Fixed;
+    drives.push_back(d);
+    return drives;
 }
 
 // 目当ての行番号。無ければ -1。
@@ -370,15 +388,19 @@ KITE_TEST(placepicker, ctrl_enter_opens_the_bookmark_in_a_new_tab) {
     KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home\\beta"));
 }
 
-// 空の一覧は「押しても何も起きない」と同じで、しかも閉じる手間だけ増える。
-// タブが 1 枚（＝今いるタブ）だけでブックマークも無ければ、行き先は 1 つも無い。
-KITE_TEST(placepicker, with_nowhere_to_go_it_says_so_instead_of_opening) {
+// ドライブが並ぶようになったので、行き先が 1 つも無い状態は実機では起こらない ─
+// ブックマークが 0 件で、開いているタブが今いる 1 枚だけでも、ドライブが残る。
+// （空の一覧は「押しても何も起きない」と同じで、しかも閉じる手間だけ増えるので、
+// 本当に 0 件なら開かずにステータス行で言う。その道は残してある。）
+KITE_TEST(placepicker, drives_alone_are_enough_to_open_the_list) {
     Harness h;
     h.app.workspace().bookmarks.clear();
 
     h.app.Execute(Cmd::ShowPlaces);
-    KITE_EXPECT_FALSE(h.app.placePicker().visible());
-    KITE_EXPECT(!h.app.statusMessage().empty());
+    KITE_EXPECT(h.app.placePicker().visible());
+    KITE_EXPECT_EQ(static_cast<int>(h.app.placePicker().rows().size()), 1);
+    KITE_EXPECT(h.app.placePicker().rows()[0].kind == PlacePicker::Kind::Drive);
+    KITE_EXPECT_EQ(h.app.placePicker().rows()[0].path, std::string("C:\\"));
 }
 
 KITE_TEST(placepicker, the_key_that_opens_it_closes_it) {
@@ -443,9 +465,9 @@ KITE_TEST(placepicker, choosing_an_open_tab_switches_to_it) {
 
     h.app.Execute(Cmd::ShowPlaces);
     KITE_EXPECT(h.app.placePicker().visible());
-    // 今いるタブは並んでいないので、残っているのはもう 1 枚のほう。
+    // 今いるタブは並んでいないので、残っているのはもう 1 枚のほう（＋ドライブ 1 台）。
     KITE_EXPECT_EQ(static_cast<int>(h.app.placePicker().rows().size()),
-                   static_cast<int>(tabs) - 1);
+                   static_cast<int>(tabs) - 1 + 1);
 
     KITE_EXPECT(h.app.OnKey(ParseChord("Enter")));
     test::PumpUntilSettled(h.app);
@@ -465,5 +487,170 @@ KITE_TEST(placepicker, open_tabs_alone_are_enough_to_open_the_list) {
 
     h.app.Execute(Cmd::ShowPlaces);
     KITE_EXPECT(h.app.placePicker().visible());
+    // もう 1 枚のタブと、ドライブ 1 台。
+    KITE_EXPECT_EQ(static_cast<int>(h.app.placePicker().rows().size()), 2);
+    KITE_EXPECT(h.app.placePicker().rows()[0].kind == PlacePicker::Kind::Tab);
+}
+
+// --- ドライブ ----------------------------------------------------------------
+
+// 番号ショートカットもサイドバーも使わずにドライブへ届く道はここしかない ─
+// キーボードだけで «どのディスクがあるのか» を尋ねられる場所が他に無い。
+KITE_TEST(placepicker, drives_are_listed_after_the_bookmarks_and_the_tabs) {
+    PlacePicker picker;
+    OpenWith(picker, TenBookmarks(), {}, TwoTabs(), TwoDrives());
+
+    const std::vector<PlacePicker::Row>& rows = picker.rows();
+    KITE_EXPECT_EQ(static_cast<int>(rows.size()), 10 + 2 + 2);
+    // ブックマークが先、開いているタブ、そしてドライブ。ドライブを上に出すと、
+    // いつも同じ顔ぶれの «背景» が、実際に開いているものを画面の下へ押しやる。
+    KITE_EXPECT(rows[0].kind == PlacePicker::Kind::Bookmark);
+    KITE_EXPECT(rows[10].kind == PlacePicker::Kind::Tab);
+    KITE_EXPECT(rows[12].kind == PlacePicker::Kind::Drive);
+    KITE_EXPECT_EQ(rows[12].name, std::string("Windows (C:)"));
+    KITE_EXPECT_EQ(rows[13].path, std::string("D:\\"));
+}
+
+// 種別も絞り込みに当たる ─ 「drive」と打てばドライブだけが並ぶ。
+KITE_TEST(placepicker, the_kind_of_a_drive_row_is_something_to_filter_on) {
+    PlacePicker picker;
+    OpenWith(picker, TenBookmarks(), {}, TwoTabs(), TwoDrives());
+
+    for (char c : std::string("drive")) picker.HandleChar(static_cast<uint32_t>(c));
+    KITE_EXPECT_EQ(static_cast<int>(picker.rows().size()), 2);
+    KITE_EXPECT(picker.rows()[0].kind == PlacePicker::Kind::Drive);
+}
+
+// パスを指す行なので、Ctrl+Enter に «新しいタブで開く» の意味がある（タブの行には無い）。
+KITE_TEST(placepicker, ctrl_enter_opens_a_drive_in_a_new_tab) {
+    PlacePicker picker;
+    OpenWith(picker, {}, {}, {}, TwoDrives());
+
+    KITE_EXPECT(picker.HandleKey(ParseChord("Ctrl+Enter")) == PlacePicker::Action::OpenNewTab);
+}
+
+// 今いる場所がドライブそのものなら、そこにカーソルを置く ─ «どれの中に居るのか» は
+// この画面がただで知っていることで、黙っているほうが不親切。
+KITE_TEST(placepicker, the_drive_being_looked_at_starts_selected) {
+    PlacePicker picker;
+    OpenWith(picker, {}, "D:\\", {}, TwoDrives());
+
+    KITE_EXPECT_EQ(picker.cursor(), 1);
+}
+
+// --- 絞り込み欄 --------------------------------------------------------------
+
+// 打ち間違えた 1 文字を、全部消してやり直さずに直せる。
+KITE_TEST(placepicker, the_filter_box_has_a_caret_that_moves) {
+    PlacePicker picker;
+    OpenWith(picker, TenBookmarks());
+
+    for (char c : std::string("nest")) picker.HandleChar(static_cast<uint32_t>(c));
+    picker.HandleKey(ParseChord("Left"));
+    picker.HandleKey(ParseChord("Left"));
+    picker.HandleChar('x');
+    KITE_EXPECT_EQ(picker.filter(), std::string("nexst"));
+
+    picker.HandleKey(ParseChord("Backspace"));
+    KITE_EXPECT_EQ(picker.filter(), std::string("nest"));
+    // 一覧はその場で数え直される ─ 画面に出ている文字と行が食い違ってはならない。
+    KITE_EXPECT_EQ(static_cast<int>(picker.rows().size()), 1);
+}
+
+// 選択したまま打てば置き換わる。
+KITE_TEST(placepicker, the_filter_box_selects_and_replaces) {
+    PlacePicker picker;
+    OpenWith(picker, TenBookmarks());
+
+    for (char c : std::string("beta")) picker.HandleChar(static_cast<uint32_t>(c));
+    picker.HandleKey(ParseChord("Ctrl+A"));
+    picker.HandleChar('a');
+    KITE_EXPECT_EQ(picker.filter(), std::string("a"));
+}
+
+// Home / End は絞り込みが空のときだけ一覧のもの。空の欄でキャレットを動かしても
+// 何も起きないので、そのときは «先頭の行へ» と読む。
+KITE_TEST(placepicker, home_and_end_belong_to_the_list_until_something_is_typed) {
+    PlacePicker picker;
+    OpenWith(picker, TenBookmarks());
+
+    picker.HandleKey(ParseChord("End"));
+    KITE_EXPECT_EQ(picker.cursor(), 9);
+    picker.HandleKey(ParseChord("Home"));
+    KITE_EXPECT_EQ(picker.cursor(), 0);
+
+    // 打ち始めたら欄のもの。行は動かない。
+    for (char c : std::string("mark")) picker.HandleChar(static_cast<uint32_t>(c));
+    picker.MoveCursor(2, true);
+    picker.HandleKey(ParseChord("Home"));
+    KITE_EXPECT_EQ(picker.cursor(), 2);
+    picker.HandleChar('x');
+    KITE_EXPECT_EQ(picker.filter(), std::string("xmark"));
+}
+
+// Escape は先に絞り込みを捨てる。キャレットも戻る ─ 空の文字列の 4 文字目を
+// 指したままでは、次に打った文字がどこへ入るか誰にも読めない。
+KITE_TEST(placepicker, escape_drops_the_filter_and_the_caret_with_it) {
+    PlacePicker picker;
+    OpenWith(picker, TenBookmarks());
+
+    for (char c : std::string("beta")) picker.HandleChar(static_cast<uint32_t>(c));
+    KITE_EXPECT(picker.HandleKey(ParseChord("Escape")) == PlacePicker::Action::None);
+    KITE_EXPECT(picker.filter().empty());
+    KITE_EXPECT_EQ(picker.field().caret, size_t(0));
+    KITE_EXPECT(picker.HandleKey(ParseChord("Escape")) == PlacePicker::Action::Close);
+}
+
+// 貼り付けられなければ、Kite でただ 1 つ «パスを貼れないテキスト欄» がここになる。
+// 素通しすると Cmd::Paste になって、後ろの一覧にファイルが貼り付けられる。
+KITE_TEST(placepicker, the_filter_box_takes_a_paste_instead_of_the_listing) {
+    Harness h;
+    h.app.workspace().bookmarks = TenBookmarks();
+    h.shell.SetIncomingText("nested");
+
+    h.app.Execute(Cmd::ShowPlaces);
+    KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+V")));
+
+    KITE_EXPECT_EQ(h.app.placePicker().filter(), std::string("nested"));
     KITE_EXPECT_EQ(static_cast<int>(h.app.placePicker().rows().size()), 1);
+    // 後ろの一覧は何も受け取っていない。
+    KITE_EXPECT(h.shell.clipboardFiles.empty());
+}
+
+// エクスプローラーの「パスのコピー」は引用符で包んだ 1 行を寄越す。そのまま入れると
+// どのファイルシステムも知らないパスになる（入力欄と同じ扱い）。
+KITE_TEST(placepicker, a_pasted_path_loses_its_quotes) {
+    Harness h;
+    h.app.workspace().bookmarks = TenBookmarks();
+    // 引用符とスラッシュを直に書くと、この 1 行だけがエスケープの読み合いになる。
+    const std::string quote(1, '"');
+    h.shell.SetIncomingText(quote + "C:\\home\\alpha" + quote + "\nsecond line");
+
+    h.app.Execute(Cmd::ShowPlaces);
+    h.app.OnKey(ParseChord("Ctrl+V"));
+
+    KITE_EXPECT_EQ(h.app.placePicker().filter(), std::string("C:\\home\\alpha"));
+}
+
+// 選択が無いときの Ctrl+C は欄の全体を写す。切り取りは失うので、範囲を指すまで待つ。
+KITE_TEST(placepicker, the_filter_box_copies_and_cuts) {
+    Harness h;
+    h.app.workspace().bookmarks = TenBookmarks();
+
+    h.app.Execute(Cmd::ShowPlaces);
+    for (char c : std::string("beta")) h.app.OnChar(static_cast<uint32_t>(c));
+
+    h.app.OnKey(ParseChord("Ctrl+X"));
+    KITE_EXPECT(h.shell.clipboardText.empty());
+    KITE_EXPECT_EQ(h.app.placePicker().filter(), std::string("beta"));
+
+    h.app.OnKey(ParseChord("Ctrl+C"));
+    KITE_EXPECT_EQ(static_cast<int>(h.shell.clipboardText.size()), 1);
+    KITE_EXPECT_EQ(h.shell.clipboardText.back(), std::string("beta"));
+
+    h.app.OnKey(ParseChord("Ctrl+A"));
+    h.app.OnKey(ParseChord("Ctrl+X"));
+    KITE_EXPECT(h.app.placePicker().filter().empty());
+    // 絞り込みが消えたので全部戻る ─ ブックマーク 10 件とドライブ 1 台。
+    KITE_EXPECT_EQ(static_cast<int>(h.app.placePicker().rows().size()), 11);
 }

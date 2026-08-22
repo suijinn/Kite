@@ -480,3 +480,177 @@ KITE_TEST(palette, an_unbound_command_still_has_a_row) {
     KITE_EXPECT(palette.rows()[row].chords.empty());
     KITE_EXPECT(palette.HandleKey(ParseChord("Enter")) == CommandPalette::Action::Run);
 }
+
+// 絞り込み欄は行き先の一覧と同じ 1 つの入力欄（PickerList -> TextField）。片方の
+// 画面にだけ «キャレットが動く» を書き足すと、行き来したときに数え方が変わる。
+KITE_TEST(palette, the_filter_box_has_a_caret_and_a_selection) {
+    CommandPalette palette = Opened();
+
+    for (char c : std::string("tabnew")) palette.HandleChar(static_cast<uint32_t>(c));
+    palette.HandleKey(ParseChord("Left"));
+    palette.HandleKey(ParseChord("Left"));
+    palette.HandleKey(ParseChord("Left"));
+    palette.HandleChar('.');
+    KITE_EXPECT_EQ(palette.filter(), std::string("tab.new"));
+    // keys.ini 上の名前で引ける、が守られている。
+    KITE_EXPECT_EQ(static_cast<int>(palette.rows().size()), 1);
+    KITE_EXPECT(palette.rows()[0].cmd == Cmd::NewTab);
+
+    palette.HandleKey(ParseChord("Ctrl+A"));
+    palette.HandleKey(ParseChord("Backspace"));
+    KITE_EXPECT(palette.filter().empty());
+    KITE_EXPECT_EQ(palette.rows().size(), palette.total());
+}
+
+// --- モード（`>`）------------------------------------------------------------
+//
+// 2 つのチューザは «1 つの窓に 2 つのモード» ─ VS Code の `Ctrl+P` → `>` と同じ。
+// 印は入力欄の中に文字として在るので、«今どちらか» を言うのも戻る道もそれ 1 つで足りる。
+
+// パレットは `>` を入れた状態で開く。「パレットが出ている」と「先頭が `>`」が同じ
+// 事実でないと、Backspace が行き先の一覧へ戻る道にならない。
+KITE_TEST(palette, it_opens_with_the_marker_in_the_field) {
+    CommandPalette palette = Opened();
+
+    KITE_EXPECT_EQ(palette.field().text, std::string(">"));
+    KITE_EXPECT_EQ(palette.field().caret, size_t(1));
+    // 印は絞り込みではない ─ 掛かっていたら 1 行も残らない。
+    KITE_EXPECT(palette.filter().empty());
+    KITE_EXPECT_EQ(static_cast<int>(palette.rows().size()), palette.total());
+}
+
+// 一致に掛かるのは印の後ろだけ。
+KITE_TEST(palette, the_marker_is_not_part_of_the_needle) {
+    CommandPalette palette = Opened();
+    Type(palette, "tab.new");
+
+    KITE_EXPECT_EQ(palette.field().text, std::string(">tab.new"));
+    KITE_EXPECT_EQ(palette.filter(), std::string("tab.new"));
+    KITE_EXPECT_EQ(static_cast<int>(palette.rows().size()), 1);
+}
+
+// Escape は印まで戻して止まる。印ごと消すと、打った文字を捨てただけのつもりの
+// Escape が画面を入れ替えてしまう。
+KITE_TEST(palette, escape_clears_back_to_the_marker_and_no_further) {
+    CommandPalette palette = Opened();
+    Type(palette, "tab");
+
+    KITE_EXPECT(palette.HandleKey(ParseChord("Escape")) == CommandPalette::Action::None);
+    KITE_EXPECT_EQ(palette.field().text, std::string(">"));
+    KITE_EXPECT_EQ(palette.field().caret, size_t(1));
+    KITE_EXPECT(palette.HandleKey(ParseChord("Escape")) == CommandPalette::Action::Close);
+}
+
+// --- App を通したところ ------------------------------------------------------
+
+// 行き先の一覧で `>` を打てばコマンドパレットへ。
+KITE_TEST(palette, a_leading_marker_in_the_places_list_switches_to_commands) {
+    Harness h;
+
+    h.app.Execute(Cmd::ShowPlaces);
+    KITE_EXPECT(h.app.placePicker().visible());
+
+    KITE_EXPECT(h.app.OnChar('>'));
+    KITE_EXPECT_FALSE(h.app.placePicker().visible());
+    KITE_EXPECT(h.app.commandPalette().visible());
+    KITE_EXPECT_EQ(h.app.commandPalette().field().text, std::string(">"));
+    KITE_EXPECT(h.app.commandPalette().filter().empty());
+}
+
+// 打ちかけの文字列は持ち越す ─ 捨てると、`>` を打った瞬間に打った内容が消える。
+KITE_TEST(palette, switching_carries_what_was_typed) {
+    Harness h;
+
+    h.app.Execute(Cmd::ShowPlaces);
+    for (char c : std::string(">tab.new")) h.app.OnChar(static_cast<uint32_t>(c));
+
+    KITE_EXPECT(h.app.commandPalette().visible());
+    KITE_EXPECT_EQ(h.app.commandPalette().field().text, std::string(">tab.new"));
+    KITE_EXPECT_EQ(static_cast<int>(h.app.commandPalette().rows().size()), 1);
+}
+
+// 印を消せば戻る。Backspace 1 つで、専用のキーは要らない。
+KITE_TEST(palette, deleting_the_marker_goes_back_to_the_places_list) {
+    Harness h;
+
+    h.app.Execute(Cmd::ShowCommandPalette);
+    for (char c : std::string("tab")) h.app.OnChar(static_cast<uint32_t>(c));
+    KITE_EXPECT_EQ(h.app.commandPalette().field().text, std::string(">tab"));
+
+    for (int i = 0; i < 4; ++i) h.app.OnKey(ParseChord("Backspace"));
+
+    KITE_EXPECT_FALSE(h.app.commandPalette().visible());
+    KITE_EXPECT(h.app.placePicker().visible());
+    KITE_EXPECT(h.app.placePicker().field().text.empty());
+}
+
+// 戻るときも持ち越す ─ `>` だけを消せば、残りがそのまま行き先の絞り込みになる。
+KITE_TEST(palette, going_back_carries_what_was_typed) {
+    Harness h;
+    h.app.workspace().bookmarks.push_back({ "alpha", "C:\\home\\alpha" });
+
+    h.app.Execute(Cmd::ShowCommandPalette);
+    for (char c : std::string("alpha")) h.app.OnChar(static_cast<uint32_t>(c));
+    // 先頭へ戻って印だけを消す。
+    h.app.OnKey(ParseChord("Home"));
+    h.app.OnKey(ParseChord("Delete"));
+
+    KITE_EXPECT(h.app.placePicker().visible());
+    KITE_EXPECT_EQ(h.app.placePicker().field().text, std::string("alpha"));
+    KITE_EXPECT_EQ(static_cast<int>(h.app.placePicker().rows().size()), 1);
+}
+
+// 途中の `>` は印ではない ─ 先頭の 1 文字だけがモードを決める。
+KITE_TEST(palette, a_marker_in_the_middle_is_just_a_character) {
+    Harness h;
+
+    h.app.Execute(Cmd::ShowPlaces);
+    for (char c : std::string("ab>")) h.app.OnChar(static_cast<uint32_t>(c));
+
+    KITE_EXPECT(h.app.placePicker().visible());
+    KITE_EXPECT_EQ(h.app.placePicker().field().text, std::string("ab>"));
+}
+
+// 貼り付けた `>` も同じ。入口をキー入力だけに絞る理由が無い。
+KITE_TEST(palette, a_pasted_marker_switches_too) {
+    Harness h;
+    h.shell.SetIncomingText(">tab");
+
+    h.app.Execute(Cmd::ShowPlaces);
+    KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+V")));
+
+    KITE_EXPECT(h.app.commandPalette().visible());
+    KITE_EXPECT_EQ(h.app.commandPalette().filter(), std::string("tab"));
+}
+
+// Escape は画面を入れ替えない ─ 打った文字だけを捨てて、もう一度で閉じる。
+KITE_TEST(palette, escape_does_not_fall_back_into_the_places_list) {
+    Harness h;
+
+    h.app.Execute(Cmd::ShowCommandPalette);
+    for (char c : std::string("tab")) h.app.OnChar(static_cast<uint32_t>(c));
+
+    KITE_EXPECT(h.app.OnKey(ParseChord("Escape")));
+    KITE_EXPECT(h.app.commandPalette().visible());
+    KITE_EXPECT_FALSE(h.app.placePicker().visible());
+    KITE_EXPECT_EQ(h.app.commandPalette().field().text, std::string(">"));
+
+    KITE_EXPECT(h.app.OnKey(ParseChord("Escape")));
+    KITE_EXPECT_FALSE(h.app.commandPalette().visible());
+    KITE_EXPECT_FALSE(h.app.placePicker().visible());
+}
+
+// 相手のモードの和音は飲み込まずに渡る ─ 2 つの画面は 1 つの窓なので、
+// `Ctrl+Shift+P` は «コマンド» をどこで押しても意味する。
+KITE_TEST(palette, each_mode_chord_reaches_across_from_the_other_screen) {
+    Harness h;
+
+    h.app.Execute(Cmd::ShowPlaces);
+    KITE_EXPECT(h.app.OnKey(KeyMap::DefaultChordsFor(Cmd::ShowCommandPalette).front()));
+    KITE_EXPECT(h.app.commandPalette().visible());
+    KITE_EXPECT_FALSE(h.app.placePicker().visible());
+
+    KITE_EXPECT(h.app.OnKey(KeyMap::DefaultChordsFor(Cmd::ShowPlaces).front()));
+    KITE_EXPECT(h.app.placePicker().visible());
+    KITE_EXPECT_FALSE(h.app.commandPalette().visible());
+}
