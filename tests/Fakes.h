@@ -97,6 +97,14 @@ public:
         return true;
     }
 
+    // What every listing reports about the volume. The real one asks the OS
+    // beside the enumeration, on the worker; here one pair of numbers for the
+    // whole fake disk is enough to see them reach the status bar. They match
+    // what Roots() says about C:\ - two answers about one disk that disagreed
+    // would be a puzzle in every test that read both.
+    uint64_t freeBytes = 400;
+    uint64_t totalBytes = 1000;
+
     fs::ListResult List(const std::string& dir) override {
         ++listCalls;
         fs::ListResult result;
@@ -110,6 +118,8 @@ public:
             return result;
         }
         result.entries = it->second;
+        result.freeBytes = freeBytes;
+        result.totalBytes = totalBytes;
         return result;
     }
 

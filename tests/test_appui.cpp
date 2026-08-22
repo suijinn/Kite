@@ -4,6 +4,7 @@
 #include "Fakes.h"
 #include "TestFramework.h"
 #include "ui/AppUi.h"
+#include "core/base/Format.h"
 #include "core/fs/VirtualPath.h"
 
 using namespace kite;
@@ -121,6 +122,27 @@ struct Fixture {
             if (t.text == s) return &t;
         }
         return nullptr;
+    }
+
+    // A run drawn in the bottom bar that has `part` somewhere in it. The bar
+    // puts several answers in one string, so an exact match cannot ask about
+    // just one of them.
+    const test::FakeRenderer::Text* StatusTextWith(const std::string& part) const {
+        const float top = renderer.size.h - app.theme().statusBarHeight - 0.01f;
+        for (const test::FakeRenderer::Text& t : renderer.texts) {
+            if (t.ink.t >= top && t.text.find(part) != std::string::npos) return &t;
+        }
+        return nullptr;
+    }
+
+    // Everything painted in the bottom bar this frame.
+    std::vector<test::FakeRenderer::Text> StatusTexts() const {
+        const float top = renderer.size.h - app.theme().statusBarHeight - 0.01f;
+        std::vector<test::FakeRenderer::Text> out;
+        for (const test::FakeRenderer::Text& t : renderer.texts) {
+            if (t.ink.t >= top) out.push_back(t);
+        }
+        return out;
     }
 
     // Thumbs painted inside the tab bar. The listing has a scrollbar of its own
@@ -2401,4 +2423,72 @@ KITE_TEST(appui, with_no_field_open_the_ime_is_pointed_at_the_cursor_row) {
     KITE_EXPECT(caret.t <= row->ink.center().y);
     KITE_EXPECT(caret.b >= row->ink.center().y);
     KITE_EXPECT_NEAR(caret.l, row->ink.l, 1.0f);
+}
+
+KITE_TEST(appui, the_status_bar_says_how_much_of_the_volume_is_in_use) {
+    Fixture f;
+    f.Paint();
+
+    // 容量は列挙が持ち帰る（fs::ListResult）─ 描くたびに OS へ訊ける値ではないので、
+    // 一覧と同じ答えに相乗りしている。使用量は総容量からの引き算で、3 つ目の数を
+    // 持ち回らない。
+    const std::string said =
+        f.app.strings().Format("ui.status_usage", { FormatSize(600), FormatSize(1000) });
+    KITE_EXPECT(f.StatusTextWith(said) != nullptr);
+}
+
+KITE_TEST(appui, without_an_answer_the_status_bar_says_nothing_about_the_volume) {
+    Fixture f;
+    f.files.freeBytes = 0;
+    f.files.totalBytes = 0;
+    f.app.RefreshFocused();
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    // 総容量 0 は「まだ訊いていない」─ 仮想フォルダも共有の一覧もこれ。「0 B / 0 B」と
+    // 出せば、容量が尽きたと読める。
+    KITE_EXPECT(f.StatusTextWith(FormatSize(0)) == nullptr);
+    KITE_EXPECT(f.StatusTextWith(f.app.strings().Format(
+                    "ui.status_items", { std::to_string(f.tab()->ItemCount()) })) != nullptr);
+}
+
+KITE_TEST(appui, the_status_bar_does_not_repeat_the_cursor_rows_name) {
+    Fixture f;
+    f.Paint();
+
+    // 名前は行そのものに書いてあり、カーソルの枠がどの行かを言っている。同じことを
+    // 帯の半分を使ってもう一度言う理由が無い。
+    const fs::Entry* e = f.tab()->CursorEntry();
+    KITE_EXPECT(e != nullptr);
+    if (!e) return;
+    KITE_EXPECT(f.StatusTextWith(e->name) == nullptr);
+}
+
+KITE_TEST(appui, a_long_message_drops_the_volume_line_instead_of_landing_on_it) {
+    Fixture f;
+    f.app.SetStatus(std::string(150, 'x'));
+    f.Paint();
+
+    // 矩形が重なっていれば文字も重なる ─ 入らないほうは重ねずに落とす。落とすのは
+    // いつも同じ顔でいる背景のほうで、たった今起きたことの答えではない。
+    const std::vector<test::FakeRenderer::Text> bar = f.StatusTexts();
+    for (size_t i = 0; i < bar.size(); ++i) {
+        for (size_t j = i + 1; j < bar.size(); ++j) {
+            KITE_EXPECT_FALSE(test::FakeRenderer::Overlaps(bar[i].ink, bar[j].ink));
+        }
+    }
+    KITE_EXPECT(f.StatusTextWith(std::string(150, 'x')) != nullptr);
+    KITE_EXPECT(f.StatusTextWith(f.app.strings().Format(
+                    "ui.status_usage", { FormatSize(600), FormatSize(1000) })) == nullptr);
+
+    // 帯ごと埋める長さなら、落ちるのは左ぜんぶ ─ 残った幅が 0 なのだから、
+    // 件数を重ねて描く先はもう無い。
+    f.app.SetStatus(std::string(250, 'y'));
+    f.Paint();
+    const std::vector<test::FakeRenderer::Text> full = f.StatusTexts();
+    for (size_t i = 0; i < full.size(); ++i) {
+        for (size_t j = i + 1; j < full.size(); ++j) {
+            KITE_EXPECT_FALSE(test::FakeRenderer::Overlaps(full[i].ink, full[j].ink));
+        }
+    }
 }

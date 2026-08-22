@@ -1224,25 +1224,10 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
     r.FillRect(area, th.panelBg);
     r.FillRect({ area.l, area.t, area.r, area.t + 1.0f }, th.border);
 
-    Tab* tab = app_.workspace().focusedTab();
-    std::string left;
-    if (tab) {
-        left = str.Format("ui.status_items", { std::to_string(tab->ItemCount()) });
-        const int marked = tab->MarkedCount();
-        if (marked > 0) {
-            left += "   " + str.Format("ui.status_selected",
-                                       { std::to_string(marked), FormatSize(tab->MarkedBytes()) });
-        }
-        if (!tab->filter.empty()) left += "   [" + tab->filter + "]";
-    }
-    r.DrawText(left, { area.l + kPad, area.t, area.r * 0.6f, area.b }, th.textDim, FontRole::UiSmall,
-               TextAlign::Left);
-
     // A field drawn in place says what it is renaming by where it sits, but not
     // what it is being asked for - and an empty box on a borrowed row says least
     // of all. So the heading the bottom bar used to carry moves here, where it
-    // costs the field no width. It outranks the cursor's name: that row is what
-    // the field is already sitting on.
+    // costs the field no width.
     std::string right;
     const Prompt& p = app_.prompt();
     // 入力欄を持たない画面で変換している ─ 一覧の上での型入力ジャンプがこれ。行の
@@ -1255,11 +1240,51 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
         right = str.Get(p.labelKey);
     } else if (!app_.statusMessage().empty() && !app_.statusExpired()) {
         right = app_.statusMessage();
-    } else if (tab) {
-        const fs::Entry* e = tab->CursorEntry();
-        if (e) right = e->name;
     }
-    r.DrawText(right, { area.r * 0.45f, area.t, area.r - kPad, area.b }, th.textDim,
+    // カーソル行の名前を最後の控えに置いていたが、やめた ─ その名前は行そのものに
+    // 書いてあり、しかもカーソルの枠がどの行かをすでに言っている。同じことを
+    // 2 か所で言うために帯の半分を使っていたことになる。
+
+    Tab* tab = app_.workspace().focusedTab();
+    std::string left;
+    std::string tail;
+    if (tab) {
+        left = str.Format("ui.status_items", { std::to_string(tab->ItemCount()) });
+        const int marked = tab->MarkedCount();
+        if (marked > 0) {
+            left += "   " + str.Format("ui.status_selected",
+                                       { std::to_string(marked), FormatSize(tab->MarkedBytes()) });
+        }
+        if (!tab->filter.empty()) left += "   [" + tab->filter + "]";
+        // 容量は列挙が持ち帰った値（fs::ListResult）。訊く先が OS で冷えた共有では
+        // 数秒返ってこないので、描くたびに訊ける値ではない。
+        //
+        // 出すのは «使用 / 総容量» で、空きだけではない ─ 「空き 40 GB」は多いのか
+        // 少ないのかを言っておらず、読む側が総容量を覚えている前提になる。使用量は
+        // 引き算で出す ─ 2 つの数と食い違う 3 つ目を持ち回らない。
+        //
+        // 総容量 0 は「まだ訊いていない」なので何も出さない ─ 仮想フォルダも共有の
+        // 一覧もここに入る。「0 B / 0 B」と並べれば、容量が尽きたと読める。
+        const uint64_t total = tab->listing.totalBytes;
+        if (total > 0) {
+            const uint64_t used = total - std::min(total, tab->listing.freeBytes);
+            tail = str.Format("ui.status_usage", { FormatSize(used), FormatSize(total) });
+        }
+    }
+
+    // 1 行に 2 つ置くので、後のものには前が使い残した幅しか渡さない ─ 矩形が
+    // 重なっていれば文字も重なる。先に席を取るのは右で、あちらは «今何が起きたか» の
+    // 答え。落とすのは空き容量から ─ 件数も選択も今の操作の答えだが、これは
+    // いつも同じ顔でいる背景。
+    const float rightWidth = right.empty() ? 0.0f : r.MeasureText(right, FontRole::UiSmall);
+    const float leftLimit = area.r - kPad - (right.empty() ? 0.0f : rightWidth + kPad * 2.0f);
+    if (!tail.empty()) {
+        const std::string full = left.empty() ? tail : left + "   " + tail;
+        if (area.l + kPad + r.MeasureText(full, FontRole::UiSmall) <= leftLimit) left = full;
+    }
+    r.DrawText(left, { area.l + kPad, area.t, std::max(area.l + kPad, leftLimit), area.b },
+               th.textDim, FontRole::UiSmall, TextAlign::Left);
+    r.DrawText(right, { area.l + kPad, area.t, area.r - kPad, area.b }, th.textDim,
                FontRole::UiSmall, TextAlign::Right);
 }
 
