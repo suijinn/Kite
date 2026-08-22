@@ -271,6 +271,24 @@ bool LooksLikeCloudLabel(const std::string& label) {
     return false;
 }
 
+// How much room the volume a folder sits on has, and how much of it is left.
+// Both stay 0 when the question cannot be answered.
+//
+// Asked here, beside the enumeration, because both wait on the same slow thing:
+// on a cold share this takes as long as FindFirstFile does. Here it is a loader
+// worker that pays, and the walk has just brought the connection up; asked from
+// the status bar it would be the UI thread, once per frame.
+void ReadVolumeSpace(const std::string& dir, fs::ListResult& out) {
+    // Both numbers come from the quota-aware pair - what this user may still
+    // write, out of what this user may write at all. Mixing in the volume-wide
+    // total would make the difference between them, which is what the status
+    // bar shows as used, larger than anything this account ever wrote.
+    ULARGE_INTEGER avail{}, total{};
+    if (!::GetDiskFreeSpaceExW(ToExtendedPath(dir).c_str(), &avail, &total, nullptr)) return;
+    out.freeBytes = avail.QuadPart;
+    out.totalBytes = total.QuadPart;
+}
+
 }  // namespace
 
 WinFileSystem::WinFileSystem() {
@@ -362,7 +380,10 @@ fs::ListResult WinFileSystem::List(const std::string& dir) {
                                        FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
     if (handle == INVALID_HANDLE_VALUE) {
         const DWORD code = ::GetLastError();
-        if (code == ERROR_FILE_NOT_FOUND) return result;  // genuinely empty
+        if (code == ERROR_FILE_NOT_FOUND) {  // genuinely empty
+            ReadVolumeSpace(dir, result);
+            return result;
+        }
         result.status = TranslateError(code);
         result.message = ErrorText(code);
         return result;
@@ -399,7 +420,9 @@ fs::ListResult WinFileSystem::List(const std::string& dir) {
         result.entries.clear();
         result.status = TranslateError(stop);
         result.message = ErrorText(stop);
+        return result;
     }
+    ReadVolumeSpace(dir, result);
     return result;
 }
 
