@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "core/input/Keys.h"
+#include "core/input/TextField.h"
 
 namespace kite {
 
@@ -41,6 +42,18 @@ public:
         int id = 0;                       ///< 呼び出し側が行を指すための値。一覧の中で重複しないこと
         std::vector<std::string> fields;  ///< 絞り込みに掛ける文字列。**どれか 1 つ**に当たれば一致
     };
+
+    /// @brief 絞り込みに掛けない «モードの印» を決める。
+    /// @param[in] prefix 入力欄の先頭に置く印。印を持たない画面では空
+    /// @note 印は**入力欄の中に文字として在る**（VS Code と同じで、消せば戻れる）。
+    ///       絞り込みが掛かるのはその後ろだけで、`Escape` は印まで戻す ─ 印まで
+    ///       消してしまうと、消した瞬間に画面が入れ替わる
+    /// @note Reset() より先に呼ぶこと。Reset() が入力欄を印で初期化する
+    void SetPrefix(std::string prefix);
+
+    /// @brief モードの印を返す。
+    /// @return 入力欄の先頭に置かれる印。無ければ空
+    const std::string& prefix() const { return prefix_; }
 
     /// @brief 一覧の中身を差し替える。絞り込みは捨てる。
     /// @param[in] entries 絞り込み前の全行。並びがそのまま行の並びになる
@@ -78,8 +91,26 @@ public:
     int selectedId() const;
 
     /// @brief 絞り込み文字列を返す。
-    /// @return 入力済みの文字列。無ければ空
-    const std::string& filter() const { return filter_; }
+    /// @return 実際に一致に掛けている文字列（モードの印は含まない）。無ければ空
+    /// @note 入力欄に見えている文字列そのものは field() のほう
+    const std::string& filter() const { return query_; }
+
+    /// @brief 絞り込みの入力欄を返す。
+    /// @return キャレットと選択を持つ入力欄
+    /// @note 描く側はこれを見る。キャレットが末尾にあるとは限らない
+    const TextField& field() const { return filter_; }
+
+    /// @brief 絞り込みの入力欄を書き換えられる形で返す。
+    /// @return キャレットと選択を持つ入力欄
+    /// @note **書き換えたら FilterEdited() を呼ぶこと。** クリップボードを読み書き
+    ///       できるのは `IShellIntegration` を持つ側だけなので、`Ctrl+C` / `Ctrl+X` /
+    ///       `Ctrl+V` の 3 つだけはここを通って外から編集される
+    TextField& filterField() { return filter_; }
+
+    /// @brief 外から絞り込み欄を書き換えた後に呼ぶ。
+    /// @note 一致した行を数え直す。呼ばないと、打ち込んだ文字が画面には出ているのに
+    ///       一覧だけが古いままになる
+    void FilterEdited() { Rebuild(); }
 
     /// @brief 1 画面に収まる行数を教える。
     /// @param[in] rows 行数。1 未満は 1 として扱う
@@ -108,6 +139,9 @@ public:
     /// @note ここに来た和音はすべて飲み込む。行を選んでいる最中に `Ctrl+T` で
     ///       タブが増えては選ばせたことにならない
     /// @note `Escape` は先に絞り込みを捨て、もう一度で Action::Close を返す
+    /// @note 一覧のキー（`↑↓`・`PageUp/Down`・`Enter`）を先に見て、残りを絞り込み欄へ
+    ///       渡す。**`Home` / `End` だけは絞り込みが空のときだけ一覧のもの** ─ 空の欄で
+    ///       キャレットを動かしても何も起きないので、そのときは «先頭の行へ» と読む
     Action HandleKey(const Chord& chord);
 
     /// @brief 文字入力を絞り込みに反映する。
@@ -123,7 +157,9 @@ private:
 
     std::vector<Entry> all_;
     std::vector<int> shown_;  ///< 絞り込み後の id 列
-    std::string filter_;
+    TextField filter_;
+    std::string prefix_;  ///< 入力欄の先頭に置く «モードの印»。絞り込みには掛けない
+    std::string query_;   ///< filter_.text から印を除いたもの。一致に掛けるのはこちら
     /// 絞り込みで行が動いても選択が残るよう、行番号ではなく id で覚える。
     int selected_ = -1;
     int cursor_ = -1;

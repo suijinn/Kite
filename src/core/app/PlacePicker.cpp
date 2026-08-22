@@ -31,7 +31,7 @@ constexpr int kNumberedTabCount =
 
 void PlacePicker::Open(const Strings& str, const KeyMap& keys,
                           const std::vector<Bookmark>& marks, const std::vector<OpenTab>& tabs,
-                          const std::string& currentPath) {
+                          const std::vector<fs::Root>& drives, const std::string& currentPath) {
     visible_ = true;
 
     all_.clear();
@@ -70,14 +70,33 @@ void PlacePicker::Open(const Strings& str, const KeyMap& keys,
         all_.push_back(std::move(row));
     }
 
+    // Drives last. They are the one part of this list that is always there and
+    // always the same, so they are the least likely thing anyone opened the
+    // screen to find - and putting them above the tabs would push what is
+    // actually open below the fold on a machine with a row of network drives.
+    // Reaching them without the mouse used to mean the sidebar or typing the
+    // letter into the address bar; neither is a keyboard route to "which disks
+    // are there".
+    const std::string driveKind = str.Get("ui.goto_kind_drive");
+    for (const fs::Root& drive : drives) {
+        Row row;
+        row.kind = Kind::Drive;
+        row.name = drive.label.empty() ? drive.path : drive.label;
+        row.path = drive.path;
+        row.kindLabel = driveKind;
+        all_.push_back(std::move(row));
+    }
+
     // Start on the folder already being looked at, when it is one of these. The
     // alternative - always the top - answers "which of these am I in" with
-    // silence, and that is the one thing the screen knows for free. Only the
-    // bookmarks are candidates: the tab being looked at is not on the list at all
-    // (the caller drops it - "go here" is not an answer to "go where").
+    // silence, and that is the one thing the screen knows for free. Rows that
+    // point at a path are the candidates: the tab being looked at is not on the
+    // list at all (the caller drops it - "go here" is not an answer to
+    // "go where"), and another pane's tab showing the same folder is a different
+    // place to go, not this one.
     int selected = -1;
     for (size_t i = 0; i < all_.size(); ++i) {
-        if (all_[i].kind != Kind::Bookmark) continue;
+        if (all_[i].kind == Kind::Tab) continue;
         if (utf8::EqualsIgnoreCaseAscii(all_[i].path, currentPath)) {
             selected = static_cast<int>(i);
             break;
@@ -128,6 +147,11 @@ int PlacePicker::scroll() const { return list_.scroll(); }
 
 const std::string& PlacePicker::filter() const { return list_.filter(); }
 
+void PlacePicker::FilterEdited() {
+    list_.FilterEdited();
+    Sync();
+}
+
 int PlacePicker::selectedIndex() const {
     const Row* row = selectedRow();
     return (row && row->kind == Kind::Bookmark) ? row->index : -1;
@@ -160,7 +184,7 @@ PlacePicker::Action PlacePicker::HandleKey(const Chord& chord) {
             // no such reading, so the chord is swallowed rather than given a
             // meaning it does not have.
             const Row* row = selectedRow();
-            return (row && row->kind == Kind::Bookmark) ? Action::OpenNewTab : Action::None;
+            return (row && row->kind != Kind::Tab) ? Action::OpenNewTab : Action::None;
         }
         case PickerList::Action::Close: return Action::Close;
         case PickerList::Action::None: break;

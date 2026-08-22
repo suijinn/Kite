@@ -1,7 +1,8 @@
 /// @file
 /// @brief 行き先の一覧（`Ctrl+P`）の状態と操作。
 ///
-/// ブックマークと**開いているタブ**を 1 枚のオーバーレイに並べ、絞り込みとカーソル移動で
+/// ブックマークと**開いているタブ**と**ドライブ**を 1 枚のオーバーレイに並べ、絞り込みと
+/// カーソル移動で
 /// «次に見る場所» を選ばせる。番号ショートカット（`Alt+Shift+1..8` / `Ctrl+1..8`）は
 /// 8 個で打ち止めなので、**その先へキーボードだけで届く道はここしかない。** 数が増える
 /// ほど、番号を覚えるより絞り込むほうが速くなる。
@@ -10,9 +11,9 @@
 /// 移動はファイラーの主動詞なので、頻度の高いこちらに行き先の種類を足していく ─ 逆に
 /// パレットへ行き先を混ぜると、稀な 124 行が頻繁な検索を薄める。
 ///
-/// @note `keys.ini` に出る名前だけは `bookmark.list` のまま ─ 既存の設定ファイルが
-///       その行を持っているので動かせない。列挙子（`Cmd::ShowPlaces`）とクラス名は
-///       画面が «行き先» に育った P3-12 の 2 段目で揃えた
+/// @note `keys.ini` 上の名前は `nav.places`。旧名 `bookmark.list` は
+///       `CommandFromName()` が別名として読み続けるので、既存の設定ファイルの行は
+///       そのまま生きる ─ 名前・分類・列挙子・クラス名のどれもが «行き先» を指す
 ///
 /// 画面に出す行の組み立て、絞り込み、カーソル移動までをここが持つ。UI 層は rows() を
 /// 描いて入力を渡すだけで、判断は一切しない。OS にも描画にも触れないので、挙動は
@@ -32,6 +33,7 @@
 #include <vector>
 
 #include "core/app/PickerList.h"
+#include "core/fs/FileSystem.h"
 #include "core/i18n/Strings.h"
 #include "core/input/KeyMap.h"
 #include "core/input/Keys.h"
@@ -58,6 +60,7 @@ public:
     enum class Kind : uint8_t {
         Bookmark,  ///< ブックマーク。移動先はパス
         Tab,       ///< 今開いているタブ。移動先はそのタブ自身
+        Drive,     ///< ドライブ。移動先はパス
     };
 
     /// @brief 開いているタブ 1 枚分。App が組み立てて渡す。
@@ -83,7 +86,8 @@ public:
         int tab = -1;   ///< Kind::Tab のとき Pane::tabs への添字。それ以外は -1
         std::string name;       ///< 表示名
         std::string path;       ///< 行き先のパス
-        std::string kindLabel;  ///< 「ブックマーク」「開いているタブ」。絞り込みにも当たる
+        /// 「ブックマーク」「開いているタブ」「ドライブ」。絞り込みにも当たる
+        std::string kindLabel;
         std::string chords;     ///< 番号ショートカットの表示文字列。無ければ空
     };
 
@@ -92,14 +96,17 @@ public:
     /// @param[in] keys 現在の割り当て。番号ショートカットの表示に使う
     /// @param[in] marks 現在のブックマーク。並びがそのまま行の並びになる
     /// @param[in] tabs 今開いているタブ。**今いるタブは呼び出し側が除いて渡す**
+    /// @param[in] drives ドライブ。サイドバーに出ているものと同じ並び
     /// @param[in] currentPath 表示中のフォルダ。一致する行があればそこにカーソルを置く
-    /// @note 並びは**ブックマークが先、開いているタブが後**。ブックマークを探すために
-    ///       この画面を開く人の手が変わらないようにするため（タブは追加であって、
-    ///       置き換えではない）
+    /// @note 並びは**ブックマークが先、開いているタブ、ドライブの順**。ブックマークを
+    ///       探すためにこの画面を開く人の手が変わらないようにするため（後の 2 つは
+    ///       追加であって、置き換えではない）。ドライブが最後なのは、いつも同じ顔ぶれで
+    ///       並んでいる «背景» だから ─ 探しに来る頻度がいちばん低い
     /// @note 絞り込みは開くたびに初期化する。前回打った文字が残っていると、開いた
     ///       瞬間に一覧が虫食いになって「ブックマークが消えた」と読めてしまう
     void Open(const Strings& str, const KeyMap& keys, const std::vector<Bookmark>& marks,
-              const std::vector<OpenTab>& tabs, const std::string& currentPath);
+              const std::vector<OpenTab>& tabs, const std::vector<fs::Root>& drives,
+              const std::string& currentPath);
 
     /// @brief 一覧を閉じる。
     void Close();
@@ -113,7 +120,7 @@ public:
     const std::vector<Row>& rows() const { return rows_; }
 
     /// @brief 行き先の総数を返す。
-    /// @return 絞り込み前の件数（ブックマーク＋開いているタブ）
+    /// @return 絞り込み前の件数（ブックマーク＋開いているタブ＋ドライブ）
     int total() const;
 
     /// @brief 選択中の行番号を返す。
@@ -126,7 +133,24 @@ public:
 
     /// @brief 絞り込み文字列を返す。
     /// @return 入力済みの文字列。無ければ空
+    /// @note この画面はモードの印を持たないので、入力欄の中身そのものと同じ
     const std::string& filter() const;
+
+    /// @brief 絞り込みの入力欄を返す。
+    /// @return キャレットと選択を持つ入力欄
+    /// @note 描く側はこれを見る。キャレットが末尾にあるとは限らない
+    const TextField& field() const { return list_.field(); }
+
+    /// @brief 絞り込みの入力欄を書き換えられる形で返す。
+    /// @return キャレットと選択を持つ入力欄
+    /// @note **書き換えたら FilterEdited() を呼ぶこと。** クリップボードを読み書き
+    ///       できるのは `IShellIntegration` を持つ側だけなので、`Ctrl+C` / `Ctrl+X` /
+    ///       `Ctrl+V` の 3 つだけはここを通って App から編集される
+    TextField& filterField() { return list_.filterField(); }
+
+    /// @brief 外から絞り込み欄を書き換えた後に呼ぶ。
+    /// @note 一致した行を数え直して rows() に反映する
+    void FilterEdited();
 
     /// @brief 選択中のブックマークの位置を返す。
     /// @return Workspace::bookmarks への添字。選択が無い、またはタブの行なら -1
@@ -168,7 +192,8 @@ public:
     /// @note `Enter` が現ペインで開き、`Ctrl+Enter` が新しいタブで開く（一覧の
     ///       `Ctrl+Enter` と同じ読み方）。`Escape` は先に絞り込みを捨て、もう一度で閉じる
     /// @note **タブの行では `Ctrl+Enter` を飲み込む** ─ すでに開いているタブを
-    ///       「新しいタブで開く」は、その行に無い意味
+    ///       「新しいタブで開く」は、その行に無い意味。パスを指す行（ブックマークと
+    ///       ドライブ）にはある
     Action HandleKey(const Chord& chord);
 
     /// @brief 文字入力を絞り込みに反映する。

@@ -234,3 +234,40 @@ KITE_TEST(keymap, the_display_text_lists_every_chord_in_order) {
     KITE_EXPECT_EQ(keys.ChordText(Cmd::NewFolder), std::string("Ctrl+Shift+N"));
     KITE_EXPECT(keys.ChordText(Cmd::ToggleLanguage).empty());
 }
+
+// 名前を変えたコマンドの旧名も読む。読まないと、利用者が keys.ini に書いた割り当てが
+// 「不明なコマンド」の警告 1 行と引き換えに静かに既定へ戻る。
+KITE_TEST(keymap, an_old_command_name_still_binds) {
+    KITE_EXPECT_EQ(CommandFromName("bookmark.list"), Cmd::ShowPlaces);
+    KITE_EXPECT_EQ(CommandFromName("Bookmark.List"), Cmd::ShowPlaces);
+
+    Ini ini;
+    ini.Ensure("keys").entries.push_back({ "bookmark.list", "Alt+G" });
+
+    KeyMap keys;
+    keys.LoadDefaults();
+    std::vector<std::string> warnings;
+    keys.ApplyIni(ini, &warnings);
+
+    KITE_EXPECT(warnings.empty());
+    KITE_EXPECT_EQ(keys.Lookup(ParseChord("Alt+G")), Cmd::ShowPlaces);
+    // 書かれたとおりに読むので、既定は残らない。
+    KITE_EXPECT_EQ(keys.Lookup(ParseChord("Ctrl+P")), Cmd::None);
+}
+
+// 書き出すのは現在の名前だけ。旧名も並べると、読み戻したときファイルの中で
+// 同じコマンドが 2 行を持つ。
+KITE_TEST(keymap, the_written_file_uses_the_current_name) {
+    KeyMap keys;
+    keys.LoadDefaults();
+    const Ini ini = keys.ToIni();
+
+    const Ini::Section* sec = ini.Find("keys");
+    KITE_EXPECT(sec != nullptr);
+    bool sawCurrent = false;
+    for (const Ini::Entry& e : sec->entries) {
+        KITE_EXPECT_NE(e.key, std::string("bookmark.list"));
+        if (e.key == "nav.places") sawCurrent = true;
+    }
+    KITE_EXPECT(sawCurrent);
+}

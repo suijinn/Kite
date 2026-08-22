@@ -11,6 +11,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/app/App.h"
@@ -192,6 +193,9 @@ private:
     TabLayout LayoutTabBar(Pane& pane, const RectF& area) const;
     void PaintSidebar(Renderer& r, const RectF& area);
     void PaintStatusBar(Renderer& r, const RectF& area);
+    void PaintTextField(Renderer& r, const RectF& box, const TextField& f, FontRole role,
+                        float caretInset, std::string_view placeholder = {},
+                        size_t placeholderUntil = 0);
     void PaintPromptField(Renderer& r, const RectF& field, FontRole role = FontRole::Ui);
     /// 入力欄の中で、変換中の文字列が占めている横位置。
     ///
@@ -233,7 +237,11 @@ private:
     struct PickerChrome {
         std::string title;        ///< 表題（パネル左上）
         std::string count;        ///< 件数（表題の右。入る幅が無ければ出さない）
-        std::string filter;       ///< 入力済みの絞り込み。空なら placeholder を出す
+        /// 絞り込みの入力欄。キャレットと選択もここから引く（末尾にあるとは限らない）
+        const TextField* field = nullptr;
+        /// 入力欄の先頭にある «モードの印»（コマンドパレットの `>`）の長さ。
+        /// これだけしか入っていない状態は «まだ何も打っていない» なので、案内を出す
+        size_t prefixLen = 0;
         std::string placeholder;  ///< 絞り込みが空のときに入力欄へ出す案内
         std::string hint;         ///< パネル下端の案内
     };

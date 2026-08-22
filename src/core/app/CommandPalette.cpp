@@ -72,7 +72,10 @@ void CommandPalette::Open(const Strings& str, const KeyMap& keys,
     }
 
     // Nothing is preselected: the palette is opened to type, and the top row is
-    // where the first Enter should land.
+    // where the first Enter should land. The field starts holding the marker, so
+    // that "the palette is up" and "the text starts with >" are the same fact -
+    // which is what lets Backspace walk back to the places list.
+    list_.SetPrefix(std::string(kPrefix));
     list_.Reset(std::move(entries), -1);
     Sync();
 }
@@ -106,6 +109,11 @@ int CommandPalette::cursor() const { return list_.cursor(); }
 int CommandPalette::scroll() const { return list_.scroll(); }
 
 const std::string& CommandPalette::filter() const { return list_.filter(); }
+
+void CommandPalette::FilterEdited() {
+    list_.FilterEdited();
+    Sync();
+}
 
 Cmd CommandPalette::selectedCommand() const {
     const int id = list_.selectedId();

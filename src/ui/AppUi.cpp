@@ -1263,14 +1263,22 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
                FontRole::UiSmall, TextAlign::Right);
 }
 
-// Text, selection and caret for one editable field.
+// Text, selection, composition and caret for one editable field.
+//
+// One implementation for every field Kite draws - the prompt on a breadcrumb, a
+// row or a session chip, and the filter box of the two choosers. Two of them
+// would drift: the selection would end up under the text on one screen and over
+// it on the other, and the composition would sit somewhere else again.
 //
 // The font is a parameter because the field takes the place of whatever it is
 // editing: a session chip is set in the small face, so a field measured in the
-// normal one would size its chip to a width the text never fills.
-void AppUi::PaintPromptField(Renderer& r, const RectF& field, FontRole role) {
+// normal one would size its chip to a width the text never fills. `caretInset`
+// is how far the caret stops short of the box, which differs with how tall the
+// box is around the letters.
+void AppUi::PaintTextField(Renderer& r, const RectF& box, const TextField& f, FontRole role,
+                           float caretInset, std::string_view placeholder,
+                           size_t placeholderUntil) {
     const Theme& th = app_.theme();
-    const Prompt& p = app_.prompt();
     const Composition& comp = app_.composition();
 
     // 変換中の文字列は、確定を待たずに «入力欄の中身» として描く。IME に描かせると、
@@ -1279,17 +1287,17 @@ void AppUi::PaintPromptField(Renderer& r, const RectF& field, FontRole role) {
     //
     // 見せるのは «確定した後の形» ─ 選択があればそれは置き換えられるので、変換中から
     // 消しておく。Enter を押して初めて消えるのでは、何が起きるのかが押すまで分からない。
-    std::string shown = p.text;
-    size_t at = p.caret;
+    std::string shown = f.text;
+    size_t at = f.caret;
     if (comp.active()) {
-        at = p.selBegin();
-        shown.erase(at, p.selEnd() - p.selBegin());
+        at = f.selBegin();
+        shown.erase(at, f.selEnd() - f.selBegin());
         shown.insert(at, comp.text);
     }
     // 幅は必ず «画面に出ている 1 本の文字列» の接頭辞から測る。断片を別々に測って
     // 足すと、詰め（カーニング）が入った瞬間に全体の幅と合わなくなる。
     auto widthTo = [&](size_t bytes) {
-        return field.l + r.MeasureText(std::string_view(shown).substr(0, bytes), role);
+        return box.l + r.MeasureText(std::string_view(shown).substr(0, bytes), role);
     };
 
     CompositionRun run;
@@ -1306,22 +1314,35 @@ void AppUi::PaintPromptField(Renderer& r, const RectF& field, FontRole role) {
     // DrawText call cannot paint a run in two colours, and splitting the string
     // into three would measure each piece on its own - which drifts apart from
     // the whole once kerning is involved.
-    if (p.hasSelection() && !comp.active()) {
-        r.FillRect({ widthTo(p.selBegin()), field.t + 3.0f, widthTo(p.selEnd()), field.b - 3.0f },
+    if (f.hasSelection() && !comp.active()) {
+        r.FillRect({ widthTo(f.selBegin()), box.t + 3.0f, widthTo(f.selEnd()), box.b - 3.0f },
                    th.textSelection);
     }
-    PaintCompositionBack(r, field, run, role);
+    PaintCompositionBack(r, box, run, role);
 
-    r.DrawText(shown, field, th.text, role, TextAlign::Left);
-    PaintCompositionMarks(r, field, run, role);
+    if (!shown.empty()) r.DrawText(shown, box, th.text, role, TextAlign::Left);
+    PaintCompositionMarks(r, box, run, role);
 
     // The caret is the text colour, not the accent: it is a letter-shaped mark
     // in a run of letters, and every field on the desktop draws it that way.
     // The accent says where the keyboard is; the bar's own border already does.
-    const float caretX = widthTo(comp.active() ? at + comp.caret : p.caret);
-    r.FillRect({ caretX, field.t + 4.0f, caretX + 1.5f, field.b - 4.0f }, th.text);
-    caret_ = { caretX, field.t, caretX, field.b };
+    const float caretX = widthTo(comp.active() ? at + comp.caret : f.caret);
+
+    // Nothing typed yet - which on the command palette means the ">" and nothing
+    // else, since that marker is always in the field. Drawn past the caret so the
+    // two never land on the same pixel.
+    if (!placeholder.empty() && shown.size() <= placeholderUntil) {
+        r.DrawText(placeholder, { caretX + 12.0f, box.t, box.r, box.b }, th.textDim.alpha(0.6f),
+                   role, TextAlign::Left);
+    }
+    r.FillRect({ caretX, box.t + caretInset, caretX + 1.5f, box.b - caretInset }, th.text);
+    caret_ = { caretX, box.t, caretX, box.b };
     caretInField_ = true;
+}
+
+// The prompt's field, wherever it is drawn.
+void AppUi::PaintPromptField(Renderer& r, const RectF& field, FontRole role) {
+    PaintTextField(r, field, app_.prompt(), role, 4.0f);
 }
 
 // 変換中の文字列に印を付ける «行» ─ 器の下端ではなく、文字が実際に載っている高さ。
@@ -1974,42 +1995,11 @@ AppUi::PickerFrame AppUi::PaintPickerFrame(Renderer& r, const RectF& area,
     r.FillRoundRect(fieldBox, 4.0f, th.listBg);
     r.StrokeRect(fieldBox, th.accent, 1.0f);
 
-    const RectF inner = fieldBox.inset(10.0f, 0.0f);
-    // 変換中の文字列は絞り込みの末尾に続けて描く（この入力欄のキャレットは常に末尾に
-    // ある）。確定するまで PickerList には渡さない ─ 未確定の文字で一覧が虫食いに
-    // なると、変換を確定する前に候補が全部消えたように見える。
-    const Composition& comp = app_.composition();
-    const std::string shown = chrome.filter + comp.text;
-    auto widthTo = [&](size_t bytes) {
-        return inner.l + r.MeasureText(std::string_view(shown).substr(0, bytes), FontRole::Ui);
-    };
-
-    CompositionRun run;
-    if (comp.active()) {
-        run.from = widthTo(chrome.filter.size());
-        run.to = widthTo(shown.size());
-        if (comp.hasTarget()) {
-            run.targetFrom = widthTo(chrome.filter.size() + comp.targetBegin);
-            run.targetTo = widthTo(chrome.filter.size() + comp.targetEnd);
-        }
-    }
-    PaintCompositionBack(r, fieldBox, run, FontRole::Ui);
-
-    if (shown.empty()) {
-        // Past the caret, so the two do not sit on the same pixel.
-        r.DrawText(chrome.placeholder, { inner.l + 12.0f, inner.t, inner.r, inner.b },
-                   th.textDim.alpha(0.6f), FontRole::Ui, TextAlign::Left);
-    } else {
-        r.DrawText(shown, inner, th.text, FontRole::Ui, TextAlign::Left);
-    }
-    PaintCompositionMarks(r, fieldBox, run, FontRole::Ui);
-
-    // The caret is the text colour, not the accent: it is a letter-shaped mark in
-    // a run of letters, and the border already says where the keyboard is.
-    const float caretX = widthTo(chrome.filter.size() + comp.caret) + 1.0f;
-    r.FillRect({ caretX, fieldBox.t + 5.0f, caretX + 1.5f, fieldBox.b - 5.0f }, th.text);
-    caret_ = { caretX, fieldBox.t, caretX, fieldBox.b };
-    caretInField_ = true;
+    // The field itself goes through the one routine every field in Kite goes
+    // through - text, selection, composition, caret. A chooser's box is 1.6 rows
+    // tall, so the caret stops a little further in than it does on a row.
+    PaintTextField(r, fieldBox.inset(10.0f, 0.0f), *chrome.field, FontRole::Ui, 5.0f,
+                   chrome.placeholder, chrome.prefixLen);
 
     const RectF footer = { panel.l + 20.0f, panel.b - 26.0f, panel.r - 20.0f, panel.b - 6.0f };
     r.DrawText(chrome.hint, footer, th.textDim, FontRole::UiSmall, TextAlign::Left);
@@ -2060,7 +2050,7 @@ void AppUi::PaintPlaces(Renderer& r, const RectF& area) {
     chrome.count =
         str.Format("ui.goto_count",
                    { std::to_string(rows.size()) + " / " + std::to_string(picker.total()) });
-    chrome.filter = picker.filter();
+    chrome.field = &picker.field();
     chrome.placeholder = str.Get("ui.goto_search_hint");
     chrome.hint = str.Get("ui.goto_hint");
     const PickerFrame frame = PaintPickerFrame(r, area, chrome, Hit::PlacePanel);
@@ -2190,7 +2180,9 @@ void AppUi::PaintCommandPalette(Renderer& r, const RectF& area) {
     chrome.count = str.Format(
         "ui.command_palette_count",
         { std::to_string(rows.size()) + " / " + std::to_string(palette.total()) });
-    chrome.filter = palette.filter();
+    chrome.field = &palette.field();
+    // The ">" is part of the text, so "nothing typed" is one byte long here.
+    chrome.prefixLen = CommandPalette::kPrefix.size();
     chrome.placeholder = str.Get("ui.command_palette_search_hint");
     chrome.hint = str.Get("ui.command_palette_hint");
     const PickerFrame frame = PaintPickerFrame(r, area, chrome, Hit::PalettePanel);

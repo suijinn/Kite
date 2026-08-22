@@ -2046,7 +2046,9 @@ KITE_TEST(appui, the_command_palette_field_is_drawn_at_body_size) {
 
     bool found = false;
     for (const test::FakeRenderer::Text& t : f.renderer.TextsAfterFill(f.app.theme().overlayScrim)) {
-        if (t.text != "tab") continue;
+        // ">" と一緒に 1 本の文字列として描く。断片を別々に測って足すと、詰めが
+        // 入った瞬間にキャレットの位置が文字とずれる。
+        if (t.text != ">tab") continue;
         found = true;
         KITE_EXPECT(t.role == ui::FontRole::Ui);
     }
@@ -2180,6 +2182,42 @@ KITE_TEST(appui, the_bookmark_list_field_is_drawn_at_body_size) {
         KITE_EXPECT(t.role == ui::FontRole::Ui);
     }
     KITE_EXPECT(found);
+}
+
+// The caret follows the caret, not the end of the string. It used to be pinned
+// to the tail because the filter had nowhere else to put it; now that the field
+// takes arrow keys, a caret drawn past the text would point at the wrong letter.
+KITE_TEST(appui, the_chooser_caret_sits_where_the_caret_is) {
+    Fixture f;
+    GiveBookmarks(f.app);
+    f.renderer.size = { 900.0f, 640.0f };
+    f.app.Execute(Cmd::ShowPlaces);
+    for (char c : std::string("mark")) f.app.OnChar(static_cast<uint32_t>(c));
+    f.Paint();
+    const RectF atEnd = f.ui.caretRect();
+
+    f.app.OnKey(ParseChord("Home"));
+    f.Paint();
+    const RectF atStart = f.ui.caretRect();
+
+    KITE_EXPECT(atStart.l < atEnd.l);
+    KITE_EXPECT_NEAR(atStart.t, atEnd.t, 0.01f);
+}
+
+// A selection in the filter is drawn the way every other field draws one: a
+// band under the text, in the field's own colour.
+KITE_TEST(appui, the_chooser_field_paints_its_selection) {
+    Fixture f;
+    GiveBookmarks(f.app);
+    f.renderer.size = { 900.0f, 640.0f };
+    f.app.Execute(Cmd::ShowPlaces);
+    for (char c : std::string("mark")) f.app.OnChar(static_cast<uint32_t>(c));
+    f.Paint();
+    const int before = f.renderer.CountFills(f.app.theme().textSelection);
+
+    f.app.OnKey(ParseChord("Ctrl+A"));
+    f.Paint();
+    KITE_EXPECT(f.renderer.CountFills(f.app.theme().textSelection) > before);
 }
 
 // Carried off the window and let go: the tab asks for a window of its own.
@@ -2330,7 +2368,7 @@ KITE_TEST(appui, the_palette_shows_the_conversion_without_filtering_on_it) {
     f.app.SetComposition("たぶ", 6, 0, 6);
     f.Paint();
 
-    KITE_EXPECT(f.TextNamed("たぶ") != nullptr);
+    KITE_EXPECT(f.TextNamed(">たぶ") != nullptr);
     // 未確定の文字で一覧を削らない。確定する前に候補が全部消えたように見える。
     KITE_EXPECT(f.app.commandPalette().filter().empty());
     KITE_EXPECT_EQ(static_cast<int>(f.app.commandPalette().rows().size()), rowsBefore);
