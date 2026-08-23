@@ -3,7 +3,10 @@
 Kite — Windows エクスプローラーを置き換えることを目的とした、C++20 製の軽量ファイラー。
 このファイルは、このリポジトリを編集する人（人間・エージェントを問わず）向けの作業指針。
 
-ロードマップと未実装項目は [docs/ROADMAP.md](docs/ROADMAP.md) を参照。
+設計の全体像（層・プロセス構成・データモデル・移植の境界）は
+[docs/architecture.md](docs/architecture.md)、ロードマップと未実装項目は
+[docs/ROADMAP.md](docs/ROADMAP.md) を参照。**このファイルが書くのは「なぜそう決めたか」と
+「何をしてはならないか」**で、構造そのものの説明は architecture.md にある。
 
 ## ビルドとテスト
 
@@ -107,12 +110,13 @@ tests/          kite_core だけをリンクする。OS 非依存であるべき
 ```
 
 CMake ターゲットは 3 つ。`kite_core` = `core/` + `ui/`、`kite` = `kite_core` +
-`platform/`（`ShellMenu.cpp` と `ShellIcons.cpp` を除く）、`kite_shellhost` =
-`tools/shellhost/` + `ShellMenu.cpp` + `ShellIcons.cpp` + `ShellPipe.cpp` + `WinUtf.cpp`。
+`platform/`（`ShellMenu.cpp` と `ShellIcons.cpp` と `ShellFolder.cpp` を除く）、
+`kite_shellhost` = `tools/shellhost/` + その 3 ファイル + `ShellPipe.cpp` + `WinUtf.cpp`。
 
-**`ShellMenu.cpp` と `ShellIcons.cpp` を `kite` ターゲットに足してはならない。**
-前者は `IContextMenu` を、後者は `SHGFI_ADDOVERLAYS`（＝アイコンオーバーレイ
-ハンドラ）を触る唯一のファイル。`kite.exe` にリンクした時点で隔離の意味が消える。
+**その 3 ファイルを `kite` ターゲットに足してはならない。** `ShellMenu.cpp` は
+`IContextMenu`、`ShellIcons.cpp` は `SHGFI_ADDOVERLAYS`（＝アイコンオーバーレイ
+ハンドラ）、`ShellFolder.cpp` は `IShellFolder` の列挙（＝名前空間拡張）を触る唯一の
+ファイル。`kite.exe` にリンクした時点で隔離の意味が消える。
 
 他 OS へ移植する際に実装するのは以下だけで、それ以外は書き換えない:
 
