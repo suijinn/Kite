@@ -100,6 +100,14 @@ private:
     PIDLIST_ABSOLUTE ptr_ = nullptr;
 };
 
+// The folder a request names, as an absolute PIDL. Both resolvers start here and
+// differ only in which interface they bind it to afterwards.
+bool ParseFolder(const std::string& container, Pidl& out) {
+    return SUCCEEDED(::SHParseDisplayName(ToWide(container).c_str(), nullptr, out.put(), 0,
+                                          nullptr)) &&
+           out;
+}
+
 std::string DisplayNameOf(IShellFolder* folder, PCUITEMID_CHILD child, SHGDNF flags) {
     STRRET value{};
     if (FAILED(GuardedDisplayName(folder, child, flags, &value))) return {};
@@ -243,11 +251,7 @@ std::vector<PIDLIST_ABSOLUTE> ResolveItemsInFolder(
     if (container.empty() || parsingNames.empty()) return found;
 
     Pidl folderPidl;
-    if (FAILED(::SHParseDisplayName(ToWide(container).c_str(), nullptr, folderPidl.put(), 0,
-                                    nullptr)) ||
-        !folderPidl) {
-        return found;
-    }
+    if (!ParseFolder(container, folderPidl)) return found;
 
     ComPtr<IShellFolder> folder;
     if (FAILED(::SHBindToObject(nullptr, folderPidl.get(), nullptr, IID_IShellFolder,
@@ -298,11 +302,7 @@ std::vector<PIDLIST_ABSOLUTE> ResolveTrashItemsByOrigin(
     if (container.empty() || originalPaths.empty()) return found;
 
     Pidl folderPidl;
-    if (FAILED(::SHParseDisplayName(ToWide(container).c_str(), nullptr, folderPidl.put(), 0,
-                                    nullptr)) ||
-        !folderPidl) {
-        return found;
-    }
+    if (!ParseFolder(container, folderPidl)) return found;
 
     // IShellFolder2, not IShellFolder: the columns live on the derived one, and
     // the Recycle Bin is where those two columns exist at all.

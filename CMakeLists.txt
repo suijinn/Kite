@@ -119,6 +119,8 @@ set_source_files_properties(${KITE_APP_RC} PROPERTIES OBJECT_DEPENDS "${KITE_ICO
 # ---------------------------------------------------------------------------
 add_library(kite_core STATIC
     src/core/app/App.cpp
+    src/core/app/AppCommands.cpp
+    src/core/app/AppConfig.cpp
     src/core/app/PlacePicker.cpp
     src/core/app/CommandPalette.cpp
     src/core/app/ConfigDir.cpp
@@ -144,6 +146,8 @@ add_library(kite_core STATIC
     src/core/model/Workspace.cpp
     src/core/theme/Theme.cpp
     src/ui/AppUi.cpp
+    src/ui/AppUiMouse.cpp
+    src/ui/AppUiOverlays.cpp
     src/ui/Glyphs.cpp
 )
 target_link_libraries(kite_core PUBLIC kite_options)

@@ -8,6 +8,7 @@
 
 #include <windows.h>
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -84,6 +85,18 @@ public:
                  std::string& extracted);
 
 private:
+    /// @brief 1 フレーム送り、応答を 1 フレーム待つ。
+    /// @param[in] owner 待っている間もメッセージを回すウィンドウ
+    /// @param[in] frame 送る要求。空なら何もせず false
+    /// @param[out] payload 受け取った応答の本体。失敗時の内容は不定
+    /// @return 送受信ともに成功したら true
+    /// @note どちらかが失敗したらホストを止める ─ パイプが切れた相手に次の要求を
+    ///       送っても答えは返らないので、次の要求で起動し直させる
+    /// @note 待ちに制限を掛けない。メニューは利用者が閉じるまで、動詞はダイアログに
+    ///       答えるまで、取り出しはファイルの大きさぶんだけ掛かる
+    /// @pre `host_.Ensure()` が成功していること
+    bool Exchange(HWND owner, const std::vector<uint8_t>& frame, std::vector<uint8_t>& payload);
+
     ShellHostProcess host_;  ///< メニュー専用のホスト。アイコン用とは別インスタンス
 };
 

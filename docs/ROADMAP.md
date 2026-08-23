@@ -369,10 +369,10 @@ SMB1 とともに既定で無効化されて久しく、今の Windows では数
 | --- | --- |
 | `core/app/PickerList.h` | 絞り込み付き一覧の、行の中身に依らない部分。行き先の一覧と共有 |
 | `core/input/TextField.h` | 絞り込み欄そのもの。Kite の全入力欄と共有（`tests/test_textfield.cpp`） |
-| `ui/AppUi.cpp` | `AppUi::PaintPickerFrame` / `PaintTextField`。パネル・表題・入力欄も同じく共有 |
+| `ui/AppUiOverlays.cpp` | `AppUi::PaintPickerFrame`。パネル・表題・入力欄も行き先の一覧と共有（入力欄そのものを描く `PaintTextField` は `ui/AppUi.cpp`） |
 | `core/app/CommandPalette.h` | 行の組み立てと «何をすべきか» の判断（`tests/test_commandpalette.cpp`） |
 | `core/app/App.cpp` | `App::RunPaletteCommand()`。閉じてから `Execute` を呼ぶ |
-| `ui/AppUi.cpp` | `AppUi::PaintCommandPalette`。ブックマーク一覧の兄弟 |
+| `ui/AppUiOverlays.cpp` | `AppUi::PaintCommandPalette`。ブックマーク一覧の兄弟 |
 
 決めたこと:
 

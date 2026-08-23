@@ -67,9 +67,14 @@ src/
     theme/         配色とメトリクス
     app/           App（唯一のディスパッチ点）、UndoStack、IconCache、
                    PickerList / PlacePicker / CommandPalette、SettingsEditor、ConfigDir
+      App.cpp        状態・移動・一覧・入力欄・ファイル操作
+      AppCommands.cpp App::Execute（コマンド 1 つに case 1 つ）
+      AppConfig.cpp  設定とセッションの読み書き、設定画面との受け渡し
   ui/            OS 非依存。抽象 ui::Renderer に対してのみ描画する
     Renderer.h     描画プリミティブのインターフェース
-    AppUi.cpp      レイアウト・描画・ヒットテスト・ドラッグ処理
+    AppUi.cpp      レイアウト・描画・ヒットテスト
+    AppUiOverlays.cpp F1・Ctrl+F1・Ctrl+,・Ctrl+P・Ctrl+Shift+P の 1 枚もの
+    AppUiMouse.cpp 当たり判定の振り分けとドラッグ
     Glyphs.cpp     シェルアイコンが届くまでのベクタ描画
   platform/win/  Windows ヘッダが現れる唯一の場所
   main_win.cpp   起動の入口（単一インスタンスの振り分け）
@@ -133,7 +138,8 @@ Workspace ─ Session[]（1 つがアクティブ）
 
 ## 4. 制御フロー
 
-**`App`（`core/app/App.cpp`）が唯一のディスパッチ点。** UI は生のキー入力に反応しない。
+**`App::Execute`（`core/app/AppCommands.cpp`）が唯一のディスパッチ点。** UI は生のキー
+入力に反応しない。
 
 ```
 WinWindow（WM_KEYDOWN → Chord）
