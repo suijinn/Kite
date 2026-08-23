@@ -212,4 +212,45 @@ bool ShellHostClient::InvokeVerb(HWND owner, const std::string& container,
     return response.ok;
 }
 
+bool ShellHostClient::Extract(HWND owner, const std::string& container,
+                              const std::string& parsingName, std::string& extracted) {
+    if (parsingName.empty()) return false;
+
+    PumpState connectState{ owner, false };
+    if (!host_.Ensure(&PumpOwnerWindow, &connectState)) return false;
+
+    shellhost::ExtractRequest request;
+    request.container = container;
+    request.path = parsingName;
+
+    const std::vector<uint8_t> frame = shellhost::EncodeExtractRequest(request);
+    if (frame.empty()) return false;
+
+    PumpState state{ owner, false };
+    if (WritePipeFrame(host_.pipe(), frame, &PumpOwnerWindow, &state) != PipeStatus::Ok) {
+        host_.Stop();
+        return false;
+    }
+
+    // No timeout. Copying out of an archive is proportional to the file, and
+    // cutting a big one short would leave a half file for something to open -
+    // the same reason the icon path's timeout is not wanted here.
+    std::vector<uint8_t> payload;
+    const PipeStatus status =
+        ReadPipeFrame(host_.pipe(), payload, INFINITE, &PumpOwnerWindow, &state);
+    if (status != PipeStatus::Ok) {
+        host_.Stop();
+        return false;
+    }
+
+    shellhost::ExtractResponse response;
+    if (!shellhost::DecodeExtractResponse(payload.data(), payload.size(), response)) {
+        host_.Stop();
+        return false;
+    }
+    if (!response.ok || response.path.empty()) return false;
+    extracted = response.path;
+    return true;
+}
+
 }  // namespace kite::win

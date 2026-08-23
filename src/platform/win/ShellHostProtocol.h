@@ -2,8 +2,8 @@
 /// @brief kite.exe と kite_shellhost.exe が交換するメッセージの書式。
 ///
 /// 種別は 4 つ。コンテキストメニューの表示要求、シェルアイコンの取得要求、
-/// 仮想フォルダ（「PC」「ごみ箱」「ネットワーク」）の列挙要求、そして動詞の実行要求
-/// （ごみ箱からの復元）。いずれもサードパーティの DLL（メニューハンドラ、アイコン
+/// 仮想フォルダ（「PC」「ごみ箱」「ネットワーク」）の列挙要求、動詞の実行要求
+/// （ごみ箱からの復元）、そして項目の取り出し要求（書庫の中のファイルを開くため）。いずれもサードパーティの DLL（メニューハンドラ、アイコン
 /// オーバーレイハンドラ、名前空間拡張）を動かすため、同じ隔離の仕組みに相乗りして
 /// いる。
 ///
@@ -27,7 +27,7 @@ namespace kite::shellhost {
 ///
 /// 書式を変えたら必ずこの値も変えること。版の食い違う kite_shellhost.exe が
 /// 残っていた場合に、誤って解釈するのではなく握手の時点で失敗させるためにある。
-inline constexpr uint32_t kMagic = 0x37485348u;  // 'H','S','H','7'
+inline constexpr uint32_t kMagic = 0x38485348u;  // 'H','S','H','8'
 
 /// @brief フレーム本体の上限バイト数。
 ///
@@ -68,7 +68,8 @@ enum class MessageKind : uint32_t {
     Menu = 1,    ///< コンテキストメニューの表示
     Icons = 2,   ///< シェルアイコンの取得
     Folder = 3,  ///< シェル名前空間のフォルダの列挙
-    Verb = 4,    ///< 名前を指定した動詞の実行（「元に戻す」）
+    Verb = 4,     ///< 名前を指定した動詞の実行（「元に戻す」）
+    Extract = 5,  ///< シェル名前空間の項目を実ファイルとして取り出す
 };
 
 /// @brief メニュー表示の要求。kite.exe → kite_shellhost.exe。
@@ -236,6 +237,25 @@ struct FolderResponse {
     std::vector<FolderEntry> entries;           ///< 列挙された項目
 };
 
+/// @brief シェル名前空間の項目を、実ファイルとして取り出す要求。
+///
+/// 書庫の中のファイルを開くためにある。**シェルの「開く」をそのまま実行しては
+/// ならない** ─ あれは呼び出し元プロセスの中に作ったデータ源から explorer.exe が
+/// 中身を吸い出す作りなので、要求を返して読み取りに戻ったホストからは吸い出せず、
+/// 空のファイルが開く（実測。%TEMP% に空のフォルダだけが残り、explorer が掴んだ
+/// まま解放されない）。取り出しはこちらが同期的に済ませ、開くのは出来上がった
+/// 実ファイルに対して行う。
+struct ExtractRequest {
+    std::string container;  ///< 項目が属するフォルダの解析名。@see Request::container
+    std::string path;       ///< 取り出す項目の解析名
+};
+
+/// @brief 取り出しの結果。kite_shellhost.exe → kite.exe。
+struct ExtractResponse {
+    bool ok = false;   ///< 取り出せたら true
+    std::string path;  ///< 取り出した実ファイルのパス。失敗時は空
+};
+
 namespace detail {
 
 /// @brief 32 ビット値をリトルエンディアンで追記する。
@@ -394,7 +414,8 @@ inline bool DecodeKind(const uint8_t* payload, size_t size, MessageKind& kind) {
     if (value != static_cast<uint32_t>(MessageKind::Menu) &&
         value != static_cast<uint32_t>(MessageKind::Icons) &&
         value != static_cast<uint32_t>(MessageKind::Folder) &&
-        value != static_cast<uint32_t>(MessageKind::Verb)) {
+        value != static_cast<uint32_t>(MessageKind::Verb) &&
+        value != static_cast<uint32_t>(MessageKind::Extract)) {
         return false;
     }
     kind = static_cast<MessageKind>(value);
@@ -743,6 +764,54 @@ inline bool DecodeVerbResponse(const uint8_t* payload, size_t size, VerbResponse
     if (!detail::ExpectKind(reader, MessageKind::Verb)) return false;
     uint32_t ok = 0;
     if (!reader.U32(ok) || !reader.U32(response.applied) || !reader.AtEnd()) return false;
+    response.ok = ok != 0;
+    return true;
+}
+
+/// @brief 取り出しの要求を 1 フレームに符号化する。
+/// @param[in] request 送る要求
+/// @return 送信できるバイト列
+inline std::vector<uint8_t> EncodeExtractRequest(const ExtractRequest& request) {
+    std::vector<uint8_t> payload;
+    detail::PutU32(payload, static_cast<uint32_t>(MessageKind::Extract));
+    detail::PutString(payload, request.container);
+    detail::PutString(payload, request.path);
+    return Frame(payload);
+}
+
+/// @brief 取り出しの要求を復号する。
+/// @param[in] payload フレーム本体の先頭（ヘッダを除いた部分）
+/// @param[in] size 本体のバイト数
+/// @param[out] request 復号結果。失敗時の内容は不定
+/// @return 完全に復号でき、余分なバイトも残っていなければ true
+inline bool DecodeExtractRequest(const uint8_t* payload, size_t size, ExtractRequest& request) {
+    detail::Reader reader(payload, size);
+    if (!detail::ExpectKind(reader, MessageKind::Extract)) return false;
+    if (!reader.String(request.container) || !reader.String(request.path)) return false;
+    return reader.AtEnd();
+}
+
+/// @brief 取り出しの結果を 1 フレームに符号化する。
+/// @param[in] response 送る結果
+/// @return 送信できるバイト列
+inline std::vector<uint8_t> EncodeExtractResponse(const ExtractResponse& response) {
+    std::vector<uint8_t> payload;
+    detail::PutU32(payload, static_cast<uint32_t>(MessageKind::Extract));
+    detail::PutU32(payload, response.ok ? 1u : 0u);
+    detail::PutString(payload, response.path);
+    return Frame(payload);
+}
+
+/// @brief 取り出しの結果を復号する。
+/// @param[in] payload フレーム本体の先頭（ヘッダを除いた部分）
+/// @param[in] size 本体のバイト数
+/// @param[out] response 復号結果。失敗時の内容は不定
+/// @return 完全に復号できれば true
+inline bool DecodeExtractResponse(const uint8_t* payload, size_t size, ExtractResponse& response) {
+    detail::Reader reader(payload, size);
+    if (!detail::ExpectKind(reader, MessageKind::Extract)) return false;
+    uint32_t ok = 0;
+    if (!reader.U32(ok) || !reader.String(response.path) || !reader.AtEnd()) return false;
     response.ok = ok != 0;
     return true;
 }

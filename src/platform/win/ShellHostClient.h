@@ -70,6 +70,19 @@ public:
                     const std::vector<std::string>& paths, const std::string& verb,
                     bool byOriginalPath);
 
+    /// @brief シェル名前空間の項目を実ファイルとして取り出させる。
+    /// @param[in] owner 呼び出し側のウィンドウ。待っている間もここを再描画し続ける
+    /// @param[in] container 項目が属するフォルダの解析名。実フォルダなら空
+    /// @param[in] parsingName 取り出す項目の解析名
+    /// @param[out] extracted 取り出された実ファイルのパス。失敗時は書き換えない
+    /// @return 取り出せたら true
+    /// @note 書庫の中のファイルを開くためにある。**シェルの「開く」を実行させない**
+    ///       理由は `shellhost::ExtractRequest` に
+    /// @note メニュー用のホストを使う ─ 動詞の実行と同じく利用者の 1 操作に対する
+    ///       応答で、一覧を取りに行くホストの後ろに並ばせる理由が無い
+    bool Extract(HWND owner, const std::string& container, const std::string& parsingName,
+                 std::string& extracted);
+
 private:
     ShellHostProcess host_;  ///< メニュー専用のホスト。アイコン用とは別インスタンス
 };

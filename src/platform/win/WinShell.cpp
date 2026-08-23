@@ -142,7 +142,25 @@ bool WinShell::RestoreDeleted(const std::vector<std::string>& originalPaths) {
                                 true);
 }
 
-bool WinShell::Open(const std::string& path) {
+bool WinShell::Open(const std::string& folder, const std::string& path) {
+    // An item of a shell namespace folder is not opened by its name. Inside an
+    // archive the name reads exactly like a path ("C:\a.zip\notes.txt") while no
+    // file sits at that spelling, so ShellExecute answers "file not found".
+    //
+    // Nor by asking the shell to open the item: that route hands explorer.exe a
+    // data source living in *this* process and lets it pull the bytes back out
+    // afterwards, so a host that has answered the request and gone back to
+    // waiting on its pipe never gets asked - measured, and what it leaves is an
+    // empty temporary folder that explorer holds open and an empty file on
+    // screen. The copy is made here instead, synchronously, and what gets
+    // opened is an ordinary file that ordinary rules apply to.
+    if (!folder.empty()) {
+        std::string extracted;
+        if (!menuHost_.Extract(hwnd_, ToShellPath(folder), ToShellPath(path), extracted)) {
+            return false;
+        }
+        return ShellExecuteVerb(hwnd_, extracted, nullptr, SEE_MASK_FLAG_NO_UI);
+    }
     return ShellExecuteVerb(hwnd_, path, nullptr, SEE_MASK_FLAG_NO_UI);
 }
 

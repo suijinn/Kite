@@ -34,6 +34,23 @@ namespace kite::win {
 ///       のはその 1 回の列挙とホストプロセスだけ
 shellhost::FolderResponse EnumerateShellFolder(const std::string& parsingName);
 
+/// @brief シェル名前空間の項目を、実ファイルとして取り出す。
+/// @param[in] container 項目が属するフォルダの解析名（UTF-8）。実フォルダなら空
+/// @param[in] parsingName 取り出す項目の解析名（UTF-8）
+/// @return 取り出せたら ok が true で、`path` に実ファイルのパスが入る
+/// @pre COM が初期化済みで、呼び出しスレッドが STA であること
+/// @note **書庫の中のファイルを開くためにある。** シェルの「開く」動詞をそのまま
+///       実行すると、explorer.exe が**呼び出し元プロセスの中のデータ源**から中身を
+///       吸い出す作りになっているため、要求を返して読み取りに戻ったホストからは
+///       吸い出せず、空のファイルが開く（実測）。こちらは `IFileOperation` で
+///       **同期的に**写しを作るので、返った時点でファイルは出来上がっている
+/// @note 取り出し先は `%TEMP%` の下に 1 回ごとに作る新しいフォルダ。**消さない** ─
+///       開いたアプリがいつ閉じるか分からないうえ、エクスプローラーの同じ操作も
+///       %TEMP% に残していく
+/// @note 出来上がるのは**写し**。編集しても書庫には戻らない
+shellhost::ExtractResponse ExtractShellItem(const std::string& container,
+                                            const std::string& parsingName);
+
 /// @brief フォルダの中から、解析名の一致する項目の絶対 PIDL を集める。
 /// @param[in] container 探すフォルダの解析名（UTF-8）
 /// @param[in] parsingNames 探す項目の解析名（UTF-8）

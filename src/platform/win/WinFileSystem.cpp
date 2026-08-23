@@ -337,10 +337,18 @@ fs::ListResult WinFileSystem::ListVirtual(const std::string& dir) {
     result.title = answer.title;
     if (result.status != fs::Status::Ok) return result;
 
+    // Nothing inside an archive is on the filesystem, whatever the shell says
+    // about it: the parsing name reads like a path ("C:\a.zip\notes.txt") and
+    // some namespace handlers do set SFGAO_FILESYSTEM on it, but FindFirstFile
+    // cannot open it and no watcher can watch it. Deciding it here rather than
+    // trusting the bit keeps one answer for "is this a real folder".
+    const bool insideArchive = !vfs::ArchiveFileOf(dir).empty();
+
     result.entries.reserve(answer.entries.size());
     for (const shellhost::FolderEntry& e : answer.entries) {
         using Bit = shellhost::FolderAttr;
-        const bool fileSystem = (e.attrs & static_cast<uint32_t>(Bit::FileSystem)) != 0;
+        const bool fileSystem =
+            !insideArchive && (e.attrs & static_cast<uint32_t>(Bit::FileSystem)) != 0;
 
         fs::Entry entry;
         entry.name = e.name;

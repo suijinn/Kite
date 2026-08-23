@@ -210,8 +210,9 @@ endif()
 # instantiated here and nowhere else, so one of them faulting costs a context
 # menu or an icon instead of the file manager. ShellMenu.cpp is the IContextMenu
 # code, ShellIcons.cpp is what asks for icon overlays, and ShellFolder.cpp is
-# what enumerates the shell namespace (which loads the extensions registered
-# under "PC" and friends); all three must stay out of the kite target, since
+# what enumerates the shell namespace and copies items out of it (both of which
+# load the extensions registered under "PC" and friends); all three must stay
+# out of the kite target, since
 # linking any of them there would put the extensions back in Kite's address
 # space, which is the whole thing this avoids.
 #

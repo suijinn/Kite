@@ -267,6 +267,13 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
                 reply = shellhost::EncodeVerbResponse(kite::win::InvokeShellVerb(
                     reinterpret_cast<HWND>(request.ownerWindow), request.container, request.paths,
                     request.verb, request.byOriginalPath));
+            } else if (kind == shellhost::MessageKind::Extract) {
+                shellhost::ExtractRequest request;
+                if (!shellhost::DecodeExtractRequest(payload.data(), payload.size(), request)) {
+                    break;
+                }
+                reply = shellhost::EncodeExtractResponse(
+                    kite::win::ExtractShellItem(request.container, request.path));
             } else if (kind == shellhost::MessageKind::Folder) {
                 shellhost::FolderRequest request;
                 if (!shellhost::DecodeFolderRequest(payload.data(), payload.size(), request)) {

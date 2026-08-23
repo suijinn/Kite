@@ -41,6 +41,16 @@ struct Harness {
         app.OnKey(ParseChord("End"));
     }
 
+    // Puts the cursor on a named row. Tests that care which item is opened say
+    // so by name rather than by counting rows a sort order decides.
+    void Focus(const std::string& name) {
+        for (int i = 0; i < static_cast<int>(tab()->visible.size()); ++i) {
+            tab()->cursor = i;
+            if (CursorName() == name) return;
+        }
+        KITE_FAIL("no row by that name");
+    }
+
     std::string CursorName() {
         const fs::Entry* entry = tab()->CursorEntry();
         return entry ? entry->name : std::string();
@@ -342,6 +352,95 @@ KITE_TEST(app, restore_only_answers_inside_the_recycle_bin) {
     KITE_EXPECT_EQ(h.shell.restoreCalls.size(), size_t{ 2 });
     h.app.Execute(Cmd::Undo);
     KITE_EXPECT(h.files.deleteCalls.empty());
+}
+
+KITE_TEST(app, a_zip_opens_as_a_folder_instead_of_launching_an_app) {
+    Harness h;
+    h.files.AddFile("C:\\home", "pack.zip", 900, 4000);
+    h.files.dirs["virtual:C:\\home\\pack.zip"];
+    h.files.AddFile("virtual:C:\\home\\pack.zip", "readme.md", 40, 4000);
+    h.app.OpenPath("C:\\home", false);
+    h.Settle();
+
+    h.Focus("pack.zip");
+    h.app.Execute(Cmd::OpenSelected);
+    h.Settle();
+    // In the shell namespace, not handed to whatever .zip is associated with:
+    // opening it in Explorer's place is the whole point of the program.
+    KITE_EXPECT_EQ(h.tab()->path, std::string("virtual:C:\\home\\pack.zip"));
+    KITE_EXPECT(h.shell.opened.empty());
+    KITE_EXPECT_EQ(h.tab()->ItemCount(), 1);  // readme.md
+    KITE_EXPECT(h.tab()->hasParentRow());
+
+    // Kite does not write in there - the archive is a place to look, and the
+    // verbs that work are the shell's own.
+    h.app.Execute(Cmd::NewFolder);
+    KITE_EXPECT_EQ(h.app.prompt().kind, PromptKind::None);
+
+    // A file in there cannot be opened by its name: the row spells itself like
+    // a path, but no file sits at that spelling, so the shell has to be asked
+    // for "this item, in that folder" - the same way the context menu asks.
+    h.Focus("readme.md");
+    h.app.Execute(Cmd::OpenSelected);
+    KITE_EXPECT_EQ(h.shell.opened.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.shell.openedIn[0], std::string("virtual:C:\\home\\pack.zip"));
+
+    // Ctrl+L shows the spelling the shell uses, not Kite's internal one: what
+    // the bar shows has to be what the bar takes back.
+    h.app.Execute(Cmd::EditPath);
+    KITE_EXPECT_EQ(h.app.prompt().text, std::string("C:\\home\\pack.zip"));
+    h.app.OnKey(ParseChord("Enter"));
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string("virtual:C:\\home\\pack.zip"));
+
+    // And ".." leaves the namespace for the real folder the file sits in,
+    // landing on the archive that was just left.
+    h.app.Execute(Cmd::GoUp);
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home"));
+    KITE_EXPECT_EQ(h.CursorName(), std::string("pack.zip"));
+}
+
+KITE_TEST(app, an_archive_typed_into_the_address_bar_opens_the_same_way) {
+    Harness h;
+    h.files.AddFile("C:\\home", "pack.zip", 900, 4000);
+    h.files.dirs["virtual:C:\\home\\pack.zip"];
+    h.files.AddFile("virtual:C:\\home\\pack.zip", "readme.md", 40, 4000);
+
+    h.app.Execute(Cmd::EditPath);
+    h.Type("C:\\\\home\\\\pack.zip");
+    h.app.OnKey(ParseChord("Enter"));
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string("virtual:C:\\home\\pack.zip"));
+
+    // A folder that happens to be called .zip is still a folder: the extension
+    // is only the cheap first question, and the disk answers the real one.
+    h.files.AddDir("C:\\home\\notreally.zip");
+    h.app.Execute(Cmd::EditPath);
+    h.Type("C:\\\\home\\\\notreally.zip");
+    h.app.OnKey(ParseChord("Enter"));
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home\\notreally.zip"));
+}
+
+KITE_TEST(app, the_open_archives_setting_hands_the_zip_back_to_the_shell) {
+    Harness h;
+    test::FakeFiles()["C:\\home\\config\\settings.ini"] =
+        "[ui]\nopen_archives=false\n";
+    h.app.Execute(Cmd::ReloadConfig);
+    KITE_EXPECT_FALSE(h.app.openArchives());
+
+    h.files.AddFile("C:\\home", "pack.zip", 900, 4000);
+    h.app.OpenPath("C:\\home", false);
+    h.Settle();
+    h.Focus("pack.zip");
+    h.app.Execute(Cmd::OpenSelected);
+    h.Settle();
+
+    // Whoever installed an extractor asked for it to be the answer.
+    KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home"));
+    KITE_EXPECT_EQ(h.shell.opened.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.shell.opened[0], std::string("C:\\home\\pack.zip"));
 }
 
 KITE_TEST(app, a_virtual_folder_refuses_to_be_written_into) {

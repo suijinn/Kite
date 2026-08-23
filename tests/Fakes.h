@@ -280,6 +280,9 @@ public:
 class FakeShell final : public IShellIntegration {
 public:
     std::vector<std::string> opened;
+    // The folder each Open() named, index for index with `opened`. Empty for a
+    // real folder; a virtual one has to say which list the item came from.
+    std::vector<std::string> openedIn;
     std::vector<std::string> clipboardText;
     std::vector<std::string> clipboardFiles;
     bool clipboardCut = false;
@@ -329,8 +332,9 @@ public:
         restoreDeletedCalls.push_back(originalPaths);
         return restoreDeletedSucceeds;
     }
-    bool Open(const std::string& path) override {
+    bool Open(const std::string& folder, const std::string& path) override {
         opened.push_back(path);
+        openedIn.push_back(folder);
         return true;
     }
     // Which .lnk points where, as the tests choose to say it. Anything not in

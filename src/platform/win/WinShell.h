@@ -50,7 +50,7 @@ public:
     bool RestoreDeleted(const std::vector<std::string>& originalPaths) override;
 
     /// @copydoc IShellIntegration::Open
-    bool Open(const std::string& path) override;
+    bool Open(const std::string& folder, const std::string& path) override;
 
     /// @copydoc IShellIntegration::ResolveShortcut
     /// @note 実体は `IShellLink` + `IPersistFile`。シェル拡張 DLL は動かないので

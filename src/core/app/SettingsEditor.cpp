@@ -40,6 +40,7 @@ const Info kSettings[] = {
     { SettingId::ShellIcons, SettingGroup::Appearance, "settings.shell_icons", 2, kOnOff },
     { SettingId::TabBarPos, SettingGroup::Tabs, "settings.tab_bar_pos", 2, kTabBarPos },
     { SettingId::NewTabPos, SettingGroup::Tabs, "settings.new_tab_pos", 2, kNewTabPos },
+    { SettingId::OpenArchives, SettingGroup::Files, "settings.open_archives", 2, kOnOff },
     { SettingId::NewTabHidden, SettingGroup::NewTab, "settings.show_hidden", 2, kOnOff },
     { SettingId::NewTabDirsFirst, SettingGroup::NewTab, "settings.dirs_first", 2, kOnOff },
 };
@@ -72,6 +73,7 @@ const char* SettingGroupLabelKey(SettingGroup group) {
     switch (group) {
         case SettingGroup::Appearance: return "settings.group.appearance";
         case SettingGroup::Tabs: return "settings.group.tabs";
+        case SettingGroup::Files: return "settings.group.files";
         case SettingGroup::NewTab: return "settings.group.new_tab";
         default: return "settings.group.appearance";
     }
