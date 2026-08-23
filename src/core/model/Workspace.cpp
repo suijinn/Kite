@@ -10,6 +10,37 @@
 #include "core/fs/VirtualPath.h"
 
 namespace kite {
+namespace {
+
+// Move one element of an owning list, keeping the same element active across the
+// move. `to` is the index the element should end up at once it has been lifted
+// out, which is the convention every reorder in Kite is written in.
+//
+// Tabs and sessions do exactly this; the two used to say it twice, and an index
+// fix applied to one of them would have left the other quietly wrong.
+template <typename T>
+bool ReorderKeepingActive(std::vector<std::unique_ptr<T>>& items, int& active, int fromIndex,
+                          int toIndex) {
+    const int count = static_cast<int>(items.size());
+    if (fromIndex < 0 || fromIndex >= count) return false;
+    toIndex = std::clamp(toIndex, 0, count - 1);
+    if (fromIndex == toIndex) return false;
+
+    std::unique_ptr<T> moved = std::move(items[fromIndex]);
+    items.erase(items.begin() + fromIndex);
+    items.insert(items.begin() + toIndex, std::move(moved));
+
+    if (active == fromIndex) {
+        active = toIndex;
+    } else if (fromIndex < active && toIndex >= active) {
+        --active;
+    } else if (fromIndex > active && toIndex <= active) {
+        ++active;
+    }
+    return true;
+}
+
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Tab
@@ -264,24 +295,7 @@ void Pane::Activate(int index) {
 }
 
 bool Pane::ReorderTab(int fromIndex, int toIndex) {
-    const int count = static_cast<int>(tabs.size());
-    if (fromIndex < 0 || fromIndex >= count) return false;
-    toIndex = std::clamp(toIndex, 0, count - 1);
-    if (fromIndex == toIndex) return false;
-
-    std::unique_ptr<Tab> moved = std::move(tabs[fromIndex]);
-    tabs.erase(tabs.begin() + fromIndex);
-    tabs.insert(tabs.begin() + toIndex, std::move(moved));
-
-    // Keep the same tab active across the move.
-    if (active == fromIndex) {
-        active = toIndex;
-    } else if (fromIndex < active && toIndex >= active) {
-        --active;
-    } else if (fromIndex > active && toIndex <= active) {
-        ++active;
-    }
-    return true;
+    return ReorderKeepingActive(tabs, active, fromIndex, toIndex);
 }
 
 std::unique_ptr<Tab> Pane::DetachTab(int index) {
@@ -609,27 +623,11 @@ void Workspace::ActivateSession(int index) {
     active = next;
 }
 
+// Reordering is not a way of switching, and deliberately not ActivateSession():
+// nothing is being left, so the listings the other sessions hold have no reason
+// to be dropped.
 bool Workspace::ReorderSession(int fromIndex, int toIndex) {
-    const int count = static_cast<int>(sessions.size());
-    if (fromIndex < 0 || fromIndex >= count) return false;
-    toIndex = std::clamp(toIndex, 0, count - 1);
-    if (fromIndex == toIndex) return false;
-
-    std::unique_ptr<Session> moved = std::move(sessions[fromIndex]);
-    sessions.erase(sessions.begin() + fromIndex);
-    sessions.insert(sessions.begin() + toIndex, std::move(moved));
-
-    // Keep the same session active across the move - reordering is not a way of
-    // switching. Not ActivateSession() either: nothing is being left, so the
-    // listings the other sessions hold have no reason to be dropped.
-    if (active == fromIndex) {
-        active = toIndex;
-    } else if (fromIndex < active && toIndex >= active) {
-        --active;
-    } else if (fromIndex > active && toIndex <= active) {
-        ++active;
-    }
-    return true;
+    return ReorderKeepingActive(sessions, active, fromIndex, toIndex);
 }
 
 }  // namespace kite

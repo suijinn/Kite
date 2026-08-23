@@ -105,6 +105,30 @@ void RestoreOwner(HWND owner, DWORD hostProcessId) {
 
 }  // namespace
 
+// One request, one answer. Neither half gets a deadline: a menu stays open as
+// long as the user leaves it open, a verb may be sitting on a dialog nobody has
+// answered, and an extraction takes as long as the file is big.
+//
+// A failure of either half means the host is gone - a shell extension faulting
+// hard enough to take the process with it is the case this whole arrangement is
+// about - so it is stopped here and the next request starts a fresh one.
+bool ShellHostClient::Exchange(HWND owner, const std::vector<uint8_t>& frame,
+                               std::vector<uint8_t>& payload) {
+    if (frame.empty()) return false;
+
+    PumpState state{ owner, false };
+    if (WritePipeFrame(host_.pipe(), frame, &PumpOwnerWindow, &state) != PipeStatus::Ok) {
+        host_.Stop();
+        return false;
+    }
+    if (ReadPipeFrame(host_.pipe(), payload, INFINITE, &PumpOwnerWindow, &state) !=
+        PipeStatus::Ok) {
+        host_.Stop();
+        return false;
+    }
+    return true;
+}
+
 bool ShellHostClient::ShowContextMenu(HWND owner, const std::string& container,
                                       const std::vector<std::string>& paths, int screenX,
                                       int screenY, bool extended, bool background, bool dark) {
@@ -127,28 +151,12 @@ bool ShellHostClient::ShowContextMenu(HWND owner, const std::string& container,
     request.dark = dark;
     request.ownerWindow = reinterpret_cast<uint64_t>(owner);
 
-    const std::vector<uint8_t> frame = shellhost::EncodeRequest(request);
-    if (frame.empty()) return false;
-
-    PumpState state{ owner, false };
-    if (WritePipeFrame(host_.pipe(), frame, &PumpOwnerWindow, &state) != PipeStatus::Ok) {
-        host_.Stop();
-        return false;
-    }
-
-    // No timeout: a menu stays open as long as the user leaves it open. The wait
-    // ends when the host answers, when it dies, or when the pump gives up
-    // because the window is going away.
-    std::vector<uint8_t> payload;
-    const PipeStatus status =
-        ReadPipeFrame(host_.pipe(), payload, INFINITE, &PumpOwnerWindow, &state);
+    // Read before the exchange: a failed one stops the host, and the id is what
+    // says whose window to take the foreground back from.
     const DWORD hostId = host_.processId();
 
-    if (status != PipeStatus::Ok) {
-        // Includes the case this whole exercise is about: a shell extension
-        // faulting hard enough to take its process down. Kite only loses the
-        // menu, and the next right-click starts a new host.
-        host_.Stop();
+    std::vector<uint8_t> payload;
+    if (!Exchange(owner, shellhost::EncodeRequest(request), payload)) {
         RestoreOwner(owner, hostId);
         return false;
     }
@@ -184,25 +192,12 @@ bool ShellHostClient::InvokeVerb(HWND owner, const std::string& container,
     request.byOriginalPath = byOriginalPath;
     request.ownerWindow = reinterpret_cast<uint64_t>(owner);
 
-    const std::vector<uint8_t> frame = shellhost::EncodeVerbRequest(request);
-    if (frame.empty()) return false;
+    const DWORD hostId = host_.processId();
 
-    PumpState state{ owner, false };
-    if (WritePipeFrame(host_.pipe(), frame, &PumpOwnerWindow, &state) != PipeStatus::Ok) {
-        host_.Stop();
-        return false;
-    }
-
-    // No timeout, for the same reason a menu has none: what is being waited on
-    // may be a dialog the user has not answered yet.
     std::vector<uint8_t> payload;
-    const PipeStatus status =
-        ReadPipeFrame(host_.pipe(), payload, INFINITE, &PumpOwnerWindow, &state);
-    RestoreOwner(owner, host_.processId());
-    if (status != PipeStatus::Ok) {
-        host_.Stop();
-        return false;
-    }
+    const bool answered = Exchange(owner, shellhost::EncodeVerbRequest(request), payload);
+    RestoreOwner(owner, hostId);
+    if (!answered) return false;
 
     shellhost::VerbResponse response;
     if (!shellhost::DecodeVerbResponse(payload.data(), payload.size(), response)) {
@@ -223,25 +218,8 @@ bool ShellHostClient::Extract(HWND owner, const std::string& container,
     request.container = container;
     request.path = parsingName;
 
-    const std::vector<uint8_t> frame = shellhost::EncodeExtractRequest(request);
-    if (frame.empty()) return false;
-
-    PumpState state{ owner, false };
-    if (WritePipeFrame(host_.pipe(), frame, &PumpOwnerWindow, &state) != PipeStatus::Ok) {
-        host_.Stop();
-        return false;
-    }
-
-    // No timeout. Copying out of an archive is proportional to the file, and
-    // cutting a big one short would leave a half file for something to open -
-    // the same reason the icon path's timeout is not wanted here.
     std::vector<uint8_t> payload;
-    const PipeStatus status =
-        ReadPipeFrame(host_.pipe(), payload, INFINITE, &PumpOwnerWindow, &state);
-    if (status != PipeStatus::Ok) {
-        host_.Stop();
-        return false;
-    }
+    if (!Exchange(owner, shellhost::EncodeExtractRequest(request), payload)) return false;
 
     shellhost::ExtractResponse response;
     if (!shellhost::DecodeExtractResponse(payload.data(), payload.size(), response)) {

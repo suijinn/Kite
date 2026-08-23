@@ -96,6 +96,11 @@ public:
     void ClearDropFeedback();
 
 private:
+    // 描画・当たり判定・マウス処理の 3 ファイルが共有する寸法。ファイル内の
+    // 定数にすると分割した先ごとに 1 つずつ生まれ、片方だけが直る日が来る。
+    static constexpr float kPad = 8.0f;
+    static constexpr float kScrollbarWidth = 10.0f;
+
     /// 描画時に記録する当たり判定の種別。
     enum class Hit : uint8_t {
         None,
@@ -267,13 +272,24 @@ private:
     PickerFrame PaintPickerFrame(Renderer& r, const RectF& area, const PickerChrome& chrome,
                                 Hit panelHit);
 
-    /// @brief チューザの行の脇に細いつまみを描く。全行が収まっていれば何もしない。
+    /// @brief 行の脇に細いつまみを描く。全行が収まっていれば何もしない。
+    /// @param[in,out] r 描画先
+    /// @param[in] track つまみを走らせる帯
+    /// @param[in] rows 行数
+    /// @param[in] pageRows 1 画面に収まる行数
+    /// @param[in] first 先頭に出ている行番号
+    /// @note 縦置きのタブバー・`F1` の一覧・チューザ・キー設定の 4 か所が共有する。
+    ///       一覧の脇の太いものとは別物で、こちらはタブや行と帯を分け合う
+    /// @todo 掴めない（一覧のスクロールバーと同じ扱い。ROADMAP P3-11）
+    void PaintThinScrollbar(Renderer& r, const RectF& track, int rows, int pageRows, int first);
+
+    /// @brief チューザの行の脇に細いつまみを描く。
     /// @param[in,out] r 描画先
     /// @param[in] body 行を描いている領域
     /// @param[in] rows 絞り込み後の行数
     /// @param[in] pageRows 1 画面に収まる行数
     /// @param[in] first 先頭に出ている行番号
-    /// @todo 掴めない（一覧のスクロールバーと同じ扱い。ROADMAP P3-11）
+    /// @note 帯の位置を決めるだけで、描くのは PaintThinScrollbar
     void PaintPickerScrollbar(Renderer& r, const RectF& body, int rows, int pageRows, int first);
 
     void PaintPlaces(Renderer& r, const RectF& area);
@@ -288,6 +304,14 @@ private:
     void PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool focused);
     void PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool focused);
     void PaintDragOverlay(Renderer& r);
+
+    /// @brief 当たり判定 1 つに対するドロップ先を答える。
+    /// @param[in] region 対象。nullptr なら行き先なし
+    /// @return 落とせるフォルダのパス。落とせないなら空文字列
+    /// @note `DropTargetAt` の中身。座標ではなく領域を受けるのは、ドラッグ中の
+    ///       フィードバックが同じ 1 点について領域とパスの両方を要るため ─
+    ///       `Pick` は行数に比例するので 1 回で済ませる
+    std::string DropTargetIn(const Region* region) const;
 
     bool HandleListClick(const Region& region, const MouseEvent& e);
     void BeginMarquee(Pane* pane, const MouseEvent& e);

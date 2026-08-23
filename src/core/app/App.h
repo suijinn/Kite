@@ -727,6 +727,33 @@ private:
     void CloseKeyEditor();
     void RefreshRoots();
 
+    /// @brief 表示中のオーバーレイをすべて閉じる。
+    /// @note オーバーレイは同時に 1 枚しか出さないので、開く側は必ずこれを先に
+    ///       呼ぶ。1 枚ずつ閉じて回ると、5 枚目を足した日に閉じ忘れが生まれる
+    void CloseAllOverlays();
+
+    /// @brief タブの表示先を差し替え、読み込みを要求する。
+    /// @param[in,out] tab 対象のタブ
+    /// @param[in] path 新しいパス
+    /// @note 履歴は触らない ─ 「戻る」も「他のペインで開く」も同じ差し替えを
+    ///       するが、履歴に積むかどうかは呼ぶ側の話
+    void RetargetTab(Tab& tab, const std::string& path);
+
+    /// @brief ペインにタブを 1 枚足し、表示状態を与えて読み込みを要求する。
+    /// @param[in,out] pane 足す先のペイン
+    /// @param[in] path 開くパス
+    /// @param[in] at 挿す位置。-1 で末尾
+    /// @param[in] view 与える表示状態（新しいタブなら `defaultView_`、複製なら元の値）
+    /// @return 足したタブ。`Pane::AddTab` が返すものをそのまま返す
+    Tab* OpenTabIn(Pane& pane, const std::string& path, int at, const ViewState& view);
+
+    /// @brief 表示状態の真偽値を 1 つ反転し、以後の新しいタブにも引き継ぐ。
+    /// @param[in,out] tab 対象のタブ。nullptr なら何もしない
+    /// @param[in] flag 反転する `ViewState` のメンバ
+    /// @note 隠しファイル・並び順・フォルダ優先の 3 つが同じ手順を踏むので 1 つに
+    ///       してある ─ 片方だけ `defaultView_` を更新し忘れる形の不具合を防ぐ
+    void ToggleViewFlag(Tab* tab, bool ViewState::* flag);
+
     void RequestLoad(Tab& tab, bool force = false);
     void EnsureVisibleTabsLoaded();
     void RefreshTabsShowing(const std::string& dir);

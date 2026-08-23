@@ -434,6 +434,27 @@ inline bool ExpectKind(Reader& reader, MessageKind expected) {
     return value == static_cast<uint32_t>(expected);
 }
 
+/// @brief 個数付きの文字列の並びを読み出す。
+/// @param[in,out] reader 読み取り位置
+/// @param[in] limit 受け付ける最大個数。超えていれば読まずに失敗する
+/// @param[out] out 読み出した文字列。失敗時の内容は不定
+/// @return 個数と全要素を読み切れたら true
+/// @note 3 つの要求（メニュー・アイコン・動詞）が同じ並びを持つ。上限の検査を
+///       reserve より先に置くのがこの関数の要点で、ばらばらに書くと «相手の
+///       言い値だけ確保する» 形がいつか 1 か所だけ残る
+inline bool ReadStrings(Reader& reader, uint32_t limit, std::vector<std::string>& out) {
+    uint32_t count = 0;
+    if (!reader.U32(count) || count > limit) return false;
+    out.clear();
+    out.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        std::string value;
+        if (!reader.String(value)) return false;
+        out.push_back(std::move(value));
+    }
+    return true;
+}
+
 }  // namespace detail
 
 /// @brief 要求を 1 フレームに符号化する。
@@ -468,27 +489,17 @@ inline bool DecodeRequest(const uint8_t* payload, size_t size, Request& request)
     uint32_t extended = 0;
     uint32_t background = 0;
     uint32_t dark = 0;
-    uint32_t count = 0;
     if (!reader.U32(x) || !reader.U32(y) || !reader.U32(extended)) return false;
     if (!reader.U32(background) || !reader.U32(dark)) return false;
     if (!reader.U64(request.ownerWindow)) return false;
     if (!reader.String(request.container)) return false;
-    if (!reader.U32(count)) return false;
-    if (count > kMaxPaths) return false;
+    if (!detail::ReadStrings(reader, kMaxPaths, request.paths)) return false;
 
     request.screenX = static_cast<int32_t>(x);
     request.screenY = static_cast<int32_t>(y);
     request.extended = extended != 0;
     request.background = background != 0;
     request.dark = dark != 0;
-    request.paths.clear();
-    // reserve は count を信じた確保になる。kMaxPaths で上限を掛けた後に行うこと。
-    request.paths.reserve(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        std::string path;
-        if (!reader.String(path)) return false;
-        request.paths.push_back(std::move(path));
-    }
     return reader.AtEnd();
 }
 
@@ -540,18 +551,9 @@ inline bool DecodeIconRequest(const uint8_t* payload, size_t size, IconRequest& 
     detail::Reader reader(payload, size);
     if (!detail::ExpectKind(reader, MessageKind::Icons)) return false;
 
-    uint32_t count = 0;
-    if (!reader.U32(request.pixelSize) || !reader.U32(count)) return false;
-    if (count > kMaxIconsPerRequest) return false;
+    if (!reader.U32(request.pixelSize)) return false;
     if (request.pixelSize == 0 || request.pixelSize > kMaxIconPixels) return false;
-
-    request.paths.clear();
-    request.paths.reserve(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        std::string path;
-        if (!reader.String(path)) return false;
-        request.paths.push_back(std::move(path));
-    }
+    if (!detail::ReadStrings(reader, kMaxIconsPerRequest, request.paths)) return false;
     return reader.AtEnd();
 }
 
@@ -729,17 +731,7 @@ inline bool DecodeVerbRequest(const uint8_t* payload, size_t size, VerbRequest& 
     if (!reader.U64(request.ownerWindow) || !reader.U32(byOriginal)) return false;
     request.byOriginalPath = byOriginal != 0;
     if (!reader.String(request.container) || !reader.String(request.verb)) return false;
-
-    uint32_t count = 0;
-    if (!reader.U32(count) || count > kMaxPaths) return false;
-    request.paths.clear();
-    // reserve は count を信じた確保になる。上限を掛けた後に行うこと。
-    request.paths.reserve(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        std::string path;
-        if (!reader.String(path)) return false;
-        request.paths.push_back(std::move(path));
-    }
+    if (!detail::ReadStrings(reader, kMaxPaths, request.paths)) return false;
     return reader.AtEnd();
 }
 

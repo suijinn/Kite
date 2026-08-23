@@ -2,7 +2,6 @@
 
 #include <algorithm>
 
-#include "core/base/Format.h"
 #include "core/base/PathUtil.h"
 #include "core/base/Platform.h"
 #include "core/base/Utf8.h"
@@ -167,46 +166,6 @@ bool LivesIn(const std::string& path, const std::string& dir) {
     return utf8::EqualsIgnoreCaseAscii(path::Normalize(path::Parent(path)), path::Normalize(dir));
 }
 
-const char* SortKeyName(SortKey k) {
-    switch (k) {
-        case SortKey::Ext: return "ext";
-        case SortKey::Size: return "size";
-        case SortKey::Date: return "date";
-        default: return "name";
-    }
-}
-
-SortKey SortKeyFromName(const std::string& s) {
-    if (s == "ext") return SortKey::Ext;
-    if (s == "size") return SortKey::Size;
-    if (s == "date") return SortKey::Date;
-    return SortKey::Name;
-}
-
-// Text-size limits. The floor is where the row height stops leaving room for an
-// icon, the ceiling where a pane stops holding enough rows to be a listing.
-// The settings screen offers the same range in the same 0.1 steps; widening one
-// side alone would leave sizes the keys can reach and the screen cannot.
-constexpr float kFontScaleMin = 0.7f;
-constexpr float kFontScaleMax = 2.0f;
-constexpr float kFontScaleStep = 0.1f;
-
-const char* NewTabPositionName(NewTabPosition p) {
-    return p == NewTabPosition::AfterCurrent ? "after_current" : "end";
-}
-
-NewTabPosition NewTabPositionFromName(const std::string& s) {
-    return s == "after_current" ? NewTabPosition::AfterCurrent : NewTabPosition::End;
-}
-
-const char* TabBarPositionName(TabBarPosition p) {
-    return p == TabBarPosition::Left ? "left" : "top";
-}
-
-TabBarPosition TabBarPositionFromName(const std::string& s) {
-    return s == "left" ? TabBarPosition::Left : TabBarPosition::Top;
-}
-
 // Move one element, taking `to` as the index it should end up at once the
 // element has been lifted out - the same convention Pane::ReorderTab uses.
 template <typename T>
@@ -250,46 +209,6 @@ void ApplySavedOrder(std::vector<fs::Root>& roots, const std::vector<std::string
     roots = std::move(sorted);
 }
 
-// Section in settings.ini holding one such order, or nullptr for a section
-// whose order is its own data (bookmarks.ini is the bookmark order).
-const char* SidebarOrderSection(SidebarSection section) {
-    switch (section) {
-        case SidebarSection::QuickAccess: return "sidebar.quick_access";
-        case SidebarSection::Drives: return "sidebar.drives";
-        default: return nullptr;
-    }
-}
-
-void ReadOrder(const Ini& ini, const char* section, std::vector<std::string>& out) {
-    out.clear();
-    const Ini::Section* sec = ini.Find(section);
-    if (!sec) return;
-    for (const Ini::Entry& e : sec->entries) out.push_back(e.value);
-}
-
-// The name a section goes by in settings.ini. Stable across releases: it is
-// what both the collapse flag and the section order are written in terms of.
-const char* SidebarSectionName(SidebarSection section) {
-    switch (section) {
-        case SidebarSection::QuickAccess: return "quick_access";
-        case SidebarSection::Bookmarks: return "bookmarks";
-        case SidebarSection::Drives: return "drives";
-        default: return "";
-    }
-}
-
-SidebarSection SidebarSectionFromName(const std::string& name) {
-    for (size_t i = 0; i < static_cast<size_t>(SidebarSection::Count); ++i) {
-        const SidebarSection section = static_cast<SidebarSection>(i);
-        if (name == SidebarSectionName(section)) return section;
-    }
-    return SidebarSection::Count;
-}
-
-std::string SidebarCollapseKey(SidebarSection section) {
-    return std::string("sidebar_collapse_") + SidebarSectionName(section);
-}
-
 }  // namespace
 
 App::App(fs::IFileSystem& filesystem, IShellIntegration& shell, IHost& host,
@@ -321,22 +240,6 @@ void App::Shutdown() {
     loader_.reset();  // joins workers before anything else is torn down
 }
 
-std::string App::ConfigPath(const char* file) const {
-    return path::Join(fs_.ConfigDir(), file);
-}
-
-// Kite's own writes are the only ones that can fail without the user having
-// asked for anything, so they are the only ones that have to announce
-// themselves. The message names the full path rather than the file: what went
-// wrong is almost always the folder (extracted into Program Files, run from
-// read-only media), and the file name alone does not say which folder it is.
-bool App::WriteConfigFile(const char* file, std::string_view data) {
-    const std::string path = ConfigPath(file);
-    if (plat::WriteTextFile(path, data)) return true;
-    SetStatus(strings_.Format("ui.config_write_failed", { path }));
-    return false;
-}
-
 uint32_t App::IconFor(const std::string& path) {
     if (!icons_ || !shellIcons_) return 0;
     return icons_->IconFor(path);
@@ -357,31 +260,6 @@ void App::RefreshRoots() {
     // this runs again whenever the drive list changes, not just at start-up.
     ApplySavedOrder(quickAccess_, quickAccessOrder_);
     ApplySavedOrder(roots_, driveOrder_);
-}
-
-// The order the three sections stand in. Anything the file does not name is
-// appended in the built-in order: a name that was mistyped, or a section added
-// in a later version, must not make the section disappear from the sidebar.
-void App::LoadSidebarSections() {
-    sidebarSections_.clear();
-    if (const Ini::Section* sec = settings_.Find("sidebar")) {
-        for (const Ini::Entry& e : sec->entries) {
-            const SidebarSection section = SidebarSectionFromName(e.value);
-            if (section == SidebarSection::Count) continue;
-            if (std::find(sidebarSections_.begin(), sidebarSections_.end(), section) !=
-                sidebarSections_.end()) {
-                continue;  // named twice; the first mention wins
-            }
-            sidebarSections_.push_back(section);
-        }
-    }
-    for (size_t i = 0; i < static_cast<size_t>(SidebarSection::Count); ++i) {
-        const SidebarSection section = static_cast<SidebarSection>(i);
-        if (std::find(sidebarSections_.begin(), sidebarSections_.end(), section) ==
-            sidebarSections_.end()) {
-            sidebarSections_.push_back(section);
-        }
-    }
 }
 
 bool App::MoveSidebarSection(int from, int to) {
@@ -425,406 +303,37 @@ bool App::MoveSidebarItem(SidebarSection section, int from, int to) {
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
-
-void App::LoadConfig() {
-    // The folder itself failing is worth saying on its own: every write after
-    // this one will fail too, and at that point nothing at all is being kept.
-    if (!plat::EnsureDirectory(fs_.ConfigDir())) {
-        SetStatus(strings_.Format("ui.config_write_failed", { fs_.ConfigDir() }));
-    }
-
-    std::string text;
-    settings_ = Ini();
-    if (plat::ReadTextFile(ConfigPath("settings.ini"), text)) settings_.Parse(text);
-
-    darkTheme_ = settings_.GetStr("ui", "theme", "dark") != "light";
-    fontScale_ = std::clamp(settings_.GetFloat("ui", "font_scale", 1.0f), kFontScaleMin,
-                            kFontScaleMax);
-    ApplyTheme();
-
-    language_ = settings_.GetStr("ui", "language", "auto");
-    LoadLanguage();
-
-    sidebarVisible_ = settings_.GetBool("ui", "sidebar", true);
-    // 既定は現行動作の「末尾」。ブラウザに合わせて隣に挿す人と、開いた順に並べて
-    // おきたい人で分かれるので、どちらかを正解にせず設定にしてある。
-    newTabPosition_ = NewTabPositionFromName(settings_.GetStr("ui", "new_tab_position", "end"));
-    tabBarPosition_ = TabBarPositionFromName(settings_.GetStr("ui", "tab_bar_position", "top"));
-    ReadOrder(settings_, SidebarOrderSection(SidebarSection::QuickAccess), quickAccessOrder_);
-    ReadOrder(settings_, SidebarOrderSection(SidebarSection::Drives), driveOrder_);
-    for (size_t i = 0; i < static_cast<size_t>(SidebarSection::Count); ++i) {
-        sidebarCollapsed_[i] =
-            settings_.GetBool("ui", SidebarCollapseKey(static_cast<SidebarSection>(i)), false);
-    }
-    LoadSidebarSections();
-    // The escape hatch for the one thing shell icons cost: they are what pulls
-    // third-party overlay handlers into the picture at all. Off, Kite draws its
-    // own vector glyphs and never asks the shell about a file.
-    shellIcons_ = settings_.GetBool("ui", "shell_icons", true);
-    // On by default. Nothing is lost by it: the shell's own context menu still
-    // carries whatever extractor is installed, and ".." leads back out - while
-    // off by default would mean nobody learns the feature exists.
-    openArchives_ = settings_.GetBool("ui", "open_archives", true);
-
-    defaultView_.showHidden = settings_.GetBool("view", "show_hidden", false);
-    defaultView_.dirsFirst = settings_.GetBool("view", "dirs_first", true);
-    defaultView_.sortDesc = settings_.GetBool("view", "sort_desc", false);
-    defaultView_.sort = SortKeyFromName(settings_.GetStr("view", "sort", "name"));
-
-    placement_.x = settings_.GetInt("window", "x", -1);
-    placement_.y = settings_.GetInt("window", "y", -1);
-    placement_.w = settings_.GetInt("window", "w", 1180);
-    placement_.h = settings_.GetInt("window", "h", 720);
-    placement_.maximized = settings_.GetBool("window", "maximized", false);
-    // 2 枚目は大きさだけ受け継ぎ、位置は OS に選ばせる。保存された座標をそのまま
-    // 使うと、開いた瞬間に元のウィンドウとぴったり重なって増えたことが分からない。
-    if (standalone_) {
-        placement_.x = -1;
-        placement_.y = -1;
-    }
-
-    keymap_.LoadDefaults();
-    Ini keysIni;
-    if (plat::ReadTextFile(ConfigPath("keys.ini"), text)) {
-        keysIni.Parse(text);
-        std::vector<std::string> warnings;
-        keymap_.ApplyIni(keysIni, &warnings);
-        if (!warnings.empty()) SetStatus(warnings.front());
-    } else {
-        WriteKeysFile();
-    }
+// Only one overlay is ever on screen: they all swallow every keystroke, so two
+// of them would leave the keyboard with two owners. Closing them one at a time
+// at each opening is how the fifth one ends up forgotten in one of the places.
+void App::CloseAllOverlays() {
+    keyHelp_ = false;
     keyEditor_.Close();
-    // The rows hold positions in the bookmark list that is about to be replaced.
+    settingsEditor_.Close();
     placePicker_.Close();
-    // And these hold labels and chords from the language and keymap being replaced
-    // right now - a palette left open would be offering the previous ones.
     commandPalette_.Close();
-
-    workspace_.bookmarks.clear();
-    Ini bookmarksIni;
-    if (plat::ReadTextFile(ConfigPath("bookmarks.ini"), text)) {
-        bookmarksIni.Parse(text);
-        if (const Ini::Section* sec = bookmarksIni.Find("bookmarks")) {
-            for (const Ini::Entry& e : sec->entries) {
-                workspace_.bookmarks.push_back({ e.key, e.value });
-            }
-        }
-    }
 }
 
-// The language is always loaded in the same two steps: the built-in table, then
-// the user's lang.<code>.ini on top. Anything that reloads the table without the
-// second step - the language toggle used to - silently drops every line the user
-// translated themselves.
-void App::LoadLanguage() {
-    std::string code = language_;
-    if (code == "auto" || code.empty()) code = plat::PreferredLanguage();
-    strings_.Load(code);
-
-    // Optional user translation file, e.g. lang.ja.ini - lets a new locale ship
-    // without touching the binary.
-    std::string text;
-    const std::string langFile = path::Join(fs_.ConfigDir(), "lang." + strings_.code() + ".ini");
-    if (plat::ReadTextFile(langFile, text)) {
-        Ini langIni;
-        langIni.Parse(text);
-        strings_.ApplyOverrides(langIni);
-    }
+// Point a tab somewhere else and go and get it.
+//
+// The history is deliberately not touched: going back, opening a folder in the
+// other pane and syncing the panes all move a tab the same way, and only the
+// caller knows whether the place being left is worth remembering.
+void App::RetargetTab(Tab& tab, const std::string& path) {
+    tab.path = path;
+    tab.loaded = false;
+    tab.cursor = 0;
+    tab.scroll = 0.0f;
+    RequestLoad(tab, true);
 }
 
-// The theme is always rebuilt from the same three steps, in this order: the
-// built-in defaults, what settings.ini says about them, then the text size the
-// user asked for on top. Anything that skips a step - the theme toggle used to -
-// silently drops whichever of the three came later.
-void App::ApplyTheme() {
-    theme_ = darkTheme_ ? Theme::Dark() : Theme::Light();
-    theme_.ApplyIni(settings_);
-    theme_.Scale(fontScale_);
-}
-
-void App::SetFontScale(float scale) {
-    const float wanted = std::clamp(scale, kFontScaleMin, kFontScaleMax);
-    if (wanted == fontScale_) {
-        // Already at the limit. Say the size rather than letting the key look dead.
-        SetStatus(strings_.Format("ui.font_scale",
-                                  { std::to_string(static_cast<int>(fontScale_ * 100.0f + 0.5f)) }));
-        return;
-    }
-    fontScale_ = wanted;
-    ApplyTheme();
-    SetStatus(strings_.Format("ui.font_scale",
-                              { std::to_string(static_cast<int>(fontScale_ * 100.0f + 0.5f)) }));
-    dirty_ = true;
-    host_.Invalidate();
-}
-
-bool App::sidebarCollapsed(SidebarSection section) const {
-    if (section == SidebarSection::Count) return false;
-    return sidebarCollapsed_[static_cast<size_t>(section)];
-}
-
-void App::ToggleSidebarSection(SidebarSection section) {
-    if (section == SidebarSection::Count) return;
-    bool& collapsed = sidebarCollapsed_[static_cast<size_t>(section)];
-    collapsed = !collapsed;
-    dirty_ = true;
-    host_.Invalidate();
-}
-
-// Written out the moment anything changes rather than when the screen closes: a
-// binding the user just watched take effect must survive the app being killed.
-// Only a write that landed earns the confirmation on the way out; otherwise the
-// failure message stands.
-void App::SaveKeysIfChanged() {
-    if (!keyEditor_.dirty()) return;
-    keysChanged_ = WriteKeysFile();
-    keyEditor_.ClearDirty();
-}
-
-void App::RemoveKeyBinding(int index) {
-    keyEditor_.RemoveChord(index, keymap_, strings_);
-    SaveKeysIfChanged();
-    host_.Invalidate();
-}
-
-bool App::WriteKeysFile() {
-    std::string out =
-        "# Kite key bindings.\n"
-        "#\n"
-        "# Syntax:  <command> = <chord>\n"
-        "#   Chords combine Ctrl / Shift / Alt with a key name, e.g. Ctrl+Shift+T.\n"
-        "#   Repeat a command on several lines to give it several chords.\n"
-        "#   Use \"<command> = none\" to leave a command with no key at all.\n"
-        "#   The lines here are the whole answer for the commands they name: a\n"
-        "#   command listed once has exactly that one chord, built-in default or\n"
-        "#   not. Delete a command's lines entirely to get its default back.\n"
-        "#\n"
-        "# Written from the bindings that were active at the time. Edit it here and\n"
-        "# reload with Ctrl+Alt+C, or edit it on screen with Ctrl+F1 - which rewrites\n"
-        "# this file, comments and all.\n\n";
-    out += keymap_.ToIni().Serialize();
-    return WriteConfigFile("keys.ini", out);
-}
-
-// 設定画面に見せる現在値。実体はここにある個々のメンバで、設定画面が持つのは
-// 「選択肢の何番目か」だけ。
-SettingsValues App::CollectSettings() const {
-    SettingsValues v;
-    v.Set(SettingId::Theme, darkTheme_ ? 0 : 1);
-    v.Set(SettingId::Language, LanguageIndex(language_));
-    v.Set(SettingId::FontScale, FontScaleIndex(fontScale_));
-    v.Set(SettingId::Sidebar, sidebarVisible_ ? 1 : 0);
-    v.Set(SettingId::ShellIcons, shellIcons_ ? 1 : 0);
-    v.Set(SettingId::OpenArchives, openArchives_ ? 1 : 0);
-    v.Set(SettingId::TabBarPos, tabBarPosition_ == TabBarPosition::Left ? 1 : 0);
-    v.Set(SettingId::NewTabPos, newTabPosition_ == NewTabPosition::AfterCurrent ? 1 : 0);
-    v.Set(SettingId::NewTabHidden, defaultView_.showHidden ? 1 : 0);
-    v.Set(SettingId::NewTabDirsFirst, defaultView_.dirsFirst ? 1 : 0);
-    return v;
-}
-
-// 変わった 1 項目だけを反映する。全項目を書き戻すと、設定画面が選択肢を持たない値
-// （lang.fr.ini を置いた人の language = fr）まで先頭の選択肢で上書きされる。
-void App::ApplySetting(SettingId id, const SettingsValues& values) {
-    const int index = values.Get(id);
-    switch (id) {
-        case SettingId::Theme:
-            darkTheme_ = (index == 0);
-            ApplyTheme();
-            break;
-        case SettingId::Language:
-            language_ = LanguageCode(index);
-            LoadLanguage();
-            break;
-        case SettingId::FontScale:
-            // SetFontScale はステータス行に倍率を出すが、ここでは画面に値が出て
-            // いるので通さない。テーマの組み直しだけを借りる。
-            fontScale_ = std::clamp(FontScaleValue(index), kFontScaleMin, kFontScaleMax);
-            ApplyTheme();
-            break;
-        case SettingId::Sidebar:
-            sidebarVisible_ = (index != 0);
-            break;
-        case SettingId::ShellIcons:
-            shellIcons_ = (index != 0);
-            break;
-        case SettingId::OpenArchives:
-            openArchives_ = (index != 0);
-            break;
-        case SettingId::TabBarPos:
-            tabBarPosition_ = (index != 0) ? TabBarPosition::Left : TabBarPosition::Top;
-            break;
-        case SettingId::NewTabPos:
-            newTabPosition_ = (index != 0) ? NewTabPosition::AfterCurrent : NewTabPosition::End;
-            break;
-        case SettingId::NewTabHidden:
-            defaultView_.showHidden = (index != 0);
-            break;
-        case SettingId::NewTabDirsFirst:
-            defaultView_.dirsFirst = (index != 0);
-            break;
-        default:
-            return;
-    }
-    dirty_ = true;
-    host_.Invalidate();
-}
-
-void App::ApplyPendingSetting() {
-    const SettingId id = settingsEditor_.changed();
-    if (id == SettingId::Count) return;
-    ApplySetting(id, settingsEditor_.values());
-    settingsEditor_.ClearChanged();
-    // 言語を変えると自分自身のラベルも変わる。
-    settingsEditor_.Rebuild(strings_);
-
-    // キーの設定と同じ扱いで、その場で書き出す ─ 目の前で効いた変更が、次に落ちた
-    // ときに黙って消えるほうが実害が大きい。単独ウィンドウは何も書かない
-    // （SaveAll と同じ理由。書けば後から閉じたほうが本体の設定を古い内容で潰す）。
-    if (!standalone_) SaveSettings();
-}
-
-int App::NewTabAt(const Pane& pane) const {
-    return newTabPosition_ == NewTabPosition::AfterCurrent ? pane.active + 1 : -1;
-}
-
-void App::CloseKeyEditor() {
-    keyEditor_.Close();
-    // Every change went to disk as it was made; this only confirms it once, on
-    // the way out, instead of after every keystroke.
-    if (keysChanged_) {
-        SetStatus(strings_.Get("ui.key_settings_saved"));
-        keysChanged_ = false;
-    }
-}
-
-bool App::SaveSettings() {
-    settings_.Set("ui", "theme", darkTheme_ ? "dark" : "light");
-    settings_.Set("ui", "language", language_);
-    settings_.SetBool("ui", "sidebar", sidebarVisible_);
-    for (size_t i = 0; i < static_cast<size_t>(SidebarSection::Count); ++i) {
-        settings_.SetBool("ui", SidebarCollapseKey(static_cast<SidebarSection>(i)),
-                          sidebarCollapsed_[i]);
-    }
-    settings_.ClearSection("sidebar");
-    for (SidebarSection section : sidebarSections_) {
-        settings_.Append("sidebar", "section", SidebarSectionName(section));
-    }
-    settings_.SetFloat("ui", "font_scale", fontScale_);
-    settings_.SetBool("ui", "shell_icons", shellIcons_);
-    settings_.SetBool("ui", "open_archives", openArchives_);
-    settings_.Set("ui", "new_tab_position", NewTabPositionName(newTabPosition_));
-    settings_.Set("ui", "tab_bar_position", TabBarPositionName(tabBarPosition_));
-
-    // Rewritten whole rather than merged: a folder that has since disappeared
-    // would otherwise sit in the file forever, holding a slot nothing fills.
-    // Left alone entirely until something has actually been dragged, so the
-    // file does not grow an empty section for everyone else.
-    auto saveOrder = [&](SidebarSection section, const std::vector<std::string>& order) {
-        const char* name = SidebarOrderSection(section);
-        if (order.empty() && !settings_.Find(name)) return;
-        settings_.ClearSection(name);
-        for (const std::string& path : order) settings_.Append(name, "item", path);
-    };
-    saveOrder(SidebarSection::QuickAccess, quickAccessOrder_);
-    saveOrder(SidebarSection::Drives, driveOrder_);
-
-    settings_.SetBool("view", "show_hidden", defaultView_.showHidden);
-    settings_.SetBool("view", "dirs_first", defaultView_.dirsFirst);
-    settings_.SetBool("view", "sort_desc", defaultView_.sortDesc);
-    settings_.Set("view", "sort", SortKeyName(defaultView_.sort));
-
-    settings_.SetInt("window", "x", placement_.x);
-    settings_.SetInt("window", "y", placement_.y);
-    settings_.SetInt("window", "w", placement_.w);
-    settings_.SetInt("window", "h", placement_.h);
-    settings_.SetBool("window", "maximized", placement_.maximized);
-
-    const bool settingsOk = WriteConfigFile("settings.ini", settings_.Serialize());
-
-    Ini bookmarksIni;
-    for (const Bookmark& b : workspace_.bookmarks) {
-        bookmarksIni.Append("bookmarks", b.name, b.path);
-    }
-    // Attempted even if the settings write just failed: the two files fail for
-    // the same reason often enough, but not always - a folder can hold one file
-    // open and not the other, and skipping the second would lose bookmarks that
-    // could still have been written.
-    const bool bookmarksOk = WriteConfigFile("bookmarks.ini", bookmarksIni.Serialize());
-    return settingsOk && bookmarksOk;
-}
-
-void App::LoadWorkspace(const std::vector<std::string>& startPaths) {
-    std::string text;
-    Ini ws;
-    // 単独ウィンドウは保存されたセッションを読まない。読めば「新しいウィンドウ」に
-    // 元の窓の全セッションが複製され、頼んだフォルダはその何枚目かのタブになる。
-    if (!standalone_ && plat::ReadTextFile(ConfigPath("sessions.ini"), text)) ws.Parse(text);
-
-    for (int i = 0;; ++i) {
-        const std::string sec = "session." + std::to_string(i);
-        if (!ws.Find(sec)) break;
-        const std::string name = ws.GetStr(sec, "name", "Session " + std::to_string(i + 1));
-        const std::string layout = ws.GetStr(sec, "layout");
-        std::unique_ptr<Session> s = Session::Deserialize(name, layout);
-        if (s) workspace_.sessions.push_back(std::move(s));
-    }
-
-    // 単独ウィンドウでは開始位置そのものが最初のタブになる。ここで home を開くと、
-    // 頼まれていない場所のタブが必ず 1 枚余る。
-    size_t firstExtra = 0;
-    if (workspace_.sessions.empty()) {
-        std::string start = fs_.HomeDir();
-        if (standalone_ && !startPaths.empty()) {
-            start = path::Normalize(startPaths.front());
-            firstExtra = 1;
-        }
-        workspace_.AddSession(strings_.Format("ui.new_session", { "1" }), start);
-    }
-    workspace_.active = std::clamp(ws.GetInt("workspace", "active", 0), 0,
-                                   static_cast<int>(workspace_.sessions.size()) - 1);
-
-    // Seed every tab's view state from the saved defaults.
-    for (const std::unique_ptr<Session>& s : workspace_.sessions) {
-        for (Pane* p : s->Panes()) {
-            for (std::unique_ptr<Tab>& t : p->tabs) t->view = defaultView_;
-        }
-    }
-
-    // Command-line paths open as extra tabs in the focused pane.
-    if (firstExtra < startPaths.size()) {
-        if (Pane* p = workspace_.focusedPane()) {
-            for (size_t i = firstExtra; i < startPaths.size(); ++i) {
-                Tab* t = p->AddTab(path::Normalize(startPaths[i]));
-                t->view = defaultView_;
-            }
-        }
-    }
-}
-
-bool App::SaveWorkspaceFile() {
-    Ini ws;
-    ws.SetInt("workspace", "active", workspace_.active);
-    for (size_t i = 0; i < workspace_.sessions.size(); ++i) {
-        const std::string sec = "session." + std::to_string(i);
-        ws.Set(sec, "name", workspace_.sessions[i]->name);
-        ws.Set(sec, "layout", workspace_.sessions[i]->Serialize());
-    }
-    return WriteConfigFile("sessions.ini", ws.Serialize());
-}
-
-bool App::SaveAll() {
-    // 単独ウィンドウは何も書かない。設定もセッションも起動時の写しでしかないので、
-    // 後から閉じたほうが本体の変更を古い内容で上書きしてしまう。
-    if (standalone_) return true;
-    const bool settingsOk = SaveSettings();
-    const bool workspaceOk = SaveWorkspaceFile();
-    // 書けなかったものが残っているうちは「保存済み」にしない。
-    dirty_ = !(settingsOk && workspaceOk);
-    return settingsOk && workspaceOk;
+// A new tab always arrives the same way: added, given a view state, and sent to
+// the loader at once. Forced, because the tab is new and has nothing to keep.
+Tab* App::OpenTabIn(Pane& pane, const std::string& path, int at, const ViewState& view) {
+    Tab* t = pane.AddTab(path, at);
+    t->view = view;
+    RequestLoad(*t, true);
+    return t;
 }
 
 // ---------------------------------------------------------------------------
@@ -1064,9 +573,7 @@ void App::OpenPath(const std::string& p, bool newTab) {
     Pane* pane = workspace_.focusedPane();
     if (!pane) return;
     if (newTab) {
-        Tab* t = pane->AddTab(ArchiveTarget(path::Normalize(p)), NewTabAt(*pane));
-        t->view = defaultView_;
-        RequestLoad(*t, true);
+        OpenTabIn(*pane, ArchiveTarget(path::Normalize(p)), NewTabAt(*pane), defaultView_);
         dirty_ = true;
         host_.Invalidate();
     } else {
@@ -1086,9 +593,7 @@ void App::OpenForwardedPaths(const std::vector<std::string>& paths) {
     Tab* last = nullptr;
     for (const std::string& p : paths) {
         if (p.empty()) continue;
-        last = pane->AddTab(path::Normalize(p));
-        last->view = defaultView_;
-        RequestLoad(*last, true);
+        last = OpenTabIn(*pane, path::Normalize(p), -1, defaultView_);
     }
     if (!last) return;
 
@@ -1337,6 +842,19 @@ void App::RebuildFocused() {
         EnsureCursorVisible();
         host_.Invalidate();
     }
+}
+
+// Hidden files, sort direction and folders-first all read the same way: flip it
+// here, and let the next tab open with the same answer. One routine rather than
+// three so that the second half - seeding defaultView_ - cannot be left out of
+// one of them.
+void App::ToggleViewFlag(Tab* tab, bool ViewState::* flag) {
+    if (!tab) return;
+    const bool value = !(tab->view.*flag);
+    tab->view.*flag = value;
+    defaultView_.*flag = value;
+    RebuildFocused();
+    dirty_ = true;
 }
 
 void App::EnsureCursorVisible() {
@@ -1763,22 +1281,16 @@ void App::ApplyPrompt() {
             break;
         }
 
-        case PromptKind::NewFolder: {
-            if (!t || text.empty()) break;
-            const std::string created = path::Join(t->path, text);
-            if (!fs_.MakeDirectory(created, &err)) {
-                ReportFailure("ui.create_failed", err);
-            } else {
-                undo_.Push({ UndoKind::Create, { created }, {} });
-                RefreshFocused();
-            }
-            break;
-        }
-
+        // A folder and a file are created the same way and answered for the same
+        // way; only which of the two the filesystem is asked for differs.
+        case PromptKind::NewFolder:
         case PromptKind::NewFile: {
             if (!t || text.empty()) break;
             const std::string created = path::Join(t->path, text);
-            if (!fs_.MakeFile(created, &err)) {
+            const bool made = (kind == PromptKind::NewFolder)
+                                  ? fs_.MakeDirectory(created, &err)
+                                  : fs_.MakeFile(created, &err);
+            if (!made) {
                 ReportFailure("ui.create_failed", err);
             } else {
                 undo_.Push({ UndoKind::Create, { created }, {} });
@@ -1947,19 +1459,16 @@ bool App::OnChar(uint32_t cp) {
     // 設定画面は絞り込みを持たないが、打鍵は残らず飲み込む ─ 出しっぱなしの
     // 画面の裏でプロンプトが文字を受け取っては困る。
     if (settingsEditor_.visible()) return true;
-    if (placePicker_.visible()) {
-        if (!placePicker_.HandleChar(cp)) return false;
-        // A ">" typed at the front is a request for the other screen.
+    // Both choosers take a character the same way; a ">" typed at the front of
+    // either one is a request for the other screen.
+    const auto typeIntoPicker = [&](auto& picker) {
+        if (!picker.HandleChar(cp)) return false;
         SyncPickerMode();
         host_.Invalidate();
         return true;
-    }
-    if (commandPalette_.visible()) {
-        if (!commandPalette_.HandleChar(cp)) return false;
-        SyncPickerMode();
-        host_.Invalidate();
-        return true;
-    }
+    };
+    if (placePicker_.visible()) return typeIntoPicker(placePicker_);
+    if (commandPalette_.visible()) return typeIntoPicker(commandPalette_);
     if (keyEditor_.visible()) {
         if (!keyEditor_.HandleChar(cp, strings_, keymap_)) return false;
         host_.Invalidate();
@@ -2059,15 +1568,13 @@ bool App::OnKey(const Chord& chord) {
     if (placePicker_.visible()) {
         // Its own chord still toggles it shut, so the key that opened the list is
         // also the key that leaves it - the same exit the other overlays have.
-        if (keymap_.Lookup(chord) == Cmd::ShowPlaces) {
-            Execute(Cmd::ShowPlaces);
-            return true;
-        }
+        //
         // The other mode's chord crosses over rather than being swallowed: the
         // two screens are one window, and Ctrl+Shift+P means "commands" wherever
         // it is pressed. The same reading VS Code gives it.
-        if (keymap_.Lookup(chord) == Cmd::ShowCommandPalette) {
-            Execute(Cmd::ShowCommandPalette);
+        const Cmd chosen = keymap_.Lookup(chord);
+        if (chosen == Cmd::ShowPlaces || chosen == Cmd::ShowCommandPalette) {
+            Execute(chosen);
             return true;
         }
         // The filter box is a text field, so the clipboard chords are its own -
@@ -2091,13 +1598,11 @@ bool App::OnKey(const Chord& chord) {
     }
     if (commandPalette_.visible()) {
         // Its own chord still toggles it shut, the same exit the other overlays
-        // have. Everything else the palette decides.
-        if (keymap_.Lookup(chord) == Cmd::ShowCommandPalette) {
-            Execute(Cmd::ShowCommandPalette);
-            return true;
-        }
-        if (keymap_.Lookup(chord) == Cmd::ShowPlaces) {
-            Execute(Cmd::ShowPlaces);
+        // have, and the places list's chord crosses over the same way it does in
+        // the other direction. Everything else the palette decides.
+        const Cmd chosen = keymap_.Lookup(chord);
+        if (chosen == Cmd::ShowCommandPalette || chosen == Cmd::ShowPlaces) {
+            Execute(chosen);
             return true;
         }
         if (PickerClipboardKey(shell_, commandPalette_, chord)) {
@@ -2244,10 +1749,7 @@ bool App::OpenPlacePicker() {
         SetStatus(strings_.Get("ui.goto_none"));
         return false;
     }
-    keyHelp_ = false;
-    keyEditor_.Close();
-    settingsEditor_.Close();
-    commandPalette_.Close();
+    CloseAllOverlays();
     const Tab* tab = workspace_.focusedTab();
     placePicker_.Open(strings_, keymap_, workspace_.bookmarks, tabs, roots_,
                       tab ? tab->path : std::string());
@@ -2255,10 +1757,7 @@ bool App::OpenPlacePicker() {
 }
 
 void App::OpenCommandPalette() {
-    keyHelp_ = false;
-    keyEditor_.Close();
-    settingsEditor_.Close();
-    placePicker_.Close();
+    CloseAllOverlays();
     // 開くたびに作り直す。ラベルは言語で変わり、和音は Ctrl+F1 で変わり、
     // 番号で指す 8 個に添える行き先は Ctrl+D で変わる。
     commandPalette_.Open(strings_, keymap_, workspace_.bookmarks);
@@ -2623,774 +2122,6 @@ void App::DoUndo() {
         ReportFailure("ui.undo_failed", err);
     }
     host_.Invalidate();
-}
-
-void App::Execute(Cmd cmd) {
-    Session* session = workspace_.activeSession();
-    Pane* pane = workspace_.focusedPane();
-    Tab* tab = workspace_.focusedTab();
-
-    switch (cmd) {
-        // --- application -----------------------------------------------------
-        case Cmd::NewWindow:
-            // 表示中のフォルダを引き継ぐ。開けなかったことは黙って捨てない
-            // ─ 何も起きないのと、増えないのとは別の話。
-            if (!host_.OpenNewWindow(tab ? tab->path : std::string())) {
-                SetStatus(strings_.Get("ui.new_window_failed"));
-            }
-            break;
-        case Cmd::Quit:
-            host_.Close();
-            break;
-        case Cmd::ReloadConfig: {
-            LoadConfig();
-            SetStatus(strings_.Get("ui.config_reloaded"));
-            host_.Invalidate();
-            break;
-        }
-        case Cmd::OpenConfigFolder:
-            shell_.Open({}, fs_.ConfigDir());
-            break;
-        case Cmd::ToggleTheme:
-            darkTheme_ = !darkTheme_;
-            ApplyTheme();
-            dirty_ = true;
-            host_.Invalidate();
-            break;
-        case Cmd::ToggleLanguage: {
-            language_ = (strings_.code() == "ja") ? "en" : "ja";
-            LoadLanguage();
-            dirty_ = true;
-            host_.Invalidate();
-            break;
-        }
-        case Cmd::ShowKeyHelp:
-            keyHelp_ = !keyHelp_;
-            if (keyHelp_) {
-                keyEditor_.Close();
-                settingsEditor_.Close();
-                placePicker_.Close();
-                commandPalette_.Close();
-            }
-            host_.Invalidate();
-            break;
-        case Cmd::ShowKeySettings:
-            if (keyEditor_.visible()) {
-                CloseKeyEditor();
-            } else {
-                // The read-only sheet and the editor show the same table; two of
-                // them on screen at once would only be confusing.
-                keyHelp_ = false;
-                settingsEditor_.Close();
-                placePicker_.Close();
-                commandPalette_.Close();
-                keyEditor_.Open(strings_, keymap_);
-            }
-            host_.Invalidate();
-            break;
-        case Cmd::ShowSettings:
-            if (settingsEditor_.visible()) {
-                settingsEditor_.Close();
-            } else {
-                keyHelp_ = false;
-                keyEditor_.Close();
-                placePicker_.Close();
-                commandPalette_.Close();
-                // 開くたびに現在値から作り直す。設定は画面の外（Ctrl+Shift+M の
-                // テーマ切り替え、Ctrl++ の文字サイズ）からも変わる。
-                settingsEditor_.Open(strings_, CollectSettings());
-                if (standalone_) SetStatus(strings_.Get("ui.settings_no_save"));
-            }
-            host_.Invalidate();
-            break;
-        case Cmd::ShowCommandPalette:
-            if (commandPalette_.visible()) {
-                commandPalette_.Close();
-            } else {
-                OpenCommandPalette();
-            }
-            host_.Invalidate();
-            break;
-        case Cmd::CancelOverlay:
-            if (commandPalette_.visible()) {
-                commandPalette_.Close();
-            } else if (placePicker_.visible()) {
-                placePicker_.Close();
-            } else if (settingsEditor_.visible()) {
-                settingsEditor_.Close();
-            } else if (keyEditor_.visible()) {
-                CloseKeyEditor();
-            } else if (keyHelp_) {
-                keyHelp_ = false;
-            } else if (prompt_.active()) {
-                CancelPrompt();
-            } else if (tab) {
-                tab->ClearMarks();
-                if (!tab->filter.empty()) {
-                    tab->filter.clear();
-                    tab->Rebuild();
-                }
-            }
-            host_.Invalidate();
-            break;
-
-        // --- navigation ------------------------------------------------------
-        case Cmd::GoUp:
-            NavigateToParent(false);
-            break;
-        case Cmd::GoBack: {
-            if (!tab || tab->back.empty()) break;
-            const std::string target = tab->back.back();
-            tab->back.pop_back();
-            tab->forward.push_back(tab->path);
-            tab->path = target;
-            tab->loaded = false;
-            tab->cursor = 0;
-            tab->scroll = 0.0f;
-            RequestLoad(*tab, true);
-            host_.Invalidate();
-            break;
-        }
-        case Cmd::GoForward: {
-            if (!tab || tab->forward.empty()) break;
-            const std::string target = tab->forward.back();
-            tab->forward.pop_back();
-            tab->back.push_back(tab->path);
-            tab->path = target;
-            tab->loaded = false;
-            tab->cursor = 0;
-            tab->scroll = 0.0f;
-            RequestLoad(*tab, true);
-            host_.Invalidate();
-            break;
-        }
-        case Cmd::GoHome:
-            NavigateFocused(fs_.HomeDir());
-            break;
-        case Cmd::GoRoot: {
-            if (!tab) break;
-            std::string p = tab->path;
-            for (std::string up = path::Parent(p); !up.empty(); up = path::Parent(p)) p = up;
-            NavigateFocused(p);
-            break;
-        }
-        case Cmd::Refresh:
-            RefreshRoots();
-            RefreshFocused();
-            break;
-        case Cmd::OpenSelected:
-            if (tab) ActivateEntry(tab->cursor, false);
-            break;
-        case Cmd::OpenInNewTab:
-            if (tab) ActivateEntry(tab->cursor, true);
-            break;
-        case Cmd::EditPath:
-            // No label: the bar this takes over already showed the path as
-            // breadcrumbs, so a word in front of it only takes room from it.
-            //
-            // Selected whole, the way every address bar on the desktop opens:
-            // the usual next move is to paste or type a different path over it,
-            // and the wash is also what says the row stopped being breadcrumbs.
-            if (tab) {
-                BeginPrompt(PromptKind::Path, "", EditablePath(*tab));
-                prompt_.SelectAll();
-            }
-            break;
-        case Cmd::FocusFilter:
-            if (tab) BeginPrompt(PromptKind::Filter, "ui.filter_label", tab->filter);
-            break;
-
-        // --- cursor and selection --------------------------------------------
-        case Cmd::CursorUp:        MoveCursor(-1, false); break;
-        case Cmd::CursorDown:      MoveCursor(1, false); break;
-        case Cmd::CursorPageUp:    MoveCursor(-(pane ? pane->rowsPerPage : 10), false); break;
-        case Cmd::CursorPageDown:  MoveCursor(pane ? pane->rowsPerPage : 10, false); break;
-        case Cmd::CursorTop:       MoveCursor(0, false, true); break;
-        case Cmd::CursorBottom:
-            MoveCursor(tab ? static_cast<int>(tab->visible.size()) - 1 : 0, false, true);
-            break;
-        case Cmd::ExtendUp:        MoveCursor(-1, true); break;
-        case Cmd::ExtendDown:      MoveCursor(1, true); break;
-        case Cmd::ExtendPageUp:    MoveCursor(-(pane ? pane->rowsPerPage : 10), true); break;
-        case Cmd::ExtendPageDown:  MoveCursor(pane ? pane->rowsPerPage : 10, true); break;
-        case Cmd::ExtendTop:       MoveCursor(0, true, true); break;
-        case Cmd::ExtendBottom:
-            MoveCursor(tab ? static_cast<int>(tab->visible.size()) - 1 : 0, true, true);
-            break;
-        case Cmd::ToggleSelection: {
-            if (!tab || tab->visible.empty()) break;
-            // Deliberately does not go through MoveCursor: toggling must
-            // accumulate a multi-selection rather than reset it.
-            const int index = tab->visible[tab->cursor];
-            if (index >= 0) tab->marked[index] = tab->marked[index] ? 0 : 1;
-            if (tab->cursor + 1 < static_cast<int>(tab->visible.size())) tab->cursor++;
-            tab->ResetAnchor();
-            EnsureCursorVisible();
-            host_.Invalidate();
-            break;
-        }
-        case Cmd::SelectAll:
-            if (tab) {
-                tab->MarkRange(0, static_cast<int>(tab->visible.size()) - 1, true);
-                // Whatever range was being dragged out with Shift is over; the
-                // next extension has to build on what is on screen now.
-                tab->ResetAnchor();
-                host_.Invalidate();
-            }
-            break;
-        case Cmd::SelectNone:
-            // Escape lands here, and in Explorer that is also how a cut is
-            // called off. Nothing can un-cut the clipboard from outside it, but
-            // the screen can at least stop claiming those rows are going
-            // anywhere.
-            ClearCutMarks();
-            if (tab) tab->ClearMarks();
-            host_.Invalidate();
-            break;
-        case Cmd::InvertSelection:
-            if (tab) {
-                for (int index : tab->visible) {
-                    if (index < 0) continue;
-                    tab->marked[index] = tab->marked[index] ? 0 : 1;
-                }
-                tab->ResetAnchor();
-                host_.Invalidate();
-            }
-            break;
-
-        // --- tabs ------------------------------------------------------------
-        case Cmd::NewTab: {
-            if (!pane) break;
-            Tab* t = pane->AddTab(tab ? tab->path : fs_.HomeDir(), NewTabAt(*pane));
-            t->view = defaultView_;
-            RequestLoad(*t, true);
-            dirty_ = true;
-            host_.Invalidate();
-            break;
-        }
-        case Cmd::CloseTab: {
-            if (!pane) break;
-            // A pane always keeps one tab (Pane::CloseTab refuses), so the last
-            // one has to be answered here or the key stops answering at all.
-            //
-            // Split, the answer is the pane: closing the window because one of
-            // several panes ran out of tabs throws away everything the other
-            // panes were showing. Unsplit, it is the window, the way every
-            // browser reads Ctrl+W - and that is not destructive, since the
-            // workspace is written on the way out and comes back next start.
-            //
-            // Only the last step is skipped: the session keeps its own key
-            // (Ctrl+Alt+W), because a session holds panes that are not on
-            // screen and closing them by running one pane empty is a surprise.
-            if (pane->tabs.size() <= 1) {
-                if (session && session->Panes().size() > 1) {
-                    // Reopenable, like any other tab closed with this key.
-                    if (Tab* t = pane->activeTab()) workspace_.closedTabs.push_back(t->path);
-                    session->ClosePane(pane);
-                    dirty_ = true;
-                    host_.Invalidate();
-                    break;
-                }
-                host_.Close();
-                break;
-            }
-            std::string closed;
-            if (pane->CloseTab(pane->active, &closed)) {
-                workspace_.closedTabs.push_back(closed);
-                if (Tab* t = pane->activeTab()) RequestLoad(*t);
-                dirty_ = true;
-            }
-            host_.Invalidate();
-            break;
-        }
-        case Cmd::DuplicateTab: {
-            if (!pane || !tab) break;
-            Tab* t = pane->AddTab(tab->path, pane->active + 1);
-            t->view = tab->view;
-            RequestLoad(*t, true);
-            dirty_ = true;
-            host_.Invalidate();
-            break;
-        }
-        case Cmd::ReopenTab: {
-            if (!pane || workspace_.closedTabs.empty()) break;
-            const std::string p = workspace_.closedTabs.back();
-            workspace_.closedTabs.pop_back();
-            Tab* t = pane->AddTab(p, NewTabAt(*pane));
-            t->view = defaultView_;
-            RequestLoad(*t, true);
-            host_.Invalidate();
-            break;
-        }
-        case Cmd::NextTab:
-            if (pane && !pane->tabs.empty()) {
-                GotoTab((pane->active + 1) % static_cast<int>(pane->tabs.size()));
-            }
-            break;
-        case Cmd::PrevTab:
-            if (pane && !pane->tabs.empty()) {
-                const int n = static_cast<int>(pane->tabs.size());
-                GotoTab((pane->active - 1 + n) % n);
-            }
-            break;
-        case Cmd::MoveTabLeft:
-            if (pane && pane->active > 0) {
-                std::swap(pane->tabs[pane->active], pane->tabs[pane->active - 1]);
-                pane->active--;
-                dirty_ = true;
-                host_.Invalidate();
-            }
-            break;
-        case Cmd::MoveTabRight:
-            if (pane && pane->active + 1 < static_cast<int>(pane->tabs.size())) {
-                std::swap(pane->tabs[pane->active], pane->tabs[pane->active + 1]);
-                pane->active++;
-                dirty_ = true;
-                host_.Invalidate();
-            }
-            break;
-        case Cmd::Tab1: GotoTab(0); break;
-        case Cmd::Tab2: GotoTab(1); break;
-        case Cmd::Tab3: GotoTab(2); break;
-        case Cmd::Tab4: GotoTab(3); break;
-        case Cmd::Tab5: GotoTab(4); break;
-        case Cmd::Tab6: GotoTab(5); break;
-        case Cmd::Tab7: GotoTab(6); break;
-        case Cmd::Tab8: GotoTab(7); break;
-        case Cmd::TabLast: GotoTab(-1); break;
-
-        // --- panes -----------------------------------------------------------
-        case Cmd::SplitLeftRight:
-        case Cmd::SplitTopBottom: {
-            if (!session || !pane) break;
-            const SplitNode::Kind kind = (cmd == Cmd::SplitLeftRight)
-                                             ? SplitNode::Kind::LeftRight
-                                             : SplitNode::Kind::TopBottom;
-            if (Pane* created = session->Split(pane, kind)) {
-                if (Tab* t = created->activeTab()) {
-                    t->view = tab ? tab->view : defaultView_;
-                    RequestLoad(*t, true);
-                }
-                session->focus = created;
-                dirty_ = true;
-            }
-            host_.Invalidate();
-            break;
-        }
-        case Cmd::ClosePane:
-            if (session && pane) {
-                if (!session->ClosePane(pane)) {
-                    SetStatus(strings_.Get("ui.cannot_close_last"));
-                } else {
-                    dirty_ = true;
-                }
-                host_.Invalidate();
-            }
-            break;
-        case Cmd::FocusNextPane:
-        case Cmd::FocusPrevPane: {
-            if (!session) break;
-            std::vector<Pane*> panes = session->Panes();
-            if (panes.size() < 2) break;
-            int index = 0;
-            for (size_t i = 0; i < panes.size(); ++i) {
-                if (panes[i] == pane) index = static_cast<int>(i);
-            }
-            const int n = static_cast<int>(panes.size());
-            const int step = (cmd == Cmd::FocusNextPane) ? 1 : -1;
-            FocusPane(panes[(index + step + n) % n]);
-            break;
-        }
-        case Cmd::FocusPaneLeft:
-            if (session && pane) FocusPane(session->PaneInDirection(pane, -1, 0));
-            break;
-        case Cmd::FocusPaneRight:
-            if (session && pane) FocusPane(session->PaneInDirection(pane, 1, 0));
-            break;
-        case Cmd::FocusPaneUp:
-            if (session && pane) FocusPane(session->PaneInDirection(pane, 0, -1));
-            break;
-        case Cmd::FocusPaneDown:
-            if (session && pane) FocusPane(session->PaneInDirection(pane, 0, 1));
-            break;
-        case Cmd::OpenInOtherPane: {
-            if (!session || !pane || !tab) break;
-            std::vector<Pane*> panes = session->Panes();
-            if (panes.size() < 2) break;
-            const fs::Entry* e = tab->CursorEntry();
-            const std::string target = (e && e->isDir()) ? fs::EntryPath(tab->path, *e)
-                                                         : tab->path;
-            Pane* other = nullptr;
-            for (size_t i = 0; i < panes.size(); ++i) {
-                if (panes[i] == pane) {
-                    other = panes[(i + 1) % panes.size()];
-                    break;
-                }
-            }
-            if (!other) break;
-            if (Tab* ot = other->activeTab()) {
-                ot->path = target;
-                ot->loaded = false;
-                ot->cursor = 0;
-                ot->scroll = 0.0f;
-                RequestLoad(*ot, true);
-            }
-            host_.Invalidate();
-            break;
-        }
-        case Cmd::SyncOtherPane: {
-            if (!session || !pane || !tab) break;
-            for (Pane* p : session->Panes()) {
-                if (p == pane) continue;
-                if (Tab* ot = p->activeTab()) {
-                    ot->path = tab->path;
-                    ot->loaded = false;
-                    ot->cursor = 0;
-                    ot->scroll = 0.0f;
-                    RequestLoad(*ot, true);
-                }
-            }
-            host_.Invalidate();
-            break;
-        }
-        case Cmd::SwapPanes:
-            if (session && pane) {
-                session->SwapWithSibling(pane);
-                dirty_ = true;
-                host_.Invalidate();
-            }
-            break;
-
-        // --- sessions ---------------------------------------------------------
-        case Cmd::NewSession: {
-            const std::string name = strings_.Format(
-                "ui.new_session", { std::to_string(workspace_.sessions.size() + 1) });
-            Session* s = workspace_.AddSession(name, tab ? tab->path : fs_.HomeDir());
-            for (Pane* p : s->Panes()) {
-                for (std::unique_ptr<Tab>& t : p->tabs) t->view = defaultView_;
-            }
-            EnsureVisibleTabsLoaded();
-            dirty_ = true;
-            host_.Invalidate();
-            break;
-        }
-        case Cmd::CloseSession:
-            workspace_.CloseSession(workspace_.active);
-            EnsureVisibleTabsLoaded();
-            dirty_ = true;
-            host_.Invalidate();
-            break;
-        case Cmd::RenameSession:
-            if (session) BeginPrompt(PromptKind::SessionName, "ui.session_name_label", session->name);
-            break;
-        case Cmd::NextSession:
-            if (!workspace_.sessions.empty()) {
-                GotoSession((workspace_.active + 1) %
-                            static_cast<int>(workspace_.sessions.size()));
-            }
-            break;
-        case Cmd::PrevSession:
-            if (!workspace_.sessions.empty()) {
-                const int n = static_cast<int>(workspace_.sessions.size());
-                GotoSession((workspace_.active - 1 + n) % n);
-            }
-            break;
-        // No wrapping, unlike Next/PrevSession: those are "show me another one",
-        // where coming back round is the point, while these are a direction along
-        // the bar - a chip that leapt from the first slot to the last would only
-        // ever be an accident (the same call Cmd::MoveTabLeft/Right makes).
-        case Cmd::MoveSessionLeft:
-            MoveSession(workspace_.active, workspace_.active - 1);
-            break;
-        case Cmd::MoveSessionRight:
-            MoveSession(workspace_.active, workspace_.active + 1);
-            break;
-        case Cmd::SaveWorkspace:
-            // 失敗したときは WriteConfigFile が出した「保存できません」をそのまま
-            // 残す ─ 書けていないのに「保存しました」と答えるのが最悪の応答。
-            if (standalone_) {
-                SetStatus(strings_.Get("ui.standalone_no_save"));
-            } else if (SaveAll()) {
-                SetStatus(strings_.Get("ui.saved"));
-            }
-            break;
-        case Cmd::Session1: GotoSession(0); break;
-        case Cmd::Session2: GotoSession(1); break;
-        case Cmd::Session3: GotoSession(2); break;
-        case Cmd::Session4: GotoSession(3); break;
-        case Cmd::Session5: GotoSession(4); break;
-        case Cmd::Session6: GotoSession(5); break;
-        case Cmd::Session7: GotoSession(6); break;
-        case Cmd::Session8: GotoSession(7); break;
-
-        // --- view -------------------------------------------------------------
-        case Cmd::ToggleHidden:
-            if (tab) {
-                tab->view.showHidden = !tab->view.showHidden;
-                defaultView_.showHidden = tab->view.showHidden;
-                RebuildFocused();
-                dirty_ = true;
-            }
-            break;
-        case Cmd::ToggleSidebar:
-            sidebarVisible_ = !sidebarVisible_;
-            dirty_ = true;
-            host_.Invalidate();
-            break;
-        case Cmd::SortByName:
-        case Cmd::SortByExt:
-        case Cmd::SortBySize:
-        case Cmd::SortByDate: {
-            if (!tab) break;
-            const SortKey key = (cmd == Cmd::SortByExt)    ? SortKey::Ext
-                                : (cmd == Cmd::SortBySize) ? SortKey::Size
-                                : (cmd == Cmd::SortByDate) ? SortKey::Date
-                                                           : SortKey::Name;
-            // Re-selecting the active column flips the direction, like Explorer.
-            if (tab->view.sort == key) {
-                tab->view.sortDesc = !tab->view.sortDesc;
-            } else {
-                tab->view.sort = key;
-                tab->view.sortDesc = false;
-            }
-            defaultView_.sort = tab->view.sort;
-            defaultView_.sortDesc = tab->view.sortDesc;
-            RebuildFocused();
-            dirty_ = true;
-            break;
-        }
-        case Cmd::ToggleSortOrder:
-            if (tab) {
-                tab->view.sortDesc = !tab->view.sortDesc;
-                defaultView_.sortDesc = tab->view.sortDesc;
-                RebuildFocused();
-                dirty_ = true;
-            }
-            break;
-        case Cmd::ToggleDirsFirst:
-            if (tab) {
-                tab->view.dirsFirst = !tab->view.dirsFirst;
-                defaultView_.dirsFirst = tab->view.dirsFirst;
-                RebuildFocused();
-                dirty_ = true;
-            }
-            break;
-        case Cmd::FontLarger:
-            SetFontScale(fontScale_ + kFontScaleStep);
-            break;
-        case Cmd::FontSmaller:
-            SetFontScale(fontScale_ - kFontScaleStep);
-            break;
-        case Cmd::FontReset:
-            SetFontScale(1.0f);
-            break;
-
-        // --- bookmarks ---------------------------------------------------------
-        case Cmd::AddBookmark:
-            if (tab) {
-                if (!HasBookmark(tab->path)) ToggleBookmark(tab->path);
-                dirty_ = true;
-            }
-            break;
-        case Cmd::RemoveBookmark:
-            if (tab && HasBookmark(tab->path)) {
-                ToggleBookmark(tab->path);
-                dirty_ = true;
-            }
-            break;
-        case Cmd::ShowPlaces:
-            if (placePicker_.visible()) {
-                placePicker_.Close();
-            } else {
-                OpenPlacePicker();
-            }
-            host_.Invalidate();
-            break;
-        case Cmd::Bookmark1: GotoBookmark(0); break;
-        case Cmd::Bookmark2: GotoBookmark(1); break;
-        case Cmd::Bookmark3: GotoBookmark(2); break;
-        case Cmd::Bookmark4: GotoBookmark(3); break;
-        case Cmd::Bookmark5: GotoBookmark(4); break;
-        case Cmd::Bookmark6: GotoBookmark(5); break;
-        case Cmd::Bookmark7: GotoBookmark(6); break;
-        case Cmd::Bookmark8: GotoBookmark(7); break;
-
-        // --- file operations ---------------------------------------------------
-        case Cmd::NewFolder:
-            if (ReadOnlyHere()) break;
-            BeginPrompt(PromptKind::NewFolder, "ui.new_folder_label", {});
-            break;
-        case Cmd::NewFile:
-            if (ReadOnlyHere()) break;
-            BeginPrompt(PromptKind::NewFile, "ui.new_file_label", {});
-            break;
-        case Cmd::Rename: {
-            if (!tab || ReadOnlyHere()) break;
-            const fs::Entry* e = tab->CursorEntry();
-            if (!e) break;
-            BeginPrompt(PromptKind::Rename, "ui.rename_label", e->name);
-            // The stem opens selected, so the first thing typed replaces the name
-            // and leaves the extension alone - which is what renaming a file
-            // almost always means, and what every shell that offers it does.
-            //
-            // A folder has no extension to protect, so the whole name is the stem.
-            // Deliberately not path::Stem for those: "backup.2026" would keep a
-            // ".2026" nobody thinks of as one.
-            //
-            // path::Stem already answers the whole name for the two cases where
-            // there is nothing to keep back - a leading dot (".gitignore") and no
-            // dot at all - so neither needs its own branch here.
-            if (e->isDir()) {
-                prompt_.SelectAll();
-            } else {
-                prompt_.SelectRange(0, path::Stem(e->name).size());
-            }
-            break;
-        }
-        case Cmd::DeleteToRecycle:
-            if (!ReadOnlyHere()) DoDelete(false);
-            break;
-        case Cmd::Restore:
-            DoRestore();
-            break;
-        case Cmd::DeletePermanent:
-            if (!ReadOnlyHere()) DoDelete(true);
-            break;
-        case Cmd::Copy:
-        case Cmd::Cut: {
-            if (!tab) break;
-            if (cmd == Cmd::Cut && ReadOnlyHere()) break;
-            std::vector<std::string> paths = tab->SelectionPaths();
-            if (paths.empty()) {
-                SetStatus(strings_.Get("ui.no_selection"));
-                break;
-            }
-            // Say which of the two happened, and say it at all: the clipboard
-            // gives no sign of having been written, so a copy that silently
-            // failed and one that worked look exactly alike from here.
-            const bool cut = (cmd == Cmd::Cut);
-            if (!shell_.SetClipboardFiles(paths, cut)) {
-                // The marks stay: the write failed, so whatever was on the
-                // clipboard before - possibly an earlier cut of ours - is still
-                // there, and the rows drawn dimmed are still telling the truth.
-                SetStatus(strings_.Get("ui.clipboard_failed"));
-                break;
-            }
-            // Explorer dims what it cut, and so does Kite: the status line says
-            // it once, and the rows go on saying it until the paste. A copy
-            // clears the marks for the same reason - the clipboard has moved on.
-            ClearCutMarks();
-            if (cut) {
-                cutPaths_ = paths;
-                std::sort(cutPaths_.begin(), cutPaths_.end());
-            }
-            SetStatus(strings_.Get(cut ? "ui.cut_files" : "ui.copied_files"));
-            break;
-        }
-        case Cmd::Paste:
-            if (!ReadOnlyHere()) DoPaste();
-            break;
-        case Cmd::Undo:
-            DoUndo();
-            break;
-        case Cmd::CopyPath: {
-            if (!tab) break;
-            std::vector<std::string> paths = tab->SelectionPaths();
-            std::string joined;
-            for (size_t i = 0; i < paths.size(); ++i) {
-                if (i) joined += "\r\n";
-                joined += paths[i];
-            }
-            if (joined.empty()) joined = tab->path;
-            SetStatus(strings_.Get(shell_.SetClipboardText(joined) ? "ui.copied"
-                                                                  : "ui.clipboard_failed"));
-            break;
-        }
-        case Cmd::CopyName: {
-            if (!tab) break;
-            std::vector<std::string> paths = tab->SelectionPaths();
-            std::string joined;
-            for (size_t i = 0; i < paths.size(); ++i) {
-                if (i) joined += "\r\n";
-                joined += path::FileName(paths[i]);
-            }
-            SetStatus(strings_.Get(shell_.SetClipboardText(joined) ? "ui.copied"
-                                                                  : "ui.clipboard_failed"));
-            break;
-        }
-
-        // --- shell -------------------------------------------------------------
-        case Cmd::ContextMenu:
-        case Cmd::ExtendedContextMenu: {
-            // Position is supplied by the UI layer for mouse invocations; from
-            // the keyboard it belongs on the row the user is looking at, not
-            // wherever the pointer was left. A negative pair means "no anchor",
-            // and the shell falls back to the pointer.
-            int x = -1;
-            int y = -1;
-            CursorRowAnchor(x, y);
-            ShowContextMenuAt(x, y, cmd == Cmd::ExtendedContextMenu);
-            break;
-        }
-        case Cmd::FolderContextMenu:
-        case Cmd::ExtendedFolderContextMenu:
-            ShowFolderContextMenu(cmd == Cmd::ExtendedFolderContextMenu);
-            break;
-        case Cmd::Properties:
-            if (tab) {
-                const std::string p = tab->CursorPath();
-                shell_.ShowProperties(p.empty() ? tab->path : p);
-            }
-            break;
-        case Cmd::OpenWith:
-            if (tab) {
-                const std::string p = tab->CursorPath();
-                if (!p.empty()) shell_.OpenWith(p);
-            }
-            break;
-        case Cmd::RevealInExplorer:
-            if (tab) {
-                const std::string p = tab->CursorPath();
-                shell_.RevealInExplorer(p.empty() ? tab->path : p);
-            }
-            break;
-        case Cmd::OpenTerminal:
-            // Silence here reads as a dead key: nothing on screen moves either
-            // way, so a virtual folder - or a machine with no console at all -
-            // has to say so.
-            if (tab && !shell_.OpenTerminal(tab->path)) ReportFailure("ui.terminal_failed", {});
-            break;
-        case Cmd::ConnectNetwork: {
-            if (!tab) break;
-            // The connection is to the server or the share, never to a folder
-            // inside it - that is the unit credentials are checked against.
-            const std::string target = path::UncRoot(tab->path);
-            if (target.empty()) {
-                SetStatus(strings_.Get("ui.not_network_path"));
-                break;
-            }
-            std::string err;
-            if (!shell_.ConnectNetwork(target, &err)) {
-                // An empty message means the user closed the dialog; they know
-                // what happened, and saying it again reads as a failure report.
-                if (!err.empty()) SetStatus(err);
-                break;
-            }
-            SetStatus(strings_.Format("ui.network_connected", { target }));
-            RefreshFocused();
-            break;
-        }
-
-        case Cmd::None:
-        case Cmd::Count:
-            break;
-    }
-
-    // Cheap when nothing moved, and it keeps watches correct after any command
-    // that adds, closes or retargets a pane or tab.
-    SyncWatches();
-
-    UpdateTitle();
 }
 
 }  // namespace kite
