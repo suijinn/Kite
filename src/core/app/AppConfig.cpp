@@ -11,6 +11,7 @@
 #include "core/app/App.h"
 #include "core/base/PathUtil.h"
 #include "core/base/Platform.h"
+#include "core/fs/VirtualPath.h"
 
 namespace kite {
 namespace {
@@ -299,6 +300,14 @@ void App::RemoveKeyBinding(int index) {
 }
 
 bool App::WriteKeysFile() {
+    // 2 つの和音はキーマップから引く。このファイルは «そのとき効いていた割り当て» を
+    // 書き出したものなので、読む人が持っていないキーを見出しに書くのは、割り当ての
+    // 正であるべき当の文書が嘘をつくことになる（KeyMap.cpp の既定表の注記）。
+    // 割り当ての無いコマンドについてはその 1 文ごと落とす ─ 和音の入るはずの場所が
+    // 空いている案内は、無い案内より悪い。
+    const std::string reload = keymap_.ChordText(Cmd::ReloadConfig);
+    const std::string editor = keymap_.ChordText(Cmd::ShowKeySettings);
+
     std::string out =
         "# Kite key bindings.\n"
         "#\n"
@@ -310,9 +319,13 @@ bool App::WriteKeysFile() {
         "#   command listed once has exactly that one chord, built-in default or\n"
         "#   not. Delete a command's lines entirely to get its default back.\n"
         "#\n"
-        "# Written from the bindings that were active at the time. Edit it here and\n"
-        "# reload with Ctrl+Alt+C, or edit it on screen with Ctrl+F1 - which rewrites\n"
-        "# this file, comments and all.\n\n";
+        "# Written from the bindings that were active at the time.\n";
+    if (!reload.empty()) out += "# Edit it here and reload with " + reload + ".\n";
+    if (!editor.empty()) {
+        out += "# Or edit it on screen with " + editor + " - which rewrites this file,\n"
+               "# comments and all.\n";
+    }
+    out += "\n";
     out += keymap_.ToIni().Serialize();
     return WriteConfigFile("keys.ini", out);
 }
@@ -331,6 +344,11 @@ SettingsValues App::CollectSettings() const {
     v.Set(SettingId::NewTabPos, newTabPosition_ == NewTabPosition::AfterCurrent ? 1 : 0);
     v.Set(SettingId::NewTabHidden, defaultView_.showHidden ? 1 : 0);
     v.Set(SettingId::NewTabDirsFirst, defaultView_.dirsFirst ? 1 : 0);
+    // 唯一 settings.ini に無い行。実体は OS 側にあるので、覚えている値ではなく
+    // その場で訊く ─ Kite の外で（別のファイラーが、あるいは別の Kite が）変えられて
+    // いても、行が嘘をつかない。Other は「この exe ではない」ので «いいえ» 側。
+    v.Set(SettingId::DefaultManager,
+          shell_.DefaultManagerState() == DefaultManager::Yes ? 1 : 0);
     return v;
 }
 
@@ -374,6 +392,10 @@ void App::ApplySetting(SettingId id, const SettingsValues& values) {
         case SettingId::NewTabDirsFirst:
             defaultView_.dirsFirst = (index != 0);
             break;
+        case SettingId::DefaultManager:
+            // ApplyPendingSetting() が先に横取りしている。ここに来るのは、この関数を
+            // 別の場所から呼んだときだけ ─ そのときも settings.ini には何も無い。
+            return;
         default:
             return;
     }
@@ -384,8 +406,15 @@ void App::ApplySetting(SettingId id, const SettingsValues& values) {
 void App::ApplyPendingSetting() {
     const SettingId id = settingsEditor_.changed();
     if (id == SettingId::Count) return;
-    ApplySetting(id, settingsEditor_.values());
     settingsEditor_.ClearChanged();
+    // この 1 行だけは settings.ini の項目ではないので、下の «反映して書き出す» 道に
+    // 乗せない ─ 実体は OS 側にあり、しかも確認を挟むので、この時点ではまだ何も
+    // 決まっていない。
+    if (id == SettingId::DefaultManager) {
+        ConfirmDefaultManager(settingsEditor_.values().Get(id) != 0);
+        return;
+    }
+    ApplySetting(id, settingsEditor_.values());
     // 言語を変えると自分自身のラベルも変わる。
     settingsEditor_.Rebuild(strings_);
 
@@ -487,7 +516,7 @@ void App::LoadWorkspace(const std::vector<std::string>& startPaths) {
     if (workspace_.sessions.empty()) {
         std::string start = fs_.HomeDir();
         if (standalone_ && !startPaths.empty()) {
-            start = path::Normalize(startPaths.front());
+            start = path::Normalize(vfs::FromCommandLine(startPaths.front()));
             firstExtra = 1;
         }
         workspace_.AddSession(strings_.Format("ui.new_session", { "1" }), start);
@@ -506,7 +535,7 @@ void App::LoadWorkspace(const std::vector<std::string>& startPaths) {
     if (firstExtra < startPaths.size()) {
         if (Pane* p = workspace_.focusedPane()) {
             for (size_t i = firstExtra; i < startPaths.size(); ++i) {
-                Tab* t = p->AddTab(path::Normalize(startPaths[i]));
+                Tab* t = p->AddTab(path::Normalize(vfs::FromCommandLine(startPaths[i])));
                 t->view = defaultView_;
             }
         }

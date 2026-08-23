@@ -10,6 +10,7 @@
 #include "core/base/PathUtil.h"
 #include "core/fs/VirtualPath.h"
 #include "platform/win/VirtualNames.h"
+#include "platform/win/WinDefaultManager.h"
 #include "platform/win/WinPaths.h"
 #include "platform/win/WinUtf.h"
 
@@ -391,5 +392,12 @@ bool WinShell::ConnectNetwork(const std::string& uncRoot, std::string* err) {
     if (err && code != ERROR_CANCELLED) *err = ErrorText(code);
     return false;
 }
+
+// Both forwarded rather than written here: the registry spelling for "the default
+// file manager" is one recipe with one place to restore from, and WinShell is
+// where calls that do *not* need their own file end up.
+DefaultManager WinShell::DefaultManagerState() { return win::DefaultManagerState(); }
+
+bool WinShell::SetDefaultManager(bool on) { return win::SetDefaultManager(on); }
 
 }  // namespace kite::win

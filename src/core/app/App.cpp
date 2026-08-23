@@ -13,6 +13,14 @@ namespace {
 
 constexpr uint64_t kStatusDurationMs = 4000;
 
+// How many folders of the focused tab's history the places list carries.
+//
+// Capped because "recent" runs out before the stack does: past a screenful the
+// rows stop being an answer to "where was I just now" and start being a log,
+// and every one of them pushes the bookmarks and the drives further down. What
+// falls off the end is still reachable with Alt+Left.
+constexpr size_t kHistoryRows = 20;
+
 // How far into the row the keyboard-invoked shell menu is anchored. The menu
 // opens down and to the right of this point, so a small indent puts its corner
 // under the item's icon rather than out on the pane border.
@@ -232,6 +240,14 @@ bool App::Init(const std::vector<std::string>& startPaths) {
     // Before any command has run, so the window does not sit there captioned
     // with the bare class name until the user touches something.
     UpdateTitle();
+    // A registration pointing at a Kite that is not this one. It happens the
+    // moment someone unpacks the zip somewhere else - the folders they double
+    // click go to a path that no longer has an exe on it - and nothing else on
+    // screen would ever say so. Only this case is worth a line: a registration
+    // held by another app is a choice, not an accident (see DefaultManager).
+    if (shell_.DefaultManagerState() == DefaultManager::Other) {
+        SetStatus(strings_.Get("ui.default_manager_moved"));
+    }
     return true;
 }
 
@@ -593,7 +609,7 @@ void App::OpenForwardedPaths(const std::vector<std::string>& paths) {
     Tab* last = nullptr;
     for (const std::string& p : paths) {
         if (p.empty()) continue;
-        last = OpenTabIn(*pane, path::Normalize(p), -1, defaultView_);
+        last = OpenTabIn(*pane, path::Normalize(vfs::FromCommandLine(p)), -1, defaultView_);
     }
     if (!last) return;
 
@@ -935,6 +951,19 @@ std::string App::DisplayName(const Tab& tab) const {
     return tab.title();
 }
 
+// The same answer for a bare path. Tab::title() cannot be reused: its first and
+// best answer is the name the listing brought back, and a path out of the history
+// has no listing behind it - only the spelling.
+std::string App::DisplayNameOf(const std::string& p) const {
+    if (const char* key = vfs::LabelKey(p)) return strings_.Get(key);
+    if (vfs::IsVirtual(p)) {
+        const std::string trailing = vfs::TrailingName(p);
+        if (!trailing.empty()) return trailing;
+    }
+    std::string name = path::DisplayName(p);
+    return name.empty() ? p : name;
+}
+
 std::string App::EditablePath(const Tab& tab) const {
     // "virtual:" is Kite's word for a place, not a spelling anyone types. Inside
     // an archive the body is the shell's own ("C:\a\pack.zip\docs", which is what
@@ -1061,6 +1090,69 @@ void App::DoRestore() {
     RefreshFocused();
 }
 
+// Becoming - or ceasing to be - what Windows opens folders with.
+//
+// A settings row rather than a command, because this is state and not an action:
+// "am I the default file manager" has an answer that outlives the keystroke, and
+// a row can show it where a palette entry cannot. It also settles what a command
+// could not - a single toggle command has one label that is wrong half the time,
+// and a pair of commands needs the user to know which half they are in.
+//
+// And it is the one row that asks first. Every other setting shows its effect the
+// moment it changes; this one changes what happens outside Kite - Win+E, and every
+// folder anyone double clicks - so an arrow key brushed past on the way down the
+// list must not be able to do it.
+void App::ConfirmDefaultManager(bool on) {
+    if (shell_.DefaultManagerState() == DefaultManager::Unsupported) {
+        SetStatus(strings_.Get("ui.default_manager_unsupported"));
+        SyncDefaultManagerRow();
+        return;
+    }
+    BeginPrompt(PromptKind::ConfirmDefaultManager,
+                on ? "ui.confirm_default_manager" : "ui.confirm_default_manager_off", {});
+    pendingDefaultManager_ = on;
+}
+
+// The row and the registry, reconciled. Called after the answer is in - either
+// way - because the row moved before the question was asked and has to come back
+// if nothing happened.
+void App::SyncDefaultManagerRow() {
+    if (settingsEditor_.visible()) settingsEditor_.SetValues(CollectSettings(), strings_);
+    host_.Invalidate();
+}
+
+// The state is read first so that the answer to a question already settled is a
+// sentence, not a silent no-op on the registry.
+void App::SetDefaultManager(bool on) {
+    const DefaultManager state = shell_.DefaultManagerState();
+    if (state == DefaultManager::Unsupported) {
+        SetStatus(strings_.Get("ui.default_manager_unsupported"));
+        SyncDefaultManagerRow();
+        return;
+    }
+    // DefaultManager::Other is deliberately not "already registered": another copy
+    // of Kite holding it is exactly what this command exists to repoint. Clearing
+    // it is allowed for the same reason - the backup describes the state before
+    // any Kite touched it, so restoring is right whichever copy asks.
+    if (on && state == DefaultManager::Yes) {
+        SetStatus(strings_.Get("ui.default_manager_already"));
+        SyncDefaultManagerRow();
+        return;
+    }
+    if (!on && state == DefaultManager::No) {
+        SetStatus(strings_.Get("ui.default_manager_not_set"));
+        SyncDefaultManagerRow();
+        return;
+    }
+    if (!shell_.SetDefaultManager(on)) {
+        SetStatus(strings_.Get("ui.default_manager_failed"));
+        SyncDefaultManagerRow();
+        return;
+    }
+    SetStatus(strings_.Get(on ? "ui.default_manager_set" : "ui.default_manager_cleared"));
+    SyncDefaultManagerRow();
+}
+
 // Only a virtual folder names itself here. A real folder's items are found by
 // parsing their own paths, which is both correct and free; handing the shell a
 // container would make it enumerate the folder again for every right-click.
@@ -1128,6 +1220,9 @@ void App::BeginPrompt(PromptKind kind, const char* labelKey, const std::string& 
 }
 
 void App::CancelPrompt() {
+    // Said no. The settings row moved before the question was asked, so it is
+    // now claiming something that never happened.
+    if (prompt_.kind == PromptKind::ConfirmDefaultManager) SyncDefaultManagerRow();
     if (prompt_.kind == PromptKind::Filter) {
         if (Tab* t = workspace_.focusedTab()) {
             t->filter.clear();
@@ -1329,6 +1424,10 @@ void App::ApplyPrompt() {
             RefreshFocused();
             break;
         }
+
+        case PromptKind::ConfirmDefaultManager:
+            SetDefaultManager(pendingDefaultManager_);
+            break;
 
         case PromptKind::None:
             break;
@@ -1536,6 +1635,13 @@ bool App::OnKey(const Chord& chord) {
     swallowChar_ = false;
 
     if (settingsEditor_.visible()) {
+        // A confirmation raised by a row answers first. While it is up the row is
+        // waiting on the answer, and an arrow key that moved the cursor underneath
+        // would leave the Yes applying to whichever row it landed on.
+        if (prompt_.isConfirm() && HandlePromptKey(chord)) {
+            host_.Invalidate();
+            return true;
+        }
         // 開いたキーがそのまま閉じるキーになる。ショートカットの設定へ抜ける道も
         // 開けておく ─ 設定画面から「キーの設定」へ行けないのは不親切なだけ。
         const Cmd c = keymap_.Lookup(chord);
@@ -1739,9 +1845,59 @@ std::vector<PlacePicker::OpenTab> App::CollectOpenTabs() const {
     return out;
 }
 
+// Where the focused tab has been, newest first.
+//
+// The focused tab only. Merging every tab's history would have to answer "which
+// of these two is more recent", and nothing here can: a tab remembers the order
+// it visited things in, not when. Two such lists can be concatenated but not
+// interleaved, and a "recent" list in an order that is not recency is worse than
+// none. The forward stack is left out for a related reason - those are the places
+// walked back out of, Alt+Right already points at them, and they would sit in this
+// list claiming a recency they do not have.
+std::vector<PlacePicker::Visited> App::CollectHistory() const {
+    std::vector<PlacePicker::Visited> out;
+    // Reached through the session rather than focusedTab(): that one settles an
+    // unset focus on the way past, which is a write, and reading the history is
+    // not the moment to decide which pane has the keyboard.
+    const Session* session = workspace_.activeSession();
+    const Pane* pane = session ? session->focus : nullptr;
+    const Tab* tab = pane ? pane->activeTab() : nullptr;
+    if (!tab) return out;
+
+    for (size_t i = tab->back.size(); i-- > 0;) {
+        const std::string& visited = tab->back[i];
+        if (visited.empty()) continue;
+        // Where the cursor already is, the same exclusion the open tabs get. It
+        // does turn up in this stack - A, B, back to A leaves A underneath - and
+        // "go here" is still not an answer to "go where".
+        if (utf8::EqualsIgnoreCaseAscii(visited, tab->path)) continue;
+        // Folded, because the stack is a walk and not a set: a morning spent
+        // stepping in and out of one folder would otherwise fill the whole block
+        // with one name. The newest occurrence wins - that is the one whose
+        // position in a list called "recent" is true.
+        bool seen = false;
+        for (const PlacePicker::Visited& already : out) {
+            if (utf8::EqualsIgnoreCaseAscii(already.path, visited)) {
+                seen = true;
+                break;
+            }
+        }
+        if (seen) continue;
+        out.push_back({ DisplayNameOf(visited), visited });
+        if (out.size() >= kHistoryRows) break;
+    }
+    return out;
+}
+
 bool App::OpenPlacePicker() {
-    std::vector<PlacePicker::OpenTab> tabs = CollectOpenTabs();
-    if (workspace_.bookmarks.empty() && tabs.empty() && roots_.empty()) {
+    PlacePicker::Sources src;
+    src.bookmarks = workspace_.bookmarks;
+    src.tabs = CollectOpenTabs();
+    src.quickAccess = quickAccess_;
+    src.drives = roots_;
+    src.history = CollectHistory();
+    if (src.bookmarks.empty() && src.tabs.empty() && src.quickAccess.empty() &&
+        src.drives.empty() && src.history.empty()) {
         // An empty panel is the same as a key that does nothing, except it also
         // has to be dismissed. Say what is missing and how to add it - with no
         // bookmarks and nothing else open, that is the only thing left to say. On
@@ -1751,14 +1907,13 @@ bool App::OpenPlacePicker() {
     }
     CloseAllOverlays();
     const Tab* tab = workspace_.focusedTab();
-    placePicker_.Open(strings_, keymap_, workspace_.bookmarks, tabs, roots_,
-                      tab ? tab->path : std::string());
+    placePicker_.Open(strings_, keymap_, src, tab ? tab->path : std::string());
     return true;
 }
 
 void App::OpenCommandPalette() {
     CloseAllOverlays();
-    // 開くたびに作り直す。ラベルは言語で変わり、和音は Ctrl+F1 で変わり、
+    // 開くたびに作り直す。ラベルは言語で変わり、和音は Ctrl+Shift+, で変わり、
     // 番号で指す 8 個に添える行き先は Ctrl+D で変わる。
     commandPalette_.Open(strings_, keymap_, workspace_.bookmarks);
 }

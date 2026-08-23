@@ -18,6 +18,9 @@ struct Info {
 };
 
 const char* const kOnOff[] = { "settings.off", "settings.on" };
+// 「オン／オフ」ではなく「いいえ／はい」。この行が訊いているのは機能の入り切りでは
+// なく «Kite が既定のファイルマネージャーであるか» という事実。
+const char* const kNoYes[] = { "settings.no", "settings.yes" };
 const char* const kTheme[] = { "settings.theme.dark", "settings.theme.light" };
 const char* const kLanguage[] = { "settings.language.auto", "settings.language.en",
                                   "settings.language.ja" };
@@ -43,6 +46,7 @@ const Info kSettings[] = {
     { SettingId::OpenArchives, SettingGroup::Files, "settings.open_archives", 2, kOnOff },
     { SettingId::NewTabHidden, SettingGroup::NewTab, "settings.show_hidden", 2, kOnOff },
     { SettingId::NewTabDirsFirst, SettingGroup::NewTab, "settings.dirs_first", 2, kOnOff },
+    { SettingId::DefaultManager, SettingGroup::System, "settings.default_manager", 2, kNoYes },
 };
 
 const Info* Find(SettingId id) {
@@ -75,6 +79,7 @@ const char* SettingGroupLabelKey(SettingGroup group) {
         case SettingGroup::Tabs: return "settings.group.tabs";
         case SettingGroup::Files: return "settings.group.files";
         case SettingGroup::NewTab: return "settings.group.new_tab";
+        case SettingGroup::System: return "settings.group.system";
         default: return "settings.group.appearance";
     }
 }
@@ -131,6 +136,12 @@ void SettingsEditor::Open(const Strings& strings, const SettingsValues& values) 
     changed_ = SettingId::Count;
     cursor_ = -1;
     visible_ = true;
+    Rebuild(strings);
+}
+
+void SettingsEditor::SetValues(const SettingsValues& values, const Strings& strings) {
+    values_ = values;
+    // Rebuild() は選択を項目で覚え直すので、カーソルはそのまま残る。
     Rebuild(strings);
 }
 

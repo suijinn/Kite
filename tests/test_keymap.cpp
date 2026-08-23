@@ -2,6 +2,7 @@
 
 #include "TestFramework.h"
 #include "core/input/Commands.h"
+#include "core/i18n/Strings.h"
 #include "core/input/KeyMap.h"
 
 using namespace kite;
@@ -270,4 +271,46 @@ KITE_TEST(keymap, the_written_file_uses_the_current_name) {
         if (e.key == "nav.places") sawCurrent = true;
     }
     KITE_EXPECT(sawCurrent);
+}
+
+// 設定に関わる 3 つはカンマの上に揃えてある。既定を動かすときは 3 つまとめて
+// 考えるべきなので、隣り合っていることそのものを検査する。
+KITE_TEST(keymap, the_configuration_screens_share_the_comma) {
+    KeyMap keys;
+    keys.LoadDefaults();
+    KITE_EXPECT_EQ(keys.ChordText(Cmd::ShowSettings), std::string("Ctrl+,"));
+    KITE_EXPECT_EQ(keys.ChordText(Cmd::ShowKeySettings), std::string("Ctrl+Shift+,"));
+    KITE_EXPECT_EQ(keys.ChordText(Cmd::OpenConfigFolder), std::string("Ctrl+Alt+,"));
+}
+
+// ショートカット設定画面の和音を、表示文字列に書き写さないこと。
+//
+// **2 つの画面がその画面を指しており、どちらも和音を持っていない** ─ 既定は動くし
+// （実際に `Ctrl+F1` から動いた）、利用者が割り当てを変えれば最初から嘘になる。
+// 和音は `KeyMap::ChordText()` に訊く（KeyMap.cpp の既定表の注記）。
+//
+// **画面が自前で見るキーは対象外。** `ui.key_settings_hint` に並ぶ `Ctrl+Enter` や
+// `Ctrl+R` はキーマップを通らず `KeyEditor::HandleKey` が直接見ているもので、
+// 割り当てを変えられない ─ そちらは書いてあるとおりに動く。
+KITE_TEST(keymap, no_display_string_spells_out_the_shortcut_editors_chord) {
+    Strings str;
+    for (const char* code : { "en", "ja" }) {
+        str.Load(code);
+        for (const Chord& chord : KeyMap::DefaultChordsFor(Cmd::ShowKeySettings)) {
+            const std::string text = FormatChord(chord);
+            KITE_EXPECT(!text.empty());
+            for (const char* key : { "ui.key_help_hint", "ui.settings_hint",
+                                     "ui.key_settings_hint", "ui.key_settings_title" }) {
+                KITE_EXPECT(str.Get(key).find(text) == std::string::npos);
+            }
+        }
+    }
+    // 代わりに、和音を差し込む場所が在ること。ここが消えると案内が «どのキーで開くか»
+    // を言わなくなり、黙っている画面に戻る。
+    str.Load("en");
+    KITE_EXPECT(str.Get("ui.key_help_hint").find("{0}") != std::string::npos);
+    KITE_EXPECT(str.Get("ui.settings_hint").find("{0}") != std::string::npos);
+    // 割り当てが無いときの逃げ道も要る（空白の空いた案内は、無い案内より悪い）。
+    KITE_EXPECT(!str.Get("ui.key_help_hint_unbound").empty());
+    KITE_EXPECT(!str.Get("ui.settings_hint_unbound").empty());
 }

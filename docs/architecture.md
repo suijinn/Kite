@@ -73,7 +73,7 @@ src/
   ui/            OS 非依存。抽象 ui::Renderer に対してのみ描画する
     Renderer.h     描画プリミティブのインターフェース
     AppUi.cpp      レイアウト・描画・ヒットテスト
-    AppUiOverlays.cpp F1・Ctrl+F1・Ctrl+,・Ctrl+P・Ctrl+Shift+P の 1 枚もの
+    AppUiOverlays.cpp F1・Ctrl+Shift+,・Ctrl+,・Ctrl+P・Ctrl+Shift+P の 1 枚もの
     AppUiMouse.cpp 当たり判定の振り分けとドラッグ
     Glyphs.cpp     シェルアイコンが届くまでのベクタ描画
   platform/win/  Windows ヘッダが現れる唯一の場所
@@ -245,7 +245,7 @@ App::PumpLoader() ← UI スレッドが結果を回収し、トークンの一�
 | ファイル | 書くタイミング |
 | --- | --- |
 | `settings.ini` | 設定画面で変えた時点、および終了時 |
-| `keys.ini` | 初回起動時に全既定を書き出し、以後は `Ctrl+F1` で変えた時点 |
+| `keys.ini` | 初回起動時に全既定を書き出し、以後は `Ctrl+Shift+,` で変えた時点 |
 | `sessions.ini` | 終了時と `Ctrl+S` |
 | `bookmarks.ini` | 追加・削除・並べ替えの時点 |
 

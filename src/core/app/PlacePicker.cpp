@@ -29,9 +29,8 @@ constexpr int kNumberedTabCount =
 
 }  // namespace
 
-void PlacePicker::Open(const Strings& str, const KeyMap& keys,
-                          const std::vector<Bookmark>& marks, const std::vector<OpenTab>& tabs,
-                          const std::vector<fs::Root>& drives, const std::string& currentPath) {
+void PlacePicker::Open(const Strings& str, const KeyMap& keys, const Sources& src,
+                       const std::string& currentPath) {
     visible_ = true;
 
     all_.clear();
@@ -40,13 +39,13 @@ void PlacePicker::Open(const Strings& str, const KeyMap& keys,
     // what it was - the hand that opens it to find a bookmark should still find
     // one at the top.
     const std::string bookmarkKind = str.Get("ui.goto_kind_bookmark");
-    for (size_t i = 0; i < marks.size(); ++i) {
+    for (size_t i = 0; i < src.bookmarks.size(); ++i) {
         const int index = static_cast<int>(i);
         Row row;
         row.kind = Kind::Bookmark;
         row.index = index;
-        row.name = marks[i].name;
-        row.path = marks[i].path;
+        row.name = src.bookmarks[i].name;
+        row.path = src.bookmarks[i].path;
         row.kindLabel = bookmarkKind;
         // What the numbered shortcut for this row is, on the rows that have one.
         // Showing it is the same call the F1 sheet makes: a screen that knows the
@@ -56,7 +55,7 @@ void PlacePicker::Open(const Strings& str, const KeyMap& keys,
     }
 
     const std::string tabKind = str.Get("ui.goto_kind_tab");
-    for (const OpenTab& open : tabs) {
+    for (const OpenTab& open : src.tabs) {
         Row row;
         row.kind = Kind::Tab;
         row.pane = open.pane;
@@ -70,20 +69,47 @@ void PlacePicker::Open(const Strings& str, const KeyMap& keys,
         all_.push_back(std::move(row));
     }
 
-    // Drives last. They are the one part of this list that is always there and
-    // always the same, so they are the least likely thing anyone opened the
-    // screen to find - and putting them above the tabs would push what is
-    // actually open below the fold on a machine with a row of network drives.
-    // Reaching them without the mouse used to mean the sidebar or typing the
+    // Quick access next, then the drives. Both are backdrop: the same faces in
+    // the same order every time the screen comes up, so they are the least likely
+    // thing anyone opened it to find - and putting either above the tabs would
+    // push what is actually open below the fold on a machine with a row of
+    // network drives. Quick access sits above the drives because its rows are
+    // folders someone actually works in, while a drive is where folders live.
+    //
+    // The same folder now appears twice fairly often - a bookmarked Downloads is
+    // also a quick access row - and that is what the kind column is for. Folding
+    // them together would have to pick one kind to keep, and the two rows are not
+    // the same answer: one is what the user pinned, the other is what Windows
+    // offers.
+    auto addRoots = [&](const std::vector<fs::Root>& roots, Kind kind, const char* kindKey) {
+        const std::string label = str.Get(kindKey);
+        for (const fs::Root& root : roots) {
+            Row row;
+            row.kind = kind;
+            row.name = root.label.empty() ? root.path : root.label;
+            row.path = root.path;
+            row.kindLabel = label;
+            all_.push_back(std::move(row));
+        }
+    };
+    addRoots(src.quickAccess, Kind::QuickAccess, "ui.goto_kind_quick");
+    // Reaching a drive without the mouse used to mean the sidebar or typing the
     // letter into the address bar; neither is a keyboard route to "which disks
     // are there".
-    const std::string driveKind = str.Get("ui.goto_kind_drive");
-    for (const fs::Root& drive : drives) {
+    addRoots(src.drives, Kind::Drive, "ui.goto_kind_drive");
+
+    // History dead last, and in one block. Every other row sits where it sat the
+    // last time this screen was opened, which is what makes the list something the
+    // eye can learn; history is defined by its order changing, so it is the one
+    // kind that cannot make that promise. Kept at the end, it breaks the promise
+    // only for itself - nothing above it moves when the newest folder changes.
+    const std::string historyKind = str.Get("ui.goto_kind_history");
+    for (const Visited& visited : src.history) {
         Row row;
-        row.kind = Kind::Drive;
-        row.name = drive.label.empty() ? drive.path : drive.label;
-        row.path = drive.path;
-        row.kindLabel = driveKind;
+        row.kind = Kind::History;
+        row.name = visited.name;
+        row.path = visited.path;
+        row.kindLabel = historyKind;
         all_.push_back(std::move(row));
     }
 
@@ -104,7 +130,7 @@ void PlacePicker::Open(const Strings& str, const KeyMap& keys,
     }
 
     // The id is the row's own position, not the bookmark index: the rows come from
-    // two places now, and the only thing they have in common is where they sit in
+    // five places now, and the only thing they have in common is where they sit in
     // this list. It only has to survive filtering, which does not reorder.
     //
     // Matched on the name, the path and the kind: bookmarks are often named for

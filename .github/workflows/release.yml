@@ -84,9 +84,10 @@ jobs:
         # (「シェルメニューを表示できませんでした」)。2 つを 1 つの書庫にまとめて、
         # 別々に落とせる形にしない。
         #
-        # 書庫名に版番号を入れるのは、exe に VERSIONINFO リソースが無く、どの版を
-        # 展開したのかがファイル名以外から分からないため(リソースを持たせたら
-        # 固定名にして latest/download の URL を安定させたほうがよい)。
+        # 書庫名に版番号を入れるのは、展開したフォルダを後から見たときの手掛かりが
+        # 名前しか無いため。exe 自身は VERSIONINFO を持っている(Version.rc.in から
+        # 生成され、プロパティに版とコミットが出る)ので、どちらか一方ではなく
+        # 両方から版が分かる状態になっている。
         #
         # Compress-Archive は PowerShell 同梱。bash の zip はランナーに無い
         shell: pwsh
@@ -109,18 +110,33 @@ jobs:
           Compress-Archive -Path $stage -DestinationPath "$stage.zip" -Force
           Get-ChildItem "$stage.zip" | Format-List Name, Length
 
+          # ハッシュを書庫と一緒に配る。Defender の機械学習分類器は未署名で初見の
+          # バイナリを Trojan:Win32/Bearfoos.B!ml として誤検知することがあり
+          # (実際に踏んだ)、Microsoft への誤検知報告にはこの値が要る ─ 手元で
+          # 計算し直さずに済むよう、作った場所で 1 回出しておく。
+          #
+          # sha256sum が読める形(ハッシュ・空白 2 つ・ファイル名)。改行を LF に
+          # するため Set-Content ではなく WriteAllText を通す ─ CRLF で書くと
+          # `sha256sum -c` がファイル名の末尾に復帰文字を含めて探しに行く。
+          $hash = (Get-FileHash "$stage.zip" -Algorithm SHA256).Hash.ToLower()
+          $name = Split-Path "$stage.zip" -Leaf
+          [IO.File]::WriteAllText("$stage.zip.sha256", "$hash  $name`n")
+          Write-Host "SHA256  $hash"
+
       - name: Release を作成して添付
         # 再実行(workflow_dispatch)でも通るよう、既にある Release には添付し直す
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           asset="dist/kite-$TAG-win-x64.zip"
+          # ハッシュは書庫と一緒に添える。片方だけ差し替わると、検証しようとした人が
+          # 合わないハッシュを見ることになる ─ 常に 2 つ並べて置くこと。
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG は既にあるので成果物だけ差し替える"
-            gh release upload "$TAG" "$asset" --clobber
+            gh release upload "$TAG" "$asset" "$asset.sha256" --clobber
             exit 0
           fi
           gh release create "$TAG" \
             --title "Kite $TAG" \
             --generate-notes \
-            "$asset"
+            "$asset" "$asset.sha256"

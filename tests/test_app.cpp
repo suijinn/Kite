@@ -1805,8 +1805,12 @@ KITE_TEST(app, keys_pressed_in_the_shortcut_editor_do_not_reach_the_file_list) {
     KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+T")));
     KITE_EXPECT_EQ(h.pane()->tabs.size(), tabs);
 
-    // Its own chord is the exception: it closes the screen again.
-    KITE_EXPECT(h.app.OnKey(ParseChord("Ctrl+F1")));
+    // Its own chord is the exception: it closes the screen again. Asked for
+    // rather than written out - the default has moved once already, and what is
+    // being tested is the toggle, not which key it happens to be on.
+    const std::vector<Chord> own = KeyMap::DefaultChordsFor(Cmd::ShowKeySettings);
+    KITE_EXPECT(!own.empty());
+    KITE_EXPECT(h.app.OnKey(own.front()));
     KITE_EXPECT_FALSE(h.app.keyEditor().visible());
 }
 
@@ -2628,4 +2632,18 @@ KITE_TEST(app, a_composition_never_points_past_its_own_text) {
     h.app.SetComposition("あ", 99, 50, 99);
     KITE_EXPECT_EQ(h.app.composition().caret, size_t{ 3 });
     KITE_EXPECT_EQ(h.app.composition().targetEnd, size_t{ 3 });
+}
+
+
+// keys.ini の見出しは、そのとき効いている割り当てを名乗る。割り当ての正であるべき
+// 当の文書が、読む人の持っていないキーを案内していては話にならない。
+KITE_TEST(app, the_keys_file_header_names_the_chords_that_are_actually_bound) {
+    Harness h;
+    const std::string& written = test::FakeFiles()["C:\\home\\config\\keys.ini"];
+    KITE_EXPECT(written.find("reload with " + h.app.keys().ChordText(Cmd::ReloadConfig)) !=
+                std::string::npos);
+    KITE_EXPECT(written.find("on screen with " + h.app.keys().ChordText(Cmd::ShowKeySettings)) !=
+                std::string::npos);
+    // 既定が動いた後も嘘にならないこと ─ 書き写した文字列が残っていれば、ここで出る。
+    KITE_EXPECT(written.find("Ctrl+F1") == std::string::npos);
 }

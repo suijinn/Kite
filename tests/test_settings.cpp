@@ -291,3 +291,166 @@ KITE_TEST(settings, a_user_language_code_survives_a_change_to_another_setting) {
 
     KITE_EXPECT(h.SettingsFile().find("language=fr") != std::string::npos);
 }
+
+// --- the default file manager ------------------------------------------------
+//
+// 設定画面で唯一、実体が settings.ini の外（OS 側）にある行。そして唯一、
+// 変更に確認を挟む行 ─ 効いたかどうかが Kite の中からは見えないので、矢印キーが
+// かすっただけで Win+E の行き先が変わってはならない。
+
+// 行は覚えている値ではなく OS に訊いた答えを出す。Kite の外で変えられていても
+// 嘘をつかない。
+KITE_TEST(settings, the_default_manager_row_reads_the_answer_from_the_os) {
+    Harness h;
+    h.shell.defaultManager = DefaultManager::Yes;
+    h.app.Execute(Cmd::ShowSettings);
+    Strings str;
+    str.Load(h.app.strings().code());
+    KITE_EXPECT_EQ(ValueOf(h.app.settingsEditor(), SettingId::DefaultManager),
+                   str.Get("settings.yes"));
+
+    // 別の場所の Kite が持っているのは「この exe が既定」ではない。
+    h.app.Execute(Cmd::ShowSettings);  // 閉じる
+    h.shell.defaultManager = DefaultManager::Other;
+    h.app.Execute(Cmd::ShowSettings);
+    KITE_EXPECT_EQ(ValueOf(h.app.settingsEditor(), SettingId::DefaultManager),
+                   str.Get("settings.no"));
+}
+
+// 値を動かしただけでは何も書かない ─ 確認に「はい」と答えて初めて動く。
+KITE_TEST(settings, changing_the_row_asks_before_it_writes) {
+    Harness h;
+    h.OpenAt(SettingId::DefaultManager);
+
+    h.app.OnKey(ParseChord("Right"));
+    KITE_EXPECT(h.shell.defaultManagerCalls.empty());
+    KITE_EXPECT(h.app.prompt().isConfirm());
+    // 設定画面は開いたまま ─ 質問は行に属している。
+    KITE_EXPECT(h.app.settingsEditor().visible());
+
+    KITE_EXPECT(h.app.OnKey(ParseChord("Enter")));
+    KITE_EXPECT_EQ(h.shell.defaultManagerCalls.size(), size_t{ 1 });
+    KITE_EXPECT(h.shell.defaultManagerCalls.back());
+    KITE_EXPECT(h.shell.defaultManager == DefaultManager::Yes);
+    KITE_EXPECT_FALSE(h.app.prompt().active());
+}
+
+// 「いいえ」と答えたら、動かした行も元に戻る ─ 起きなかったことを行が主張しない。
+KITE_TEST(settings, saying_no_puts_the_row_back) {
+    Harness h;
+    h.OpenAt(SettingId::DefaultManager);
+    Strings str;
+    str.Load(h.app.strings().code());
+
+    h.app.OnKey(ParseChord("Right"));
+    KITE_EXPECT_EQ(ValueOf(h.app.settingsEditor(), SettingId::DefaultManager),
+                   str.Get("settings.yes"));
+
+    KITE_EXPECT(h.app.OnKey(ParseChord("Escape")));
+    KITE_EXPECT(h.shell.defaultManagerCalls.empty());
+    KITE_EXPECT_FALSE(h.app.prompt().active());
+    // 設定画面はまだ開いている ─ Escape は先に質問を捨てる。
+    KITE_EXPECT(h.app.settingsEditor().visible());
+    KITE_EXPECT_EQ(ValueOf(h.app.settingsEditor(), SettingId::DefaultManager),
+                   str.Get("settings.no"));
+}
+
+// OS が断ったときも同じ ─ 行は実際にそうなっている値へ戻る。
+KITE_TEST(settings, a_refused_registration_puts_the_row_back) {
+    Harness h;
+    h.shell.defaultManagerSucceeds = false;
+    h.OpenAt(SettingId::DefaultManager);
+    Strings str;
+    str.Load(h.app.strings().code());
+
+    h.app.OnKey(ParseChord("Right"));
+    h.app.OnKey(ParseChord("Enter"));
+
+    KITE_EXPECT_EQ(h.shell.defaultManagerCalls.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.default_manager_failed"));
+    KITE_EXPECT_EQ(ValueOf(h.app.settingsEditor(), SettingId::DefaultManager),
+                   str.Get("settings.no"));
+}
+
+// 登録の口が無い環境では確認すら出さない。
+KITE_TEST(settings, no_place_to_register_is_a_sentence_not_a_question) {
+    Harness h;
+    h.shell.defaultManager = DefaultManager::Unsupported;
+    h.OpenAt(SettingId::DefaultManager);
+
+    h.app.OnKey(ParseChord("Right"));
+    KITE_EXPECT_FALSE(h.app.prompt().active());
+    KITE_EXPECT(h.shell.defaultManagerCalls.empty());
+    KITE_EXPECT_EQ(h.app.statusMessage(),
+                   h.app.strings().Get("ui.default_manager_unsupported"));
+}
+
+// 解除も同じ道を通る。行 1 つなので、ラベルが嘘になる余地が無い。
+KITE_TEST(settings, clearing_the_registration_goes_through_the_same_row) {
+    Harness h;
+    h.shell.defaultManager = DefaultManager::Yes;
+    h.OpenAt(SettingId::DefaultManager);
+
+    h.app.OnKey(ParseChord("Left"));
+    KITE_EXPECT(h.app.prompt().isConfirm());
+    h.app.OnKey(ParseChord("Enter"));
+
+    KITE_EXPECT_EQ(h.shell.defaultManagerCalls.size(), size_t{ 1 });
+    KITE_EXPECT_FALSE(h.shell.defaultManagerCalls.back());
+    KITE_EXPECT(h.shell.defaultManager == DefaultManager::No);
+}
+
+// この行は settings.ini に何も残さない ─ 実体は OS の側にある。
+KITE_TEST(settings, the_default_manager_row_writes_nothing_to_the_ini) {
+    Harness h;
+    h.OpenAt(SettingId::DefaultManager);
+    h.app.OnKey(ParseChord("Right"));
+    h.app.OnKey(ParseChord("Enter"));
+
+    KITE_EXPECT(h.SettingsFile().find("default_manager") == std::string::npos);
+}
+
+// 質問が出ている間、後ろの設定画面は打鍵を受け取らない ─ 「はい」がどの行の話か
+// 分からなくなる。
+KITE_TEST(settings, the_settings_screen_gets_nothing_while_the_question_is_up) {
+    Harness h;
+    h.OpenAt(SettingId::DefaultManager);
+    const int before = h.app.settingsEditor().cursor();
+
+    h.app.OnKey(ParseChord("Right"));
+    h.app.OnKey(ParseChord("Up"));
+    h.app.OnKey(ParseChord("Down"));
+
+    KITE_EXPECT_EQ(h.app.settingsEditor().cursor(), before);
+    KITE_EXPECT(h.app.prompt().isConfirm());
+}
+
+// exe を移した後は登録が死んでいるが、画面はそれを言う機会を持たない ─ 起動時の
+// 1 行だけがその機会。他のアプリが持っている場合は言わない（事故ではないので）。
+KITE_TEST(settings, a_stale_registration_is_reported_at_startup) {
+    test::FakeFileSystem files;
+    test::FakeShell shell;
+    test::FakeHost host;
+    test::ResetFakePlatform();
+    test::PopulateStandardTree(files);
+    shell.defaultManager = DefaultManager::Other;
+
+    App app(files, shell, host);
+    app.Init({});
+    test::PumpUntilSettled(app);
+    KITE_EXPECT_EQ(app.statusMessage(), app.strings().Get("ui.default_manager_moved"));
+}
+
+KITE_TEST(settings, a_registration_held_by_another_app_is_not_reported_at_startup) {
+    test::FakeFileSystem files;
+    test::FakeShell shell;
+    test::FakeHost host;
+    test::ResetFakePlatform();
+    test::PopulateStandardTree(files);
+    shell.defaultManager = DefaultManager::No;
+
+    App app(files, shell, host);
+    app.Init({});
+    test::PumpUntilSettled(app);
+    KITE_EXPECT_NE(app.statusMessage(), app.strings().Get("ui.default_manager_moved"));
+}

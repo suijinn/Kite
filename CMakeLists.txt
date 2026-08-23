@@ -168,6 +168,7 @@ add_executable(kite WIN32
     src/platform/win/ShellHostClient.cpp
     src/platform/win/ShellHostProcess.cpp
     src/platform/win/ShellPipe.cpp
+    src/platform/win/WinDefaultManager.cpp
     src/platform/win/WinDirectoryWatcher.cpp
     src/platform/win/WinDropTarget.cpp
     src/platform/win/WinFileSystem.cpp
@@ -197,6 +198,7 @@ target_link_libraries(kite PRIVATE
     imm32
     user32
     gdi32
+    advapi32     # the registry, for the default-file-manager registration
     mpr          # WNetGetConnection, for mapped network drives
 )
 

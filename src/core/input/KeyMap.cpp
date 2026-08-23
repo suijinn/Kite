@@ -23,17 +23,30 @@ struct DefaultBinding {
 //  * The Menu key opens the *extended* shell menu directly - that one-step
 //    access is a core reason this app exists. Ctrl+Menu aims the same menu at
 //    the folder being viewed, which a selection would otherwise hide.
+//  * Everything about configuration sits on the comma: Ctrl+, the settings,
+//    Ctrl+Shift+, the key bindings, Ctrl+Alt+, the folder they are written to.
+//
+// **This table is the only place a default chord may be written down.** Nothing
+// that reaches the screen spells one out - the hints on the F1 sheet, the
+// settings screen and the header of keys.ini all ask KeyMap::ChordText() for the
+// chord that is *actually bound right now*, so they stay true both when a line
+// here changes and when the user rebinds the command. Tests that need a default
+// call KeyMap::DefaultChordsFor(). Writing "Ctrl+F1" into a string was how the
+// F1 sheet came to advertise a key that no longer opened anything.
 const DefaultBinding kDefaults[] = {
     // Application
     { Cmd::NewWindow,           "Ctrl+N" },
     { Cmd::Quit,                "Ctrl+Q" },
     { Cmd::ReloadConfig,        "Ctrl+Alt+C" },
-    { Cmd::OpenConfigFolder,    "Ctrl+Alt+Comma" },
     { Cmd::ToggleTheme,         "Ctrl+Shift+M" },
     { Cmd::ShowKeyHelp,         "F1" },
-    { Cmd::ShowKeySettings,     "Ctrl+F1" },
-    // 設定画面と、その中身が書かれるフォルダ。同じキーに Alt を足すと後者になる。
+    // 設定画面の 3 兄弟。どれもカンマの上に乗る ─ 設定そのものが Ctrl、その中の
+    // キー割り当てが Shift 付き、設定が書かれるフォルダが Alt 付き。`Ctrl+P` と
+    // `Ctrl+Shift+P` が «行き先» と «コマンド» で並ぶのと同じ読み方で、外の作法
+    // （どのエディタでも設定は `Ctrl+,`）に乗ったまま 3 つを 1 か所にまとめられる。
     { Cmd::ShowSettings,        "Ctrl+Comma" },
+    { Cmd::ShowKeySettings,     "Ctrl+Shift+Comma" },
+    { Cmd::OpenConfigFolder,    "Ctrl+Alt+Comma" },
     // どのエディタでもコマンドパレットはここにある。他と揃える先が Kite の中に無い
     // 機能なので、外の作法をそのまま借りる ─ 覚えていない人のための入口が、
     // その人が唯一知っている和音でないのでは順序が逆になる。

@@ -1,5 +1,5 @@
-// The full-window overlays: the F1 shortcut sheet, the Ctrl+F1 editor, the
-// settings screen, and the two choosers (Ctrl+P places, Ctrl+Shift+P commands).
+// The full-window overlays: the shortcut sheet, the shortcut editor, the
+// settings screen, and the two choosers (places and commands).
 //
 // Split out of AppUi.cpp for size alone. They belong together because they are
 // one screen with different rows: the panel, the field, the row rhythm and the
@@ -22,6 +22,19 @@ namespace {
 // rows, and a palette that changed size on the way to the bookmark list would
 // move the field being typed into.
 constexpr float kPickerMaxWidth = 860.0f;
+
+// A hint line that names the chord the shortcut editor is on right now.
+//
+// Two screens point at that editor, and neither may spell the chord out: the
+// default moves (it has), and the user can rebind or clear it. Asking the keymap
+// keeps both true. An unbound command gets the "_unbound" sentence instead of a
+// blank where a chord belongs - the same care the palette takes with its own
+// unbound rows.
+std::string KeySettingsHint(const Strings& str, const KeyMap& keys, const char* key) {
+    const std::string chord = keys.ChordText(Cmd::ShowKeySettings);
+    if (chord.empty()) return str.Get(std::string(key) + "_unbound");
+    return str.Format(key, { chord });
+}
 
 }  // namespace
 
@@ -46,7 +59,12 @@ void AppUi::PaintKeyHelp(Renderer& r, const RectF& area) {
     const std::string title = str.Get("ui.key_help_title");
     const float titleW = r.MeasureText(title, FontRole::UiBold) + kPad * 2.0f;
 
-    const std::string hint = str.Get("ui.key_help_hint");
+    // The chord is asked for, never written down: this sheet used to name
+    // Ctrl+F1 in the string table, so it went on advertising that key after the
+    // default moved - and it was wrong all along for anyone who had rebound the
+    // editor. Unbound has its own sentence rather than an empty gap where a
+    // chord should be (KeyMap.cpp's note on the defaults table).
+    const std::string hint = KeySettingsHint(str, app_.keys(), "ui.key_help_hint");
     const float hintW = r.MeasureText(hint, FontRole::UiSmall);
     float rest = titleBox.r;
     if (titleW + hintW <= titleBox.w()) {
@@ -378,7 +396,8 @@ void AppUi::PaintSettings(Renderer& r, const RectF& area) {
                th.textDim.alpha(0.7f), FontRole::UiSmall, TextAlign::Left);
 
     const RectF footer = { panel.l + 20.0f, panel.b - 26.0f, panel.r - 20.0f, panel.b - 6.0f };
-    r.DrawText(str.Get("ui.settings_hint"), footer, th.textDim, FontRole::UiSmall, TextAlign::Left);
+    r.DrawText(KeySettingsHint(str, app_.keys(), "ui.settings_hint"), footer, th.textDim,
+               FontRole::UiSmall, TextAlign::Left);
 
     const RectF body = { panel.l + 12.0f, noteBox.b + 4.0f, panel.r - 12.0f, footer.t - 4.0f };
     r.FillRect({ body.l, body.t, body.r, body.t + 1.0f }, th.border);
@@ -427,6 +446,14 @@ void AppUi::PaintSettings(Renderer& r, const RectF& area) {
 // Clicks while the settings screen is up. Nothing behind it is reachable, the
 // same as the shortcut editor.
 bool AppUi::HandleSettingsClick(const MouseEvent& e) {
+    // A confirmation raised by a row owns the screen until it is answered, the
+    // same way it owns the keyboard (App::OnKey). A click that moved the cursor
+    // or nudged another row underneath would leave the pending Yes belonging to
+    // a question nobody can see any more.
+    if (app_.prompt().isConfirm()) {
+        app_.host().Invalidate();
+        return true;
+    }
     const Region* region = Pick(e.x, e.y);
     if (region && (region->kind == Hit::SettingsRow || region->kind == Hit::SettingsPrev ||
                    region->kind == Hit::SettingsNext)) {

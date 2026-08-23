@@ -156,3 +156,21 @@ KITE_TEST(vfolder, a_virtual_path_survives_the_trip_through_a_saved_session) {
         KITE_EXPECT(vfs::IsVirtual(path::Normalize(p)));
     }
 }
+
+// 既定のファイルマネージャーになると、シェルは「フォルダらしきもの」を全部 Kite に
+// 回す ─ その中にはパスを持たない場所（コントロール パネル、PC）が混じり、引数として
+// 届くのは解析名になる。前置を足すだけで、すでに在る仮想フォルダの経路に乗る。
+KITE_TEST(vfolder, a_parsing_name_from_the_command_line_becomes_a_virtual_path) {
+    KITE_EXPECT_EQ(vfs::FromCommandLine("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"),
+                   std::string("virtual:::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"));
+    KITE_EXPECT(vfs::IsVirtual(vfs::FromCommandLine("::{AAA}\\sub")));
+
+    // 普通のパスは 1 バイトも変えない。ここを通るのは起動時の引数すべてなので、
+    // 実フォルダの経路に手心を加えてはならない。
+    for (const char* p : { "C:\\home", "\\\\srv\\pub", "", "..", "relative\\path" }) {
+        KITE_EXPECT_EQ(vfs::FromCommandLine(p), std::string(p));
+    }
+
+    // すでに仮想パスなら二重に付けない（転送されたパスがもう一度ここを通る）。
+    KITE_EXPECT_EQ(vfs::FromCommandLine(vfs::kComputer), std::string(vfs::kComputer));
+}
