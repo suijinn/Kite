@@ -138,9 +138,14 @@ void AppUi::Paint(Renderer& r) {
     // What is left at the bottom is what has no single place to sit: the filter
     // is about the whole listing, and the delete confirmation is a question
     // rather than a name.
+    // Reserved here, drawn last. A confirmation can be raised by the settings
+    // screen, and the overlays are painted over the whole window - drawn in
+    // place, the question would sit underneath the panel that asked it. The
+    // reservation still happens here so the listing gives up the same strip
+    // either way and nothing below shifts.
+    RectF promptBar{};
     if (app_.prompt().active() && !app_.prompt().isInline()) {
-        const RectF promptBar = { rest.l, rest.b - (th.statusBarHeight + 6.0f), rest.r, rest.b };
-        PaintPrompt(r, promptBar);
+        promptBar = { rest.l, rest.b - (th.statusBarHeight + 6.0f), rest.r, rest.b };
         rest.b = promptBar.t;
     }
 
@@ -171,6 +176,11 @@ void AppUi::Paint(Renderer& r) {
     if (app_.settingsEditor().visible()) PaintSettings(r, full);
     if (app_.placePicker().visible()) PaintPlaces(r, full);
     if (app_.commandPalette().visible()) PaintCommandPalette(r, full);
+
+    // Topmost, because a question is modal over whatever asked it - the same
+    // reading App::OnKey gives it, where a confirmation takes the keystroke
+    // before the settings screen does.
+    if (promptBar.w() > 0.0f) PaintPrompt(r, promptBar);
 
     // 入力欄が 1 つも出ていないフレームの答えは、フォーカスされた一覧のカーソル行。
     // 型入力ジャンプ（ROADMAP P3-4）は名前を IME で打てるので、変換窓の行き先が

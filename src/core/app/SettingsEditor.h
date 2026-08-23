@@ -48,6 +48,14 @@ enum class SettingId : uint8_t {
     OpenArchives,     ///< ZIP をフォルダとして開くか
     NewTabHidden,     ///< 新しいタブの既定：隠しファイルを表示するか
     NewTabDirsFirst,  ///< 新しいタブの既定：フォルダを先頭にまとめるか
+    /// 既定のファイルマネージャーとして登録するか。
+    ///
+    /// **この 1 行だけは `settings.ini` に無い。** 実体は OS 側（レジストリ）に
+    /// あるので、値は開くたびに OS へ訊き直す ─ Kite の外で変えられていても、
+    /// 行が嘘をつかない。**変更には確認が要る**（`PromptKind::ConfirmDefaultManager`）。
+    /// 効いたかどうかが Kite の中からは見えない唯一の行なので、矢印キーがかすった
+    /// だけで `Win+E` の行き先が変わってはならない。
+    DefaultManager,
     Count             ///< 列挙の終端。有効な項目ではない
 };
 
@@ -57,6 +65,7 @@ enum class SettingGroup : uint8_t {
     Tabs,        ///< タブ
     Files,       ///< ファイル
     NewTab,      ///< 新しいタブの既定
+    System,      ///< OS との連携。ここだけ実体が settings.ini の外にある
     Count        ///< 列挙の終端。有効な区画ではない
 };
 
@@ -152,6 +161,14 @@ public:
     /// @param[in] strings 表示名の取得に使う文字列表
     /// @note 言語を変えると全行のラベルが変わるので、値を変えたあとは必ず呼ぶ
     void Rebuild(const Strings& strings);
+
+    /// @brief 保持している設定値を差し替える。
+    /// @param[in] values 新しい設定値
+    /// @param[in] strings 表示名の取得に使う文字列表
+    /// @note **カーソルは動かさない。** 使うのは «行が動かした値が実際には変わって
+    ///       いなかった» ときで（確認を取り消した、OS が断った）、指していた行から
+    ///       手を離させる理由が無い
+    void SetValues(const SettingsValues& values, const Strings& strings);
 
     /// @brief 表示中かを返す。
     /// @return 表示中なら true

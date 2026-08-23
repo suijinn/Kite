@@ -1,5 +1,5 @@
-// 行き先の一覧（Ctrl+P）。ブックマーク・開いているタブ・ドライブを並べる «次にどこへ»
-// の窓口で、
+// 行き先の一覧（Ctrl+P）。ブックマーク・開いているタブ・クイックアクセス・ドライブ・
+// 履歴を並べる «次にどこへ» の窓口で、
 // 番号ショートカットが 8 個で打ち止めなので、その先へキーボードだけで届けるかどうかが
 // この画面の存在理由。画面自体は OS に触れないので、ここは全部ウィンドウ無しで動く。
 #include "Fakes.h"
@@ -34,12 +34,20 @@ Strings English() {
     return str;
 }
 
-// ブックマークだけを並べた一覧。タブとドライブの行を見るテストだけがそれを渡す。
+// ブックマークだけを並べた一覧。他の 4 種を見るテストだけがそれを渡す。
 void OpenWith(PlacePicker& picker, const std::vector<Bookmark>& marks,
               const std::string& currentPath = {},
               const std::vector<PlacePicker::OpenTab>& tabs = {},
-              const std::vector<fs::Root>& drives = {}) {
-    picker.Open(English(), Defaults(), marks, tabs, drives, currentPath);
+              const std::vector<fs::Root>& drives = {},
+              const std::vector<fs::Root>& quick = {},
+              const std::vector<PlacePicker::Visited>& history = {}) {
+    PlacePicker::Sources src;
+    src.bookmarks = marks;
+    src.tabs = tabs;
+    src.quickAccess = quick;
+    src.drives = drives;
+    src.history = history;
+    picker.Open(English(), Defaults(), src, currentPath);
 }
 
 // サイドバーに出ているのと同じ 2 台。
@@ -56,6 +64,27 @@ std::vector<fs::Root> TwoDrives() {
     d.kind = fs::RootKind::Fixed;
     drives.push_back(d);
     return drives;
+}
+
+// サイドバーのクイックアクセスと同じ 2 件。
+std::vector<fs::Root> TwoQuickAccess() {
+    std::vector<fs::Root> quick;
+    fs::Root desktop;
+    desktop.path = "C:\\home\\Desktop";
+    desktop.label = "Desktop";
+    desktop.kind = fs::RootKind::Special;
+    quick.push_back(desktop);
+    fs::Root downloads;
+    downloads.path = "C:\\home\\Downloads";
+    downloads.label = "Downloads";
+    downloads.kind = fs::RootKind::Special;
+    quick.push_back(downloads);
+    return quick;
+}
+
+// 新しい順に 2 件。
+std::vector<PlacePicker::Visited> TwoVisited() {
+    return { { "nested", "C:\\home\\alpha\\nested" }, { "beta", "C:\\home\\beta" } };
 }
 
 // 目当ての行番号。無ければ -1。
@@ -398,9 +427,10 @@ KITE_TEST(placepicker, drives_alone_are_enough_to_open_the_list) {
 
     h.app.Execute(Cmd::ShowPlaces);
     KITE_EXPECT(h.app.placePicker().visible());
-    KITE_EXPECT_EQ(static_cast<int>(h.app.placePicker().rows().size()), 1);
-    KITE_EXPECT(h.app.placePicker().rows()[0].kind == PlacePicker::Kind::Drive);
-    KITE_EXPECT_EQ(h.app.placePicker().rows()[0].path, std::string("C:\\"));
+    // クイックアクセス 1 件（フェイクの home）とドライブ 1 台。
+    KITE_EXPECT_EQ(static_cast<int>(h.app.placePicker().rows().size()), 2);
+    KITE_EXPECT(h.app.placePicker().rows()[1].kind == PlacePicker::Kind::Drive);
+    KITE_EXPECT_EQ(h.app.placePicker().rows()[1].path, std::string("C:\\"));
 }
 
 KITE_TEST(placepicker, the_key_that_opens_it_closes_it) {
@@ -465,9 +495,11 @@ KITE_TEST(placepicker, choosing_an_open_tab_switches_to_it) {
 
     h.app.Execute(Cmd::ShowPlaces);
     KITE_EXPECT(h.app.placePicker().visible());
-    // 今いるタブは並んでいないので、残っているのはもう 1 枚のほう（＋ドライブ 1 台）。
+    // 今いるタブは並んでいないので、残っているのはもう 1 枚のほう。あとは
+    // クイックアクセス 1 件・ドライブ 1 台・さっきまで居た C:\home の履歴 1 件。
     KITE_EXPECT_EQ(static_cast<int>(h.app.placePicker().rows().size()),
-                   static_cast<int>(tabs) - 1 + 1);
+                   static_cast<int>(tabs) - 1 + 3);
+    KITE_EXPECT(h.app.placePicker().rows()[0].kind == PlacePicker::Kind::Tab);
 
     KITE_EXPECT(h.app.OnKey(ParseChord("Enter")));
     test::PumpUntilSettled(h.app);
@@ -487,8 +519,8 @@ KITE_TEST(placepicker, open_tabs_alone_are_enough_to_open_the_list) {
 
     h.app.Execute(Cmd::ShowPlaces);
     KITE_EXPECT(h.app.placePicker().visible());
-    // もう 1 枚のタブと、ドライブ 1 台。
-    KITE_EXPECT_EQ(static_cast<int>(h.app.placePicker().rows().size()), 2);
+    // もう 1 枚のタブと、クイックアクセス 1 件と、ドライブ 1 台。
+    KITE_EXPECT_EQ(static_cast<int>(h.app.placePicker().rows().size()), 3);
     KITE_EXPECT(h.app.placePicker().rows()[0].kind == PlacePicker::Kind::Tab);
 }
 
@@ -536,6 +568,185 @@ KITE_TEST(placepicker, the_drive_being_looked_at_starts_selected) {
     OpenWith(picker, {}, "D:\\", {}, TwoDrives());
 
     KITE_EXPECT_EQ(picker.cursor(), 1);
+}
+
+// --- クイックアクセス --------------------------------------------------------
+
+// サイドバーの並びがそのまま行になり、置かれる場所はタブとドライブの間。
+KITE_TEST(placepicker, quick_access_sits_between_the_tabs_and_the_drives) {
+    PlacePicker picker;
+    OpenWith(picker, TenBookmarks(), {}, TwoTabs(), TwoDrives(), TwoQuickAccess());
+
+    const std::vector<PlacePicker::Row>& rows = picker.rows();
+    KITE_EXPECT_EQ(static_cast<int>(rows.size()), 10 + 2 + 2 + 2);
+    KITE_EXPECT(rows[10].kind == PlacePicker::Kind::Tab);
+    // 上に出すと、いつも同じ顔ぶれの «背景» が実際に開いているものを画面の下へ
+    // 押しやる。ドライブより上なのは、こちらは実際に作業するフォルダだから。
+    KITE_EXPECT(rows[12].kind == PlacePicker::Kind::QuickAccess);
+    KITE_EXPECT_EQ(rows[12].name, std::string("Desktop"));
+    KITE_EXPECT_EQ(rows[13].path, std::string("C:\\home\\Downloads"));
+    KITE_EXPECT(rows[14].kind == PlacePicker::Kind::Drive);
+}
+
+// 同じフォルダがブックマークとクイックアクセスの 2 行に並ぶのは普通のこと ─
+// 畳むと、どちらの種別を残すかを選ぶことになる。2 行は同じ答えではない。
+KITE_TEST(placepicker, the_same_folder_can_be_a_bookmark_and_a_quick_access_row) {
+    std::vector<Bookmark> marks;
+    marks.push_back({ "Downloads", "C:\\home\\Downloads" });
+
+    PlacePicker picker;
+    OpenWith(picker, marks, {}, {}, {}, TwoQuickAccess());
+
+    KITE_EXPECT_EQ(static_cast<int>(picker.rows().size()), 3);
+    KITE_EXPECT(picker.rows()[0].kind == PlacePicker::Kind::Bookmark);
+    KITE_EXPECT_EQ(picker.rows()[0].path, picker.rows()[2].path);
+    KITE_EXPECT(picker.rows()[2].kind == PlacePicker::Kind::QuickAccess);
+    KITE_EXPECT_NE(picker.rows()[0].kindLabel, picker.rows()[2].kindLabel);
+}
+
+// 種別は絞り込みに当たる ─ 「quick」と打てばクイックアクセスだけが並ぶ。
+KITE_TEST(placepicker, the_kind_of_a_quick_access_row_is_something_to_filter_on) {
+    PlacePicker picker;
+    OpenWith(picker, TenBookmarks(), {}, TwoTabs(), TwoDrives(), TwoQuickAccess());
+
+    for (char c : std::string("quick")) picker.HandleChar(static_cast<uint32_t>(c));
+    KITE_EXPECT_EQ(static_cast<int>(picker.rows().size()), 2);
+    KITE_EXPECT(picker.rows()[0].kind == PlacePicker::Kind::QuickAccess);
+}
+
+// パスを指す行なので、Ctrl+Enter に «新しいタブで開く» の意味がある。
+KITE_TEST(placepicker, ctrl_enter_opens_a_quick_access_row_in_a_new_tab) {
+    PlacePicker picker;
+    OpenWith(picker, {}, {}, {}, {}, TwoQuickAccess());
+
+    KITE_EXPECT(picker.HandleKey(ParseChord("Ctrl+Enter")) == PlacePicker::Action::OpenNewTab);
+}
+
+// --- 履歴 --------------------------------------------------------------------
+
+// 履歴はいちばん最後で、渡された順（＝新しい順）のまま。末尾に固めてあるので、
+// 履歴が入れ替わっても上に並ぶ行の位置は動かない。
+KITE_TEST(placepicker, history_comes_last_and_keeps_the_order_it_was_given) {
+    PlacePicker picker;
+    OpenWith(picker, TenBookmarks(), {}, TwoTabs(), TwoDrives(), TwoQuickAccess(), TwoVisited());
+
+    const std::vector<PlacePicker::Row>& rows = picker.rows();
+    KITE_EXPECT_EQ(static_cast<int>(rows.size()), 10 + 2 + 2 + 2 + 2);
+    KITE_EXPECT(rows[14].kind == PlacePicker::Kind::Drive);
+    KITE_EXPECT(rows[16].kind == PlacePicker::Kind::History);
+    KITE_EXPECT_EQ(rows[16].name, std::string("nested"));
+    KITE_EXPECT_EQ(rows[17].path, std::string("C:\\home\\beta"));
+}
+
+// 種別は絞り込みに当たる ─ 「history」と打てば最近見たものだけが並ぶ。
+KITE_TEST(placepicker, the_kind_of_a_history_row_is_something_to_filter_on) {
+    PlacePicker picker;
+    OpenWith(picker, TenBookmarks(), {}, {}, {}, {}, TwoVisited());
+
+    for (char c : std::string("history")) picker.HandleChar(static_cast<uint32_t>(c));
+    KITE_EXPECT_EQ(static_cast<int>(picker.rows().size()), 2);
+    KITE_EXPECT(picker.rows()[0].kind == PlacePicker::Kind::History);
+}
+
+// パスを指す行なので、Ctrl+Enter に «新しいタブで開く» の意味がある。
+KITE_TEST(placepicker, ctrl_enter_opens_a_history_row_in_a_new_tab) {
+    PlacePicker picker;
+    OpenWith(picker, {}, {}, {}, {}, {}, TwoVisited());
+
+    KITE_EXPECT(picker.HandleKey(ParseChord("Ctrl+Enter")) == PlacePicker::Action::OpenNewTab);
+}
+
+// 履歴だけでも開く ─ 行き先が 1 つも無いときだけ開かない、という規則のまま。
+KITE_TEST(placepicker, history_alone_is_enough_to_fill_the_list) {
+    PlacePicker picker;
+    OpenWith(picker, {}, {}, {}, {}, {}, TwoVisited());
+
+    KITE_EXPECT(picker.visible());
+    KITE_EXPECT_EQ(picker.total(), 2);
+}
+
+// 見てきたフォルダが新しい順に並ぶ。「戻る」履歴は末尾がいちばん新しいので、
+// そこから逆に読む。
+KITE_TEST(placepicker, the_history_rows_come_from_the_focused_tab_newest_first) {
+    Harness h;
+    h.app.workspace().bookmarks.clear();
+    h.app.NavigateFocused("C:\\home\\alpha");
+    test::PumpUntilSettled(h.app);
+    h.app.NavigateFocused("C:\\home\\beta");
+    test::PumpUntilSettled(h.app);
+
+    const std::vector<PlacePicker::Visited> history = h.app.CollectHistory();
+    KITE_EXPECT_EQ(static_cast<int>(history.size()), 2);
+    KITE_EXPECT_EQ(history[0].path, std::string("C:\\home\\alpha"));
+    KITE_EXPECT_EQ(history[1].path, std::string("C:\\home"));
+    // 名前はパスの末尾。仮想フォルダなら Kite の言語での名前になる。
+    KITE_EXPECT_EQ(history[0].name, std::string("alpha"));
+}
+
+// 行ったり来たりは 1 行に畳む ─ 畳まないと、午前中ずっと出入りしたフォルダ 1 つで
+// 履歴の枠が埋まる。今いるフォルダは並べない（「ここへ行く」は答えではない）。
+KITE_TEST(placepicker, the_history_folds_repeats_and_drops_where_the_cursor_is) {
+    Harness h;
+    h.app.NavigateFocused("C:\\home\\alpha");
+    test::PumpUntilSettled(h.app);
+    h.app.NavigateFocused("C:\\home");
+    test::PumpUntilSettled(h.app);
+    h.app.NavigateFocused("C:\\home\\alpha");
+    test::PumpUntilSettled(h.app);
+
+    // back は [home, alpha, home]。今いるのは alpha なので、残るのは home 1 行。
+    const std::vector<PlacePicker::Visited> history = h.app.CollectHistory();
+    KITE_EXPECT_EQ(static_cast<int>(history.size()), 1);
+    KITE_EXPECT_EQ(history[0].path, std::string("C:\\home"));
+}
+
+// 「進む」履歴は入れない ─ あちらは «戻るで離れた先» で、Alt+→ がすでに指している。
+// 最近見た順の列に混ぜると、その順序が嘘になる。
+KITE_TEST(placepicker, the_forward_stack_is_not_history) {
+    Harness h;
+    h.app.NavigateFocused("C:\\home\\alpha");
+    test::PumpUntilSettled(h.app);
+    h.app.NavigateFocused("C:\\home\\beta");
+    test::PumpUntilSettled(h.app);
+    h.app.Execute(Cmd::GoBack);
+    test::PumpUntilSettled(h.app);
+
+    // 今いるのは alpha、back は [home]、forward は [beta]。
+    KITE_EXPECT_EQ(h.tab()->path, std::string("C:\\home\\alpha"));
+    KITE_EXPECT_EQ(static_cast<int>(h.tab()->forward.size()), 1);
+
+    const std::vector<PlacePicker::Visited> history = h.app.CollectHistory();
+    KITE_EXPECT_EQ(static_cast<int>(history.size()), 1);
+    KITE_EXPECT_EQ(history[0].path, std::string("C:\\home"));
+}
+
+// 履歴は «最近» のための行なので、古い側まで並べない ─ 上限を超えたぶんは
+// Alt+← で届く。
+KITE_TEST(placepicker, the_history_block_has_a_ceiling) {
+    Harness h;
+    for (int i = 0; i < 40; ++i) {
+        const std::string dir = "C:\\work\\h" + std::to_string(i);
+        h.files.AddDir(dir);
+        h.app.NavigateFocused(dir);
+        test::PumpUntilSettled(h.app);
+    }
+
+    const std::vector<PlacePicker::Visited> history = h.app.CollectHistory();
+    KITE_EXPECT_EQ(static_cast<int>(history.size()), 20);
+    // 落ちるのは古いほう。いちばん新しい 1 件は直前に居たフォルダ。
+    KITE_EXPECT_EQ(history[0].path, std::string("C:\\work\\h38"));
+}
+
+// フォーカス中のタブの履歴だけ。別のタブが見てきたものは «どちらが新しいか» を
+// 答えられないので混ぜない（履歴が持っているのは順序だけで、時刻ではない）。
+KITE_TEST(placepicker, only_the_focused_tab_contributes_history) {
+    Harness h;
+    h.app.NavigateFocused("C:\\home\\alpha");
+    test::PumpUntilSettled(h.app);
+
+    h.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(h.app);
+    KITE_EXPECT(h.app.CollectHistory().empty());
 }
 
 // --- 絞り込み欄 --------------------------------------------------------------
@@ -651,6 +862,7 @@ KITE_TEST(placepicker, the_filter_box_copies_and_cuts) {
     h.app.OnKey(ParseChord("Ctrl+A"));
     h.app.OnKey(ParseChord("Ctrl+X"));
     KITE_EXPECT(h.app.placePicker().filter().empty());
-    // 絞り込みが消えたので全部戻る ─ ブックマーク 10 件とドライブ 1 台。
-    KITE_EXPECT_EQ(static_cast<int>(h.app.placePicker().rows().size()), 11);
+    // 絞り込みが消えたので全部戻る ─ ブックマーク 10 件、クイックアクセス 1 件、
+    // ドライブ 1 台。
+    KITE_EXPECT_EQ(static_cast<int>(h.app.placePicker().rows().size()), 12);
 }

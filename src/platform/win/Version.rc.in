@@ -26,9 +26,21 @@ BEGIN
         // この 1 ブロックだけを置く（言語ごとに違う文字列を持たせる予定は無い）。
         BLOCK "040904B0"
         BEGIN
+            // 発行者を名乗る 2 行。無署名の趣味プロジェクトにできる数少ない
+            // «素性を明かす» 手段で、Defender の機械学習分類器が Kite を
+            // Trojan:Win32/Bearfoos.B!ml と誤検知した後に足した ─ 「発行者不明・
+            // 未署名・初見のハッシュ」の 3 つ揃いを 1 つ減らす。**これで誤検知が
+            // 止まる保証は無い**（止める手段はコード署名しかない）が、嘘ではない
+            // 情報を書き足す代金はゼロ。
+            //
+            // 年は手で上げる。ビルド時に差し込むと、版とコミットの出どころが
+            // 増える割に、誰も読まない 4 桁のために毎年 1 月 1 日に全体が
+            // 再コンパイルされる。
+            VALUE "CompanyName", "suijinn"
             VALUE "FileDescription", "@KITE_RC_DESCRIPTION@"
             VALUE "FileVersion", "@KITE_VERSION@ (@KITE_GIT_COMMIT@)"
             VALUE "InternalName", "@KITE_RC_NAME@"
+            VALUE "LegalCopyright", "Copyright (C) 2026 suijinn"
             VALUE "OriginalFilename", "@KITE_RC_NAME@.exe"
             VALUE "ProductName", "Kite"
             VALUE "ProductVersion", "@KITE_VERSION@ (@KITE_GIT_COMMIT@)"

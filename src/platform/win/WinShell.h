@@ -93,6 +93,14 @@ public:
     ///       同じことをしている
     bool ConnectNetwork(const std::string& uncRoot, std::string* err) override;
 
+    /// @copydoc IShellIntegration::DefaultManagerState
+    /// @note 実体は `WinDefaultManager.cpp`。レジストリの綴りを知っているのはあちらだけ
+    DefaultManager DefaultManagerState() override;
+
+    /// @copydoc IShellIntegration::SetDefaultManager
+    /// @note 実体は `WinDefaultManager.cpp`
+    bool SetDefaultManager(bool on) override;
+
 private:
     HWND hwnd_ = nullptr;
     ShellHostClient menuHost_;

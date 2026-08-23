@@ -45,6 +45,7 @@ enum class PromptKind : uint8_t {
     SessionName,             ///< セッション名の変更
     ConfirmDelete,           ///< ごみ箱への削除の確認
     ConfirmDeletePermanent,  ///< 完全削除の確認
+    ConfirmDefaultManager,   ///< 既定のファイルマネージャーの付け外しの確認
 };
 
 /// @brief 入力欄の状態。
@@ -64,7 +65,8 @@ struct Prompt : TextField {
     /// @brief 文字入力ではなく Yes/No の確認かを判定する。
     /// @return 確認なら true
     bool isConfirm() const {
-        return kind == PromptKind::ConfirmDelete || kind == PromptKind::ConfirmDeletePermanent;
+        return kind == PromptKind::ConfirmDelete || kind == PromptKind::ConfirmDeletePermanent ||
+               kind == PromptKind::ConfirmDefaultManager;
     }
 
     /// @brief 対象そのものの上で編集する入力欄かを判定する。
@@ -439,7 +441,7 @@ public:
     bool OpenPlacePicker();
 
     /// @brief コマンドパレットを開く。
-    /// @note 開くたびに作り直す ─ ラベルは言語で、和音は `Ctrl+F1` で、番号で指す
+    /// @note 開くたびに作り直す ─ ラベルは言語で、和音は `Ctrl+Shift+,` で、番号で指す
     ///       8 個に添える行き先は `Ctrl+D` で変わる
     void OpenCommandPalette();
 
@@ -462,6 +464,18 @@ public:
     /// @note 背面のセッションのタブは入れない。あちらへ移るのはセッションの切り替えで、
     ///       画面に出ていないペインごと入れ替わる別の操作（ROADMAP P3-12）
     std::vector<PlacePicker::OpenTab> CollectOpenTabs() const;
+
+    /// @brief 行き先の一覧に並べる «履歴» を集める。
+    /// @return フォーカス中のタブが見てきたフォルダ。**新しい順**で、重複と
+    ///         今いるフォルダは落としてある
+    /// @note **フォーカス中のタブの「戻る」履歴だけ**。全タブぶんを混ぜるには
+    ///       «どちらが新しいか» を答えられなければならないが、履歴が持っているのは
+    ///       タブごとの順序だけで時刻ではない ─ 2 本の列を並べる根拠がどこにも無い
+    /// @note 「進む」履歴は入れない。あちらは «戻るで離れた先» で、`Alt+→` が
+    ///       すでに指している ─ 最近見た順の列に混ぜると、その順序が嘘になる
+    /// @note 件数には上限がある（App.cpp の `kHistoryRows`）。履歴は «最近» のための
+    ///       行なので、古い側まで並べるとブックマークとドライブを画面外へ押し出す
+    std::vector<PlacePicker::Visited> CollectHistory() const;
 
     /// @brief タブを引き抜いて新しいウィンドウで開く。
     /// @param[in] pane タブを持っているペイン。nullptr なら何もしない
@@ -543,6 +557,13 @@ public:
     /// @note `Tab::title()` を UI から直接呼ばないこと。「PC」「ごみ箱」
     ///       「ネットワーク」の名前は i18n の側にあり、タブは言語を知らない
     std::string DisplayName(const Tab& tab) const;
+
+    /// @brief パスだけを持つ行き先の表示名を返す。
+    /// @param[in] p 対象のパス
+    /// @return 表示名。仮想フォルダなら Kite の言語での名前
+    /// @note `DisplayName(const Tab&)` と別なのは、タブには列挙が持ち帰った表示名
+    ///       （`fs::ListResult::title`）が在るから ─ 履歴の 1 行はパスしか持たない
+    std::string DisplayNameOf(const std::string& p) const;
 
     /// @brief タイトルバーに出す、読める形のパスを返す。
     /// @param[in] tab 対象のタブ
@@ -703,6 +724,30 @@ private:
     ///       積まない ─ 「元に戻す」を元に戻すのは「消す」であって、`Ctrl+Z` で
     ///       救い出したファイルがごみ箱へ帰るのは誰も望んでいない
     void DoRestore();
+
+    /// @brief 既定のファイルマネージャーの付け外しに確認を求める。
+    /// @param[in] on true で登録、false で解除
+    /// @note **入口は設定画面の行 1 つだけ。** 行は «今どうなっているか» を値として
+    ///       出せるので、コマンド 2 つ（ラベルが半分の確率で嘘になる）よりも、
+    ///       トグルのコマンド 1 つ（状態を言えない）よりも正直になる
+    /// @note **設定画面で唯一、確認を挟む行。** 他の行は変えたことがその場で見える
+    ///       が、この行の効果は Kite の外（`Win+E` とフォルダのダブルクリック）に
+    ///       出るので、矢印キーがかすっただけで変わってはならない
+    /// @note 登録の口が無い環境では確認を出さずに理由を出す
+    void ConfirmDefaultManager(bool on);
+
+    /// @brief 確認を経て、既定のファイルマネージャーとしての登録を付け外しする。
+    /// @param[in] on true で登録、false で解除
+    /// @note すでにその状態なら何も書かずに理由を出す。画面に出ていない状態なので、
+    ///       黙って何もしないと «キーが効かなかった» と見分けが付かない
+    /// @note `DefaultManager::Other`（別の場所の Kite が登録済み）は「すでに登録
+    ///       されている」ではない ─ そこへ付け替えるのがこの行の仕事
+    void SetDefaultManager(bool on);
+
+    /// @brief 設定画面の行の値を、OS の実際の状態から引き直す。
+    /// @note 確認を取り消した後・OS が断った後に呼ぶ。行が動かした値と実際とが
+    ///       食い違ったままだと、画面が嘘をつく
+    void SyncDefaultManagerRow();
 
     /// @brief シェルメニューに渡す「項目が属するフォルダ」を返す。
     /// @return 仮想フォルダを表示中ならそのパス。実フォルダなら空文字列
@@ -869,6 +914,9 @@ private:
     // 関連付けられたアプリ（展開ソフト）に渡す
     bool openArchives_ = true;
     bool standalone_ = false;
+    // 確認待ちの «既定のファイルマネージャーにするか»。行が動かした値をそのまま
+    // 読み直せない ─ 確認の間に行のカーソルは動きうるし、取り消せば値は戻る
+    bool pendingDefaultManager_ = false;
     NewTabPosition newTabPosition_ = NewTabPosition::End;
     TabBarPosition tabBarPosition_ = TabBarPosition::Top;
     std::string language_ = "auto";

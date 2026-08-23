@@ -1915,6 +1915,11 @@ KITE_TEST(appui, the_wheel_moves_the_bookmark_list_and_not_the_list_behind_it) {
     Fixture f;
     GiveBookmarks(f.app);
     f.renderer.size = { 560.0f, 300.0f };
+    // Away from the quick access row for the home folder first: the panel opens
+    // on the row for the folder being looked at, and starting part-way down would
+    // leave nothing to say about which direction the wheel moved it.
+    f.app.NavigateFocused("C:\\home\\alpha\\nested");
+    test::PumpUntilSettled(f.app);
     f.app.Execute(Cmd::ShowPlaces);
     f.Paint();
 

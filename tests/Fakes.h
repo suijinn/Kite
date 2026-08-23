@@ -405,6 +405,22 @@ public:
         if (err) *err = "refused";
         return false;
     }
+
+    // The registration, as a value rather than a registry. What App decides from
+    // it - which sentence to print, whether to write at all - is the whole of the
+    // core-side behaviour; the spelling of the keys is platform/win's business.
+    DefaultManager defaultManager = DefaultManager::No;
+    bool defaultManagerSucceeds = true;
+    std::vector<bool> defaultManagerCalls;  ///< 引数の列。呼ばれなかったことも見る
+
+    DefaultManager DefaultManagerState() override { return defaultManager; }
+
+    bool SetDefaultManager(bool on) override {
+        defaultManagerCalls.push_back(on);
+        if (!defaultManagerSucceeds) return false;
+        defaultManager = on ? DefaultManager::Yes : DefaultManager::No;
+        return true;
+    }
 };
 
 // ---------------------------------------------------------------------------

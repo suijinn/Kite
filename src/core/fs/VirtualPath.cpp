@@ -94,6 +94,17 @@ std::string ParentOf(std::string_view p) {
     return kComputer;
 }
 
+// A shell parsing name is already the body of a virtual path, so the whole job is
+// putting the prefix in front of it. Recognising it by the leading "::{" is enough:
+// no filesystem path starts that way, and the shell writes nothing else into a
+// command line for a place that has no path.
+std::string FromCommandLine(std::string_view arg) {
+    constexpr std::string_view kParsingName = "::{";
+    if (IsVirtual(arg)) return std::string(arg);
+    if (arg.compare(0, kParsingName.size(), kParsingName) != 0) return std::string(arg);
+    return std::string(kPrefix) + std::string(arg);
+}
+
 std::string TrailingName(std::string_view p) {
     if (!IsVirtual(p)) return {};
     std::string_view body = p.substr(kPrefixLength);
