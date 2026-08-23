@@ -1,5 +1,6 @@
 #include "platform/win/ShellFolder.h"
 
+#include <shellapi.h>  // FOF_NO_UI. <shlobj.h> alone leaves it undefined.
 #include <shlobj.h>
 #include <shlwapi.h>
 
@@ -38,6 +39,16 @@ HRESULT GuardedDisplayName(IShellFolder* folder, PCUITEMID_CHILD child, SHGDNF f
                            STRRET* out) {
     __try {
         return folder->GetDisplayNameOf(child, flags, out);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return E_FAIL;
+    }
+}
+
+// The copy itself reads through the namespace extension, so it is third-party
+// code with a Microsoft wrapper around it and gets the same guard as the rest.
+HRESULT GuardedPerform(IFileOperation* op) {
+    __try {
+        return op->PerformOperations();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return E_FAIL;
     }
@@ -341,6 +352,91 @@ std::vector<PIDLIST_ABSOLUTE> ResolveTrashItemsByOrigin(
 
     found.erase(std::remove(found.begin(), found.end(), nullptr), found.end());
     return found;
+}
+
+shellhost::ExtractResponse ExtractShellItem(const std::string& container,
+                                            const std::string& parsingName) {
+    shellhost::ExtractResponse response;
+    if (parsingName.empty()) return response;
+
+    // The item, pointed at the way everything else here points at one: through
+    // its folder when there is one, because inside a namespace extension the
+    // parsing name alone can resolve to something else entirely.
+    Pidl parsed;
+    PIDLIST_ABSOLUTE item = nullptr;
+    std::vector<PIDLIST_ABSOLUTE> resolved;
+    if (container.empty()) {
+        if (FAILED(::SHParseDisplayName(ToWide(parsingName).c_str(), nullptr, parsed.put(), 0,
+                                        nullptr)) ||
+            !parsed) {
+            return response;
+        }
+        item = parsed.get();
+    } else {
+        resolved = ResolveItemsInFolder(container, { parsingName });
+        if (resolved.empty()) return response;
+        item = resolved[0];
+    }
+
+    ComPtr<IShellItem> source;
+    HRESULT hr = ::SHCreateItemFromIDList(item, IID_IShellItem, source.putVoid());
+    for (PIDLIST_ABSOLUTE p : resolved) ::CoTaskMemFree(p);
+    if (FAILED(hr) || !source) return response;
+
+    // A fresh folder every time. Reusing one would mean deciding what to do
+    // when the name is already there, and the honest answers - overwrite a file
+    // something may still have open, or invent a second name - are both worse
+    // than a directory that costs nothing.
+    wchar_t temp[MAX_PATH] = L"";
+    if (!::GetTempPathW(MAX_PATH, temp)) return response;
+    GUID id{};
+    if (FAILED(::CoCreateGuid(&id))) return response;
+    wchar_t destination[MAX_PATH];
+    if (::swprintf_s(destination, L"%sKite\\%08lX%04X%04X", temp, id.Data1, id.Data2, id.Data3) <
+        0) {
+        return response;
+    }
+    if (::SHCreateDirectoryExW(nullptr, destination, nullptr) != ERROR_SUCCESS) return response;
+
+    ComPtr<IShellItem> folder;
+    if (FAILED(::SHCreateItemFromParsingName(destination, nullptr, IID_IShellItem,
+                                             folder.putVoid())) ||
+        !folder) {
+        return response;
+    }
+
+    ComPtr<IFileOperation> operation;
+    if (FAILED(::CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_IFileOperation,
+                                  operation.putVoid())) ||
+        !operation) {
+        return response;
+    }
+    // No UI of any kind: this is one file on a double click, and a progress
+    // window that flashes past is not worth the chance of one that waits for an
+    // answer nobody is looking at.
+    operation.get()->SetOperationFlags(FOF_NO_UI | FOFX_NOCOPYHOOKS);
+    if (FAILED(operation.get()->CopyItem(source.get(), folder.get(), nullptr, nullptr))) {
+        return response;
+    }
+    if (FAILED(GuardedPerform(operation.get()))) return response;
+    BOOL aborted = FALSE;
+    if (FAILED(operation.get()->GetAnyOperationsAborted(&aborted)) || aborted) return response;
+
+    // The name it landed under. Asked of the source rather than assumed from
+    // the parsing name: what the folder calls a child is the folder's business.
+    PWSTR leaf = nullptr;
+    if (FAILED(source.get()->GetDisplayName(SIGDN_PARENTRELATIVEPARSING, &leaf)) || !leaf) {
+        return response;
+    }
+    std::wstring full = std::wstring(destination) + L"\\" + leaf;
+    ::CoTaskMemFree(leaf);
+
+    // Believing the copy without looking is how an empty file gets opened.
+    if (::GetFileAttributesW(full.c_str()) == INVALID_FILE_ATTRIBUTES) return response;
+
+    response.ok = true;
+    response.path = ToUtf8(full.c_str());
+    return response;
 }
 
 shellhost::FolderResponse EnumerateShellFolder(const std::string& parsingName) {

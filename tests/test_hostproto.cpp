@@ -525,3 +525,72 @@ KITE_TEST(hostproto, a_verb_response_round_trips) {
     KITE_EXPECT(DecodeVerbResponse(Body(failedFrame), BodySize(failedFrame), failed));
     KITE_EXPECT_FALSE(failed.ok);
 }
+
+
+KITE_TEST(hostproto, an_extract_request_round_trips) {
+    ExtractRequest sent;
+    sent.container = "C:\\Users\\me\\写真.zip\\中身";
+    sent.path = "C:\\Users\\me\\写真.zip\\中身\\メモ.txt";
+    const std::vector<uint8_t> frame = EncodeExtractRequest(sent);
+
+    ExtractRequest got;
+    KITE_EXPECT(DecodeExtractRequest(Body(frame), BodySize(frame), got));
+    KITE_EXPECT_EQ(got.container, sent.container);
+    KITE_EXPECT_EQ(got.path, sent.path);
+
+    // Reading a frame as the wrong kind is how two versions quietly disagree.
+    VerbRequest verb;
+    KITE_EXPECT_FALSE(DecodeVerbRequest(Body(frame), BodySize(frame), verb));
+    FolderRequest folder;
+    KITE_EXPECT_FALSE(DecodeFolderRequest(Body(frame), BodySize(frame), folder));
+}
+
+KITE_TEST(hostproto, an_extract_response_round_trips) {
+    ExtractResponse sent;
+    sent.ok = true;
+    sent.path = "C:\\Users\\me\\AppData\\Local\\Temp\\Kite\\A1B2C3D4\\メモ.txt";
+    const std::vector<uint8_t> frame = EncodeExtractResponse(sent);
+
+    ExtractResponse got;
+    KITE_EXPECT(DecodeExtractResponse(Body(frame), BodySize(frame), got));
+    KITE_EXPECT(got.ok);
+    KITE_EXPECT_EQ(got.path, sent.path);
+
+    // A failure carries no path: there is nothing for the caller to open, and a
+    // leftover one would be opened anyway.
+    const std::vector<uint8_t> failedFrame = EncodeExtractResponse(ExtractResponse{});
+    ExtractResponse failed;
+    KITE_EXPECT(DecodeExtractResponse(Body(failedFrame), BodySize(failedFrame), failed));
+    KITE_EXPECT_FALSE(failed.ok);
+    KITE_EXPECT(failed.path.empty());
+}
+
+KITE_TEST(hostproto, every_kind_the_encoders_write_is_a_kind_the_host_accepts) {
+    // The host reads DecodeKind first and hangs up on anything it does not
+    // know. A kind added to the enum and to the encoders but not to that list is
+    // refused before it reaches its own decoder - which looks from Kite like the
+    // operation quietly failing, and did: opening a file inside an archive
+    // answered "could not open this item" with nothing else wrong.
+    const std::vector<std::vector<uint8_t>> frames = {
+        EncodeRequest(Request{}),
+        EncodeIconRequest(IconRequest{}),
+        EncodeFolderRequest(FolderRequest{}),
+        EncodeVerbRequest(VerbRequest{}),
+        EncodeExtractRequest(ExtractRequest{}),
+    };
+    const MessageKind expected[] = { MessageKind::Menu, MessageKind::Icons,
+                                     MessageKind::Folder, MessageKind::Verb,
+                                     MessageKind::Extract };
+    for (size_t i = 0; i < frames.size(); ++i) {
+        KITE_EXPECT(!frames[i].empty());
+        MessageKind kind = MessageKind::Menu;
+        KITE_EXPECT(DecodeKind(Body(frames[i]), BodySize(frames[i]), kind));
+        KITE_EXPECT_EQ(static_cast<uint32_t>(kind), static_cast<uint32_t>(expected[i]));
+    }
+
+    // And nothing beyond them: an unknown kind is how two versions disagree.
+    std::vector<uint8_t> unknown = frames.back();
+    unknown[kHeaderSize] = 99;
+    MessageKind kind = MessageKind::Menu;
+    KITE_EXPECT_FALSE(DecodeKind(Body(unknown), BodySize(unknown), kind));
+}

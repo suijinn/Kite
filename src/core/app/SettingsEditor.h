@@ -45,6 +45,7 @@ enum class SettingId : uint8_t {
     ShellIcons,       ///< シェルの実アイコンを使うか
     TabBarPos,        ///< タブバーを置く場所（上＝横並び／左＝縦並び）
     NewTabPos,        ///< 新しいタブを作る位置
+    OpenArchives,     ///< ZIP をフォルダとして開くか
     NewTabHidden,     ///< 新しいタブの既定：隠しファイルを表示するか
     NewTabDirsFirst,  ///< 新しいタブの既定：フォルダを先頭にまとめるか
     Count             ///< 列挙の終端。有効な項目ではない
@@ -54,6 +55,7 @@ enum class SettingId : uint8_t {
 enum class SettingGroup : uint8_t {
     Appearance,  ///< 外観
     Tabs,        ///< タブ
+    Files,       ///< ファイル
     NewTab,      ///< 新しいタブの既定
     Count        ///< 列挙の終端。有効な区画ではない
 };

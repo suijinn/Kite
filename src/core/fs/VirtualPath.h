@@ -50,6 +50,36 @@ bool IsWellKnown(std::string_view p);
 ///       Windows が英語で Kite が日本語、という組み合わせは普通にある
 const char* LabelKey(std::string_view p);
 
+/// @brief 書庫（フォルダとして開ける圧縮ファイル）の拡張子かを判定する。
+/// @param[in] ext 先頭のドットを含まない拡張子。小文字で渡すこと
+/// @return シェルがフォルダとして開ける書庫の拡張子なら true
+/// @note 並んでいるのは **OS が最初からフォルダとして開ける**ものだけ。7z や rar は
+///       展開ソフトを入れれば右クリックのメニューには載るが、シェル名前空間には
+///       現れないので、ここに足しても開く先が無い
+bool IsArchiveExtension(std::string_view ext);
+
+/// @brief パスの末尾が書庫を名指しているかを判定する。
+/// @param[in] p 対象のパス
+/// @return 拡張子が書庫のものなら true
+/// @note 見るのは拡張子だけ。実在するか、中身が本当に書庫かは答えない ─ 解決には
+///       ディスクへの問い合わせが要るので、ショートカット（.lnk）と同じく拡張子で
+///       先に振るう
+bool IsArchiveName(std::string_view p);
+
+/// @brief 実ファイルシステム上の書庫を「中を見る場所」として指す仮想パスを作る。
+/// @param[in] file 書庫ファイルのパス
+/// @return 前置を付けたパス。`file` が空なら空文字列
+/// @note 中身を列挙するのはシェル名前空間なので、書庫の中は実 FS ではない ─
+///       前置が付いた時点で、書き込みも監視も補完も自動的に外れる
+std::string ArchivePath(std::string_view file);
+
+/// @brief 書庫の中（または書庫そのもの）を指すパスから、書庫ファイルの実パスを返す。
+/// @param[in] p 対象のパス
+/// @return 書庫ファイルの実 FS 上のパス。書庫と関わりの無いパスなら空文字列
+/// @note 入れ子の書庫では**外側**が答え。書庫の中に入った時点でそこから先は
+///       シェルの領分で、内側の書庫は実 FS 上のファイルではない
+std::string ArchiveFileOf(std::string_view p);
+
 /// @brief 「..」で上がる先を返す。
 /// @param[in] p 対象のパス
 /// @return 親のパス。これ以上遡れないなら空文字列
@@ -57,6 +87,8 @@ const char* LabelKey(std::string_view p);
 ///       「PC」、`\\server` の上は「ネットワーク」。共有の親をサーバーにしたのと
 ///       同じ判断で、その上に実在の置き場所がある以上、そこで止めると `..` も
 ///       `Alt+↑` もパンくずも辿り着けない場所になる
+/// @note 書庫そのものの上は、それが置かれている**実フォルダ**。中の項目は仮想パスの
+///       まま 1 つ戻る ─ 書庫の縁が、シェル名前空間と実 FS の境目になる
 std::string ParentOf(std::string_view p);
 
 /// @brief 名前を知らない仮想パスの、見出しに使う末尾要素を返す。

@@ -464,6 +464,10 @@ void App::LoadConfig() {
     // third-party overlay handlers into the picture at all. Off, Kite draws its
     // own vector glyphs and never asks the shell about a file.
     shellIcons_ = settings_.GetBool("ui", "shell_icons", true);
+    // On by default. Nothing is lost by it: the shell's own context menu still
+    // carries whatever extractor is installed, and ".." leads back out - while
+    // off by default would mean nobody learns the feature exists.
+    openArchives_ = settings_.GetBool("ui", "open_archives", true);
 
     defaultView_.showHidden = settings_.GetBool("view", "show_hidden", false);
     defaultView_.dirsFirst = settings_.GetBool("view", "dirs_first", true);
@@ -614,6 +618,7 @@ SettingsValues App::CollectSettings() const {
     v.Set(SettingId::FontScale, FontScaleIndex(fontScale_));
     v.Set(SettingId::Sidebar, sidebarVisible_ ? 1 : 0);
     v.Set(SettingId::ShellIcons, shellIcons_ ? 1 : 0);
+    v.Set(SettingId::OpenArchives, openArchives_ ? 1 : 0);
     v.Set(SettingId::TabBarPos, tabBarPosition_ == TabBarPosition::Left ? 1 : 0);
     v.Set(SettingId::NewTabPos, newTabPosition_ == NewTabPosition::AfterCurrent ? 1 : 0);
     v.Set(SettingId::NewTabHidden, defaultView_.showHidden ? 1 : 0);
@@ -645,6 +650,9 @@ void App::ApplySetting(SettingId id, const SettingsValues& values) {
             break;
         case SettingId::ShellIcons:
             shellIcons_ = (index != 0);
+            break;
+        case SettingId::OpenArchives:
+            openArchives_ = (index != 0);
             break;
         case SettingId::TabBarPos:
             tabBarPosition_ = (index != 0) ? TabBarPosition::Left : TabBarPosition::Top;
@@ -707,6 +715,7 @@ bool App::SaveSettings() {
     }
     settings_.SetFloat("ui", "font_scale", fontScale_);
     settings_.SetBool("ui", "shell_icons", shellIcons_);
+    settings_.SetBool("ui", "open_archives", openArchives_);
     settings_.Set("ui", "new_tab_position", NewTabPositionName(newTabPosition_));
     settings_.Set("ui", "tab_bar_position", TabBarPositionName(tabBarPosition_));
 
@@ -1029,7 +1038,7 @@ void App::SetWindowActive(bool active) {
 void App::NavigateFocused(const std::string& raw) {
     Tab* t = workspace_.focusedTab();
     if (!t) return;
-    const std::string target = path::Normalize(raw);
+    const std::string target = ArchiveTarget(path::Normalize(raw));
     if (target.empty()) return;
 
     if (target != t->path) {
@@ -1055,7 +1064,7 @@ void App::OpenPath(const std::string& p, bool newTab) {
     Pane* pane = workspace_.focusedPane();
     if (!pane) return;
     if (newTab) {
-        Tab* t = pane->AddTab(path::Normalize(p), NewTabAt(*pane));
+        Tab* t = pane->AddTab(ArchiveTarget(path::Normalize(p)), NewTabAt(*pane));
         t->view = defaultView_;
         RequestLoad(*t, true);
         dirty_ = true;
@@ -1130,9 +1139,29 @@ void App::ActivateEntry(int visibleIndex, bool newTab) {
         OpenPath(target, newTab);
         return;
     }
+    // A zip is a folder too, for the same reason and with the same caveat: the
+    // listing comes from the shell namespace, so this only applies to a file
+    // that really is on disk. Inside a virtual listing the row's path may not
+    // be the path anything acts on.
+    if (!vfs::IsVirtual(t->path) && openArchives_ && vfs::IsArchiveName(full)) {
+        OpenPath(vfs::ArchivePath(full), newTab);
+        return;
+    }
     // Never read the file here: a cloud placeholder must be hydrated by the
-    // shell, on the shell's terms.
-    shell_.Open(full);
+    // shell, on the shell's terms. The container travels along for the same
+    // reason the context menu needs it: inside an archive the row's path is a
+    // spelling with no file behind it, and only the folder can find the item.
+    // Reported either way, because both answers are otherwise invisible. A
+    // failure moves nothing and opens no dialog, so "nothing happened" is all
+    // the user sees - which is exactly how the archive case came in. And what
+    // opens out of an archive is a copy, which is worth saying before someone
+    // edits it and expects the archive to have changed.
+    const std::string container = ShellMenuContainer();
+    if (!shell_.Open(container, full)) {
+        ReportFailure("ui.open_failed", {});
+    } else if (!container.empty()) {
+        SetStatus(strings_.Get("ui.opened_copy"));
+    }
 }
 
 bool App::IsCut(const std::string& path) const {
@@ -1189,6 +1218,17 @@ bool App::ShortcutFolder(const std::string& path, std::string& target) {
     if (!fs_.Exists(resolved, &isDir) || !isDir) return false;
     target = resolved;
     return true;
+}
+
+std::string App::ArchiveTarget(const std::string& path) {
+    if (!openArchives_ || vfs::IsVirtual(path) || !vfs::IsArchiveName(path)) return path;
+    // Only now is it worth asking the disk. A folder can be called "backup.zip"
+    // and opening it must stay an ordinary walk into an ordinary folder, but
+    // the question costs a stat, so the extension is asked first - the same
+    // order ShortcutFolder() follows for .lnk.
+    bool isDir = false;
+    if (!fs_.Exists(path, &isDir) || isDir) return path;
+    return vfs::ArchivePath(path);
 }
 
 void App::RefreshFocused() {
@@ -1363,7 +1403,12 @@ bool App::ReadOnlyHere() {
     // paths their items carry are not the paths the shell operates on (a
     // deleted file's is its hidden $R copy, and renaming that would strand it).
     // The verbs that do work there are on the shell's own context menu.
-    SetStatus(strings_.Get("ui.vfolder_read_only"));
+    //
+    // An archive gets its own sentence: it *is* a folder to look at, so being
+    // told it is "a list, not a folder" answers a question nobody asked. What
+    // is missing there is the writing, and the way out is the same menu.
+    SetStatus(strings_.Get(vfs::ArchiveFileOf(t->path).empty() ? "ui.vfolder_read_only"
+                                                              : "ui.archive_read_only"));
     return true;
 }
 
@@ -1372,8 +1417,23 @@ std::string App::DisplayName(const Tab& tab) const {
     return tab.title();
 }
 
+std::string App::EditablePath(const Tab& tab) const {
+    // "virtual:" is Kite's word for a place, not a spelling anyone types. Inside
+    // an archive the body is the shell's own ("C:\a\pack.zip\docs", which is what
+    // Explorer prints too) and ArchiveTarget() reads it back, so the bar accepts
+    // exactly what the bar shows. The three named places keep their own id: it
+    // is not a path either, but it is the only spelling that gets back there.
+    if (!vfs::ArchiveFileOf(tab.path).empty()) {
+        return tab.path.substr(sizeof(vfs::kPrefix) - 1);
+    }
+    return tab.path;
+}
+
 std::string App::DisplayPath(const Tab& tab) const {
     if (!vfs::IsVirtual(tab.path)) return tab.path;
+    // Answering with the folder's name would hide where inside the archive the
+    // tab is standing - and unlike "PC", that has somewhere to be inside of.
+    if (!vfs::ArchiveFileOf(tab.path).empty()) return EditablePath(tab);
     return DisplayName(tab);
 }
 
@@ -2589,7 +2649,7 @@ void App::Execute(Cmd cmd) {
             break;
         }
         case Cmd::OpenConfigFolder:
-            shell_.Open(fs_.ConfigDir());
+            shell_.Open({}, fs_.ConfigDir());
             break;
         case Cmd::ToggleTheme:
             darkTheme_ = !darkTheme_;
@@ -2732,7 +2792,7 @@ void App::Execute(Cmd cmd) {
             // the usual next move is to paste or type a different path over it,
             // and the wash is also what says the row stopped being breadcrumbs.
             if (tab) {
-                BeginPrompt(PromptKind::Path, "", tab->path);
+                BeginPrompt(PromptKind::Path, "", EditablePath(*tab));
                 prompt_.SelectAll();
             }
             break;

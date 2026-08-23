@@ -350,6 +350,10 @@ public:
     /// @return 設定されている位置
     NewTabPosition newTabPosition() const { return newTabPosition_; }
 
+    /// @brief 書庫（ZIP など）をフォルダとして開くかを返す。
+    /// @return フォルダとして開くなら true。false なら関連付けられたアプリに渡す
+    bool openArchives() const { return openArchives_; }
+
     /// @brief タブバーを置く場所を返す。
     /// @return 設定されている場所
     /// @note UI 層はこれ 1 つでタブバーの向きを決める。Left なら縦置き
@@ -540,12 +544,22 @@ public:
     ///       「ネットワーク」の名前は i18n の側にあり、タブは言語を知らない
     std::string DisplayName(const Tab& tab) const;
 
-    /// @brief タイトルバーとパンくずに出す、読める形のパスを返す。
+    /// @brief タイトルバーに出す、読める形のパスを返す。
     /// @param[in] tab 対象のタブ
     /// @return 実フォルダならパスそのもの。仮想フォルダなら表示名
     /// @note 仮想フォルダのパス（`virtual:` 付きのシェル解析名）は、読ませても
     ///       打たせても意味を持たない文字列
+    /// @note 書庫の中だけは例外で、EditablePath() と同じ実パスの綴りを返す ─
+    ///       「PC」と違い、書庫には「その中のどこか」が在る
     std::string DisplayPath(const Tab& tab) const;
+
+    /// @brief アドレスバーに入れる、打ち返せる形のパスを返す。
+    /// @param[in] tab 対象のタブ
+    /// @return 書庫の中なら `virtual:` を外した実パスの綴り。それ以外はパスそのもの
+    /// @note 出したものがそのまま打ち返される欄なので、**戻ってこられる綴りしか
+    ///       出さない。** 書庫の中はシェルと同じ綴りが通る（`App::ArchiveTarget`
+    ///       が読み替える）が、「PC」などは識別子のほうが唯一の道
+    std::string EditablePath(const Tab& tab) const;
 
     /// @brief 失敗をステータスバーに出す。何が失敗したかは必ず言う。
     /// @param[in] key 何の操作が失敗したかを言う文字列キー（"ui.rename_failed" など）
@@ -666,8 +680,18 @@ private:
     ///       あり、それを起動するのはまさにシェルが .lnk に対して行う仕事
     bool ShortcutFolder(const std::string& path, std::string& target);
 
+    /// @brief 書庫をフォルダとして開くパスに読み替える。
+    /// @param[in] path 開こうとしているパス
+    /// @return 書庫なら `virtual:` を付けたパス、そうでなければ `path` のまま
+    /// @note 移動の入口すべて（一覧の Enter・アドレスバー・OpenPath）が通る。
+    ///       `[ui] open_archives` が false なら何もしない
+    /// @note 拡張子が合ったときだけ実在を確かめる ─ `.lnk` と同じ順序で、
+    ///       ふつうのフォルダへ移動するのに問い合わせを 1 つも増やさない
+    std::string ArchiveTarget(const std::string& path);
+
     /// @brief 表示中の場所が Kite 自身の書き込みを拒むかを判定する。
-    /// @return 仮想フォルダなら true。そのときステータス行に理由を出す
+    /// @return 仮想フォルダ（書庫の中を含む）なら true。そのときステータス行に
+    ///         理由を出す
     /// @note 作成・名前の変更・削除・切り取り・貼り付けの入口すべてが先にこれを
     ///       呼ぶ。仮想フォルダの項目が持つのは操作の相手になるパスではない
     ///       （消したファイルなら隠された $R の写し）ので、動くように見えて
@@ -814,6 +838,9 @@ private:
     // 知らせてこないので、覚えていなければ画面は何も言えない
     std::vector<std::string> cutPaths_;
     bool shellIcons_ = true;
+    // ZIP を「開く」と言われたときの答え。true なら中を一覧に出し、false なら
+    // 関連付けられたアプリ（展開ソフト）に渡す
+    bool openArchives_ = true;
     bool standalone_ = false;
     NewTabPosition newTabPosition_ = NewTabPosition::End;
     TabBarPosition tabBarPosition_ = TabBarPosition::Top;

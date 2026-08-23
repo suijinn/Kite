@@ -67,9 +67,18 @@ public:
     virtual bool RestoreDeleted(const std::vector<std::string>& originalPaths) = 0;
 
     /// @brief 既定の関連付けでパスを開く。
+    /// @param[in] folder 項目が属するフォルダ。実フォルダなら空文字列
     /// @param[in] path 開くファイルまたはフォルダのパス
     /// @return 成功したら true
-    virtual bool Open(const std::string& path) = 0;
+    /// @note **仮想フォルダの項目には `folder` が要る。** 書庫の中のファイルは
+    ///       `C:\a.zip\notes.txt` のようにパスの綴りを名乗るが、その綴りの
+    ///       ファイルはディスクに無いので `ShellExecute` は開けない ─ シェルに
+    ///       頼めるのは「そのフォルダの中のこの項目」という指し方だけで、
+    ///       `ShowContextMenu()` が `folder` を取るのと同じ理由・同じ道
+    /// @note そのとき実行するのは**メニューの既定項目**（エクスプローラーの
+    ///       ダブルクリックと同じ）。動詞の名前では頼めない ─ 書庫の中の
+    ///       ファイルの「開く」は `GetCommandString` に答えない
+    virtual bool Open(const std::string& folder, const std::string& path) = 0;
 
     /// @brief ショートカット（.lnk）のリンク先を求める。
     /// @param[in] linkPath ショートカットファイルのパス

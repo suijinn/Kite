@@ -163,8 +163,14 @@ bool LoadShellIcon(const std::string& path, uint32_t pixelSize, IconBitmap& out)
 
     const bool shellName = IsShellName(path);
     auto ask = [&](SHFILEINFOW* info, UINT with) {
-        return shellName ? ShellNameInfo(wide, info, with)
-                         : GuardedGetFileInfo(wide.c_str(), info, with) != 0;
+        if (shellName) return ShellNameInfo(wide, info, with);
+        if (GuardedGetFileInfo(wide.c_str(), info, with) != 0) return true;
+        // Not a path the filesystem knows - but it may still be a name the
+        // shell parses. Items inside an archive spell themselves exactly like
+        // paths ("C:\a.zip\notes.txt") while no file sits at that spelling, so
+        // without this every row inside a zip draws the fallback glyph. Only
+        // paid when the cheap question has already failed.
+        return ShellNameInfo(wide, info, with);
     };
 
     SHFILEINFOW info{};

@@ -25,6 +25,17 @@ size_t RootLength(std::string_view p) {
     return 0;
 }
 
+// The length of a leading scheme like "virtual:", or 0 if there is none.
+//
+// Two lower-case letters at least, so a drive letter ("c:") never matches: one
+// letter followed by a colon is a drive on Windows and nothing else.
+size_t SchemeLength(std::string_view p) {
+    size_t i = 0;
+    while (i < p.size() && p[i] >= 'a' && p[i] <= 'z') ++i;
+    if (i < 2 || i >= p.size() || p[i] != ':') return 0;
+    return i + 1;
+}
+
 uint32_t FoldCp(uint32_t cp) {
     if (cp >= 'A' && cp <= 'Z') return cp + 32;
     return cp;
@@ -152,6 +163,19 @@ std::string UncRoot(std::string_view p) {
 }
 
 std::string Normalize(std::string_view p) {
+    // A scheme is carried through untouched and only what follows it is folded.
+    // Treating the whole string as one path eats the two leading backslashes of
+    // a UNC body - "virtual:\\nas\pub" would come back as "virtual:\nas\pub",
+    // which names nothing. A shell parsing name ("::{CLSID}") is left entirely
+    // alone: it is not a path and has no components to fold.
+    if (const size_t scheme = SchemeLength(p)) {
+        const std::string_view body = p.substr(scheme);
+        if (body.empty() || (body.size() >= 2 && body[0] == ':' && body[1] == ':')) {
+            return std::string(p);
+        }
+        return std::string(p.substr(0, scheme)) + Normalize(body);
+    }
+
     const size_t root = RootLength(p);
     std::string head(p.substr(0, root));
     for (char& c : head) {
