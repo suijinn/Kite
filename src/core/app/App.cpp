@@ -153,18 +153,15 @@ private:
     const Tab& tab_;
 };
 
-// Whether each source already has a namesake in the destination, in the order
-// the sources were given. Taken before a transfer so the same question can be
-// asked again afterwards: the shell resolves a collision either by renaming its
-// copy or by overwriting, and neither outcome is visible from the return value.
-std::vector<bool> DestinationsExist(fs::IFileSystem& fs, const std::vector<std::string>& sources,
-                                    const std::string& destDir) {
-    std::vector<bool> out;
-    out.reserve(sources.size());
-    for (const std::string& s : sources) {
-        out.push_back(fs.Exists(path::Join(destDir, path::FileName(s))));
+// One more folder to re-list once an operation finishes, if it is not already
+// down. Duplicates cost a listing each, and a move names the same parent once
+// per item it took from there.
+void NoteDir(std::vector<std::string>& dirs, const std::string& dir) {
+    if (dir.empty()) return;
+    for (const std::string& d : dirs) {
+        if (utf8::EqualsIgnoreCaseAscii(d, dir)) return;
     }
-    return out;
+    dirs.push_back(dir);
 }
 
 // Whether an item already sits in this folder. Both spellings go through
@@ -234,6 +231,7 @@ App::~App() = default;
 bool App::Init(const std::vector<std::string>& startPaths) {
     LoadConfig();
     loader_ = std::make_unique<fs::DirectoryLoader>(fs_, host_, 2);
+    fileOps_ = std::make_unique<fs::FileOpQueue>(fs_, host_);
     RefreshRoots();
     LoadWorkspace(startPaths);
     EnsureVisibleTabsLoaded();
@@ -253,7 +251,12 @@ bool App::Init(const std::vector<std::string>& startPaths) {
 
 void App::Shutdown() {
     SaveAll();
-    loader_.reset();  // joins workers before anything else is torn down
+    // Both join their workers before anything else is torn down. A file
+    // operation still in flight is the shell's now and cannot be called back,
+    // so this waits for it - stopping a copy halfway is the one outcome nobody
+    // asked for.
+    loader_.reset();
+    fileOps_.reset();
 }
 
 uint32_t App::IconFor(const std::string& path) {
@@ -430,6 +433,10 @@ void App::PumpLoader() {
             }
         }
     }
+
+    // ファイル操作の完了も同じ起こされ方で届く。列挙より先に片付けるのは、
+    // 完了が一覧の取り直しを要求するから ─ 後回しにすると 1 フレーム遅れる。
+    PumpFileOps();
 
     if (!loader_) return;
     std::vector<fs::LoadedListing> done;
@@ -781,12 +788,9 @@ bool App::IsValidDropTarget(const std::vector<std::string>& paths, const std::st
         if (utf8::EqualsIgnoreCaseAscii(src, dest)) return false;  // onto itself
 
         // Refuse to drop a folder into its own subtree - that is the one
-        // mistake here that can destroy data.
-        if (dest.size() > src.size() &&
-            utf8::EqualsIgnoreCaseAscii(dest.substr(0, src.size()), src) &&
-            path::IsSep(dest[src.size()])) {
-            return false;
-        }
+        // mistake here that can destroy data. The same question the file
+        // operation queue asks about two requests, so it is asked in one place.
+        if (path::IsInside(dest, src)) return false;
     }
     return true;
 }
@@ -814,30 +818,30 @@ bool App::PerformDrop(const std::vector<std::string>& paths, const std::string& 
     }
     if (sources.empty() && here.empty()) return false;
 
-    if (!here.empty() && !DuplicateInPlace(here)) return false;
+    if (!here.empty() && !DuplicateInPlace(here, false)) return false;
     if (sources.empty()) {
-        RefreshTabsShowing(destDir);
         host_.Invalidate();
         return true;
     }
 
-    const std::vector<bool> existedBefore = DestinationsExist(fs_, sources, destDir);
+    fs::FileOpRequest request;
+    request.kind = fs::FileOpKind::Transfer;
+    request.move = move;
+    request.groups.push_back({ destDir, sources });
 
-    std::string err;
-    if (!fs_.CopyTo(sources, destDir, move, &err)) {
-        ReportFailure(move ? "ui.move_failed" : "ui.copy_failed", err);
-        return false;
-    }
-    RecordTransfer(sources, destDir, existedBefore, move);
-
+    PendingFileOp plan;
+    plan.runningKey = move ? "ui.moving" : "ui.copying";
+    plan.doneKey = "ui.done";
+    plan.failKey = move ? "ui.move_failed" : "ui.copy_failed";
+    plan.record = UndoRecord::Created;
+    plan.undoKind = move ? UndoKind::Move : UndoKind::Copy;
     // The watcher normally picks this up, but a folder that could not be
     // watched still has to refresh.
-    RefreshTabsShowing(destDir);
+    NoteDir(plan.refresh, destDir);
     if (move) {
-        for (const std::string& p : sources) RefreshTabsShowing(path::Parent(p));
+        for (const std::string& p : sources) NoteDir(plan.refresh, path::Parent(p));
     }
-    SetStatus(strings_.Get("ui.done"));
-    host_.Invalidate();
+    QueueFileOp(std::move(request), std::move(plan));
     return true;
 }
 
@@ -1404,24 +1408,31 @@ void App::ApplyPrompt() {
 
         case PromptKind::ConfirmDelete:
         case PromptKind::ConfirmDeletePermanent: {
+            if (pending.empty()) break;
             const bool recycle = (kind == PromptKind::ConfirmDelete);
-            if (!fs_.Delete(pending, recycle, &err)) {
-                ReportFailure("ui.delete_failed", err);
-            } else {
-                // ごみ箱へ入れたなら覚えるのは**消される前のパス**。ごみ箱の中で
-                // 名乗る名前（隠された $R の写し）は誰も見ていないし、それを控える
-                // には削除のたびにごみ箱を引き当て直すことになる ─ 一度も Ctrl+Z を
-                // 押さない人までその代金を払う。
-                //
-                // 完全削除のほうは戻せないので印だけを積む。積まずに黙っていると、
-                // 次の Ctrl+Z がそれを飛び越えて、消えたファイルはそのままに
-                // その前の名前変更だけを巻き戻す。
-                undo_.Push({ recycle ? UndoKind::Delete : UndoKind::Erase,
-                             recycle ? pending : std::vector<std::string>{},
-                             {} });
-                SetStatus(strings_.Get("ui.done"));
-            }
-            RefreshFocused();
+
+            fs::FileOpRequest request;
+            request.kind = fs::FileOpKind::Delete;
+            request.paths = pending;
+            request.recycle = recycle;
+
+            PendingFileOp plan;
+            plan.runningKey = "ui.deleting";
+            plan.doneKey = "ui.done";
+            plan.failKey = "ui.delete_failed";
+            // ごみ箱へ入れたなら覚えるのは**消される前のパス**。ごみ箱の中で
+            // 名乗る名前（隠された $R の写し）は誰も見ていないし、それを控える
+            // には削除のたびにごみ箱を引き当て直すことになる ─ 一度も Ctrl+Z を
+            // 押さない人までその代金を払う。
+            //
+            // 完全削除のほうは戻せないので印だけを積む。積まずに黙っていると、
+            // 次の Ctrl+Z がそれを飛び越えて、消えたファイルはそのままに
+            // その前の名前変更だけを巻き戻す。
+            plan.record = UndoRecord::Fixed;
+            plan.undoKind = recycle ? UndoKind::Delete : UndoKind::Erase;
+            if (recycle) plan.undoTargets = pending;
+            for (const std::string& p : pending) NoteDir(plan.refresh, path::Parent(p));
+            QueueFileOp(std::move(request), std::move(plan));
             break;
         }
 
@@ -2047,32 +2058,34 @@ void App::DoPaste() {
         }
     }
 
-    bool ok = true;
-    bool acted = false;
-    if (!cut && !here.empty()) {
-        ok = DuplicateInPlace(here);
-        acted = ok;
-    }
+    // 印を落とすのは、実際に運び終えたときだけ ─ どちらの依頼も «成功したら
+    // 捨てる» を持って出ていく。ここで先に捨てると、失敗した貼り付けの後に
+    // 「何を切り取ってあったか」を言うものが画面から消える。すでに全部ここに在る
+    // 切り取りは何も依頼しないので、印はそのまま次のフォルダを待つ。
+    if (!cut && !here.empty()) DuplicateInPlace(here, true);
 
     if (!incoming.empty()) {
-        const std::vector<bool> existedBefore = DestinationsExist(fs_, incoming, dest);
-        std::string err;
-        if (!fs_.CopyTo(incoming, dest, cut, &err)) {
-            ReportFailure(cut ? "ui.move_failed" : "ui.copy_failed", err);
-            ok = false;
-        } else {
-            RecordTransfer(incoming, dest, existedBefore, cut);
-            acted = true;
-        }
-    }
+        fs::FileOpRequest request;
+        request.kind = fs::FileOpKind::Transfer;
+        request.move = cut;
+        request.groups.push_back({ dest, incoming });
 
-    // Spent only if something actually moved. A cut whose every item is already
-    // here did nothing, and the fade still has a folder to be pasted into.
-    if (ok && acted) ClearCutMarks();
-    RefreshFocused();
+        PendingFileOp plan;
+        plan.runningKey = cut ? "ui.moving" : "ui.copying";
+        plan.doneKey = "ui.done";
+        plan.failKey = cut ? "ui.move_failed" : "ui.copy_failed";
+        plan.record = UndoRecord::Created;
+        plan.undoKind = cut ? UndoKind::Move : UndoKind::Copy;
+        plan.clearCut = true;
+        NoteDir(plan.refresh, dest);
+        if (cut) {
+            for (const std::string& p : incoming) NoteDir(plan.refresh, path::Parent(p));
+        }
+        QueueFileOp(std::move(request), std::move(plan));
+    }
 }
 
-bool App::DuplicateInPlace(const std::vector<std::string>& sources) {
+bool App::DuplicateInPlace(const std::vector<std::string>& sources, bool clearCut) {
     if (sources.empty()) return true;
 
     std::vector<std::string> targets;
@@ -2111,52 +2124,38 @@ bool App::DuplicateInPlace(const std::vector<std::string>& sources) {
         targets.push_back(std::move(dest));
     }
 
-    std::string err;
-    if (!fs_.CopyAs(sources, targets, &err)) {
-        ReportFailure("ui.copy_failed", err);
-        return false;
-    }
+    fs::FileOpRequest request;
+    request.kind = fs::FileOpKind::Duplicate;
+    request.paths = sources;
+    request.destPaths = targets;
 
-    // The same boundary as any other transfer - what was not there before and is
-    // there now. Every name here was picked because nothing held it, so all that
-    // is left to ask is whether the copy arrived.
-    UndoAction action;
-    action.kind = UndoKind::Copy;
-    for (const std::string& target : targets) {
-        if (fs_.Exists(target)) action.targets.push_back(target);
-    }
-    const size_t made = action.targets.size();
-    // Nothing arrived: the shell was told to go ahead and the user said no in its
-    // own dialog. That is not a failure, and not something to count out loud.
-    if (made == 0) return true;
-    undo_.Push(std::move(action));
-
+    PendingFileOp plan;
+    plan.runningKey = "ui.copying";
     // The listing says so too, but the new row can be anywhere in it - the name
-    // is one Kite chose, so it is worth saying that it chose one.
-    SetStatus(strings_.Format("ui.duplicated", { std::to_string(made) }));
+    // is one Kite chose, so it is worth saying that it chose one. Counted from
+    // what actually arrived: nothing arriving means the shell was told to go
+    // ahead and the user said no in its own dialog, which is not a failure and
+    // not something to count out loud.
+    plan.doneKey = "ui.duplicated";
+    plan.countInDone = true;
+    plan.failKey = "ui.copy_failed";
+    plan.record = UndoRecord::Created;
+    plan.undoKind = UndoKind::Copy;
+    plan.clearCut = clearCut;
+    for (const std::string& src : sources) NoteDir(plan.refresh, path::Parent(src));
+    QueueFileOp(std::move(request), std::move(plan));
     return true;
 }
 
-void App::RecordTransfer(const std::vector<std::string>& sources, const std::string& destDir,
-                         const std::vector<bool>& existedBefore, bool move) {
-    UndoAction action;
-    action.kind = move ? UndoKind::Move : UndoKind::Copy;
-    for (size_t i = 0; i < sources.size(); ++i) {
-        // Already there before, so whatever sits at that name now is either the
-        // file that was always there or one the shell overwrote - not something
-        // this operation is entitled to move away or throw out.
-        if (i < existedBefore.size() && existedBefore[i]) continue;
-        const std::string dest = path::Join(destDir, path::FileName(sources[i]));
-        if (!fs_.Exists(dest)) continue;
-        action.targets.push_back(dest);
-        action.origins.push_back(sources[i]);
-    }
-    if (action.targets.empty()) return;
-    if (!move) action.origins.clear();  // a copy has nowhere to go back to
-    undo_.Push(std::move(action));
-}
-
 void App::DoUndo() {
+    // 実行中のファイル操作が終わるまでは答えられない ─ その操作の履歴が積まれるのは
+    // 完了したときなので、ここで進むと Ctrl+Z が **1 つ前の操作** を巻き戻す。
+    // 押した人が指しているのは、たった今頼んだほうである。
+    if (fileOpsBusy()) {
+        SetStatus(strings_.Get("ui.file_op_busy"));
+        return;
+    }
+
     const UndoAction* next = undo_.top();
     if (!next) {
         SetStatus(strings_.Get("ui.undo_empty"));
@@ -2174,13 +2173,7 @@ void App::DoUndo() {
     undo_.Pop();
 
     std::vector<std::string> refresh;
-    auto note = [&refresh](const std::string& dir) {
-        if (dir.empty()) return;
-        for (const std::string& d : refresh) {
-            if (utf8::EqualsIgnoreCaseAscii(d, dir)) return;
-        }
-        refresh.push_back(dir);
-    };
+    auto note = [&refresh](const std::string& dir) { NoteDir(refresh, dir); };
 
     std::string err;
     bool acted = false;
@@ -2208,12 +2201,24 @@ void App::DoUndo() {
                 if (fs_.Exists(p)) alive.push_back(p);
             }
             if (alive.empty()) break;
+
+            fs::FileOpRequest request;
+            request.kind = fs::FileOpKind::Delete;
+            request.paths = alive;
             // To the Recycle Bin, never permanently. A folder created an hour
             // ago can have been filled since, and undo is not a delete key.
-            if (!fs_.Delete(alive, true, &err)) break;
-            for (const std::string& p : alive) note(path::Parent(p));
-            acted = true;
-            break;
+            request.recycle = true;
+
+            PendingFileOp plan;
+            plan.runningKey = "ui.deleting";
+            plan.doneKey = messageKey;
+            plan.failKey = "ui.undo_failed";
+            // 逆操作は履歴に積まない。Redo が無いので、積むと 2 回目の Ctrl+Z が
+            // 元の操作をやり直すことになる。
+            plan.record = UndoRecord::None;
+            for (const std::string& p : alive) NoteDir(plan.refresh, path::Parent(p));
+            QueueFileOp(std::move(request), std::move(plan));
+            return;  // 答えるのは完了したとき
         }
 
         case UndoKind::Move: {
@@ -2237,16 +2242,27 @@ void App::DoUndo() {
                 note(path::Parent(action.targets[i]));
                 note(parent);
             }
+            if (groups.empty()) break;
+
+            fs::FileOpRequest request;
+            request.kind = fs::FileOpKind::Transfer;
+            request.move = true;
+            for (const auto& group : groups) {
+                request.groups.push_back({ group.first, group.second });
+            }
+
+            PendingFileOp plan;
+            plan.runningKey = "ui.moving";
             // All of them or none of the message: a half-moved undo that reports
             // success leaves the user believing the folders are back as they
-            // were, which is the one thing they must not believe.
-            acted = !groups.empty();
-            for (const auto& group : groups) {
-                if (fs_.CopyTo(group.second, group.first, true, &err)) continue;
-                acted = false;
-                break;
-            }
-            break;
+            // were, which is the one thing they must not believe. The queue
+            // stops at the first group that fails, and that answers as a failure.
+            plan.doneKey = "ui.undone_move";
+            plan.failKey = "ui.undo_failed";
+            plan.record = UndoRecord::None;
+            plan.refresh = refresh;
+            QueueFileOp(std::move(request), std::move(plan));
+            return;  // 答えるのは完了したとき
         }
 
         case UndoKind::Delete: {
@@ -2277,6 +2293,116 @@ void App::DoUndo() {
         ReportFailure("ui.undo_failed", err);
     }
     host_.Invalidate();
+}
+
+// ---------------------------------------------------------------------------
+// File operations
+//
+// 削除もコピーも移動も、実際に走らせるのはワーカースレッド（`fs::FileOpQueue`）。
+// シェルの `SHFileOperation` は終わるまで戻らないので、UI スレッドで呼んでいた頃は
+// その間ウィンドウがメッセージを 1 つも処理できなかった ─ 進捗ダイアログはシェルが
+// 出しているのに、後ろの Kite だけが固まって見える。
+//
+// 代わりに、依頼したときに «帰ってきたら何をするか» を控える（PendingFileOp）。
+// 履歴に積むもの・言う文言・取り直すフォルダは、どれも操作が終わるまで答えが
+// 出ないものばかりで、**依頼した時点で先に済ませられる後始末は 1 つも無い。**
+// ---------------------------------------------------------------------------
+
+bool App::fileOpsBusy() const { return !pendingOps_.empty(); }
+
+void App::QueueFileOp(fs::FileOpRequest request, PendingFileOp plan) {
+    if (!fileOps_) return;
+    plan.token = fileOps_->Request(std::move(request));
+    pendingOps_.push_back(std::move(plan));
+    host_.Invalidate();
+}
+
+void App::PumpFileOps() {
+    if (!fileOps_) return;
+    std::vector<fs::FileOpDone> done;
+    fileOps_->Drain(done);
+    if (done.empty()) return;
+
+    for (const fs::FileOpDone& d : done) {
+        for (size_t i = 0; i < pendingOps_.size(); ++i) {
+            if (pendingOps_[i].token != d.token) continue;
+            const PendingFileOp plan = std::move(pendingOps_[i]);
+            // 先に控えを外してから答える ─ 実行中の文言が言うのは «まだ残って
+            // いるもの» で、いま終わったものはもう残っていない。
+            pendingOps_.erase(pendingOps_.begin() + static_cast<ptrdiff_t>(i));
+            FinishFileOp(d, plan);
+            break;
+        }
+    }
+}
+
+void App::FinishFileOp(const fs::FileOpDone& done, const PendingFileOp& plan) {
+    if (!done.ok) {
+        ReportFailure(plan.failKey ? plan.failKey : "ui.copy_failed", done.error);
+    } else {
+        switch (plan.record) {
+            case UndoRecord::None:
+                break;  // 逆操作。Redo は無いので積まない
+            case UndoRecord::Fixed:
+                // 空でも積む ─ 完全削除の「戻せない印」がそれで、黙っていると次の
+                // Ctrl+Z がそれを飛び越える。
+                undo_.Push({ plan.undoKind, plan.undoTargets, {} });
+                break;
+            case UndoRecord::Created:
+                // 触ってよいのは「操作の前に無く、後に在る」ものだけ。それを
+                // 数えているのはワーカーのほうで（`fs::FileOpDone::created`）、
+                // ここに届く時点で答えは出ている。
+                if (!done.created.empty()) {
+                    undo_.Push({ plan.undoKind, done.created, done.origins });
+                }
+                break;
+        }
+
+        if (plan.clearCut) ClearCutMarks();
+
+        if (plan.doneKey) {
+            if (plan.countInDone) {
+                if (!done.created.empty()) {
+                    SetStatus(strings_.Format(plan.doneKey,
+                                              { std::to_string(done.created.size()) }));
+                }
+            } else {
+                SetStatus(strings_.Get(plan.doneKey));
+            }
+        }
+    }
+
+    for (const std::string& dir : plan.refresh) RefreshTabsShowing(dir);
+    // 一覧を取り直したのだから、オーバーレイにも訊き直す（RefreshFocused と同じ
+    // 理由 ─ たった今変えたものの状態を映しているのはそちら）。
+    if (icons_ && shellIcons_) icons_->Invalidate();
+    host_.Invalidate();
+}
+
+std::string App::fileOpStatus() const {
+    const size_t total = pendingOps_.size();
+    if (total == 0) return {};
+
+    size_t running = fileOps_ ? static_cast<size_t>(fileOps_->running()) : total;
+    if (running > total) running = total;
+    // 直前に終わったものをまだ回収していない、という一瞬がある。0 件実行中と
+    // 言うくらいなら 1 件と言うほうが実際に近い。
+    if (running == 0) running = 1;
+
+    // 1 件だけなら、それが何をしているのかまで言える ─ 走っているのは «いちばん
+    // 先に頼まれたもの» で、後の依頼は同じ場所を待っているか席を待っているかの
+    // どちらかだから。2 件以上になると種類が混ざりうるので、件数で言う。
+    std::string text = running == 1
+                           ? strings_.Get(pendingOps_.front().runningKey
+                                              ? pendingOps_.front().runningKey
+                                              : "ui.copying")
+                           : strings_.Format("ui.file_op_running", { std::to_string(running) });
+
+    // 待っているものがあることは必ず言う ─ 黙っていると、2 つ目を頼んだ人には
+    // キーが効かなかったようにしか見えない。
+    const size_t waiting = total - running;
+    if (waiting > 0) text += strings_.Format("ui.file_op_more", { std::to_string(waiting) });
+    return text;
 }
 
 }  // namespace kite

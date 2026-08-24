@@ -1224,6 +1224,7 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
     // costs the field no width.
     std::string right;
     const Prompt& p = app_.prompt();
+    const std::string fileOp = app_.fileOpStatus();
     // 入力欄を持たない画面で変換している ─ 一覧の上での型入力ジャンプがこれ。行の
     // どれも書き換わらないので、ここで言わなければ打った文字はどこにも出ない
     // （打ちかけの文字列をステータス行に出しているのと同じ理由で、しかも変換中は
@@ -1232,6 +1233,12 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
         right = str.Format("ui.composing", { app_.composition().text });
     } else if (p.isInline() && p.kind != PromptKind::Path && !p.labelKey.empty()) {
         right = str.Get(p.labelKey);
+    } else if (!fileOp.empty()) {
+        // 実行中のファイル操作は、直前の操作の報告より «今» に近い。しかも**期限で
+        // 消えない** ─ 数分かかるコピーの間、ステータス行が黙っていると、押した
+        // のに何も起きていないのと見分けが付かない（操作そのものはワーカーで走り、
+        // ウィンドウは動き続けるので、固まっているという合図も出ない）。
+        right = fileOp;
     } else if (!app_.statusMessage().empty() && !app_.statusExpired()) {
         right = app_.statusMessage();
     }

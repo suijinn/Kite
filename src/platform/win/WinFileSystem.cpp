@@ -221,8 +221,36 @@ std::string FileOperationError(int code) {
     return buffer;
 }
 
+// COM for the duration of one operation, on whatever thread is running it.
+//
+// File operations no longer happen on the UI thread - they are handed to the
+// FileOpQueue worker, and that thread starts life without an apartment. The
+// shell's copy engine has to be able to load copy hooks and put up its own
+// progress and conflict dialogs, so it gets one here.
+//
+// S_FALSE means the thread already had an apartment and this call only added a
+// reference; that still has to be balanced. RPC_E_CHANGED_MODE means it has one
+// of the other kind, which is not ours to take down.
+class ComForThisCall {
+public:
+    ComForThisCall() {
+        const HRESULT hr = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        owned_ = SUCCEEDED(hr);
+    }
+    ~ComForThisCall() {
+        if (owned_) ::CoUninitialize();
+    }
+    ComForThisCall(const ComForThisCall&) = delete;
+    ComForThisCall& operator=(const ComForThisCall&) = delete;
+
+private:
+    bool owned_ = false;
+};
+
 bool RunFileOperation(UINT op, const std::vector<std::string>& from,
                       const std::vector<std::string>& to, FILEOP_FLAGS flags, std::string* err) {
+    ComForThisCall com;
+
     std::wstring fromList = MakeDoubleNullList(from);
     // A list rather than a single folder, because a duplicate names its own
     // destination per item (FOF_MULTIDESTFILES). One folder is the one-element

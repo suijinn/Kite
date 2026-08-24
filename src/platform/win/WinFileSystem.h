@@ -21,8 +21,9 @@ namespace kite::win {
 /// **その列挙もこのプロセスでは行わない** ─ `kite_shellhost.exe` に投げる
 /// （`FolderHostClient`）。実 FS の高速経路には手を触れていない。
 ///
-/// @note List() は DirectoryLoader のワーカースレッドから呼ばれるためスレッド安全
-///       でなければならない。可変な状態を持たないことで満たしている
+/// @note List() は DirectoryLoader の、Delete() / CopyTo() / CopyAs() は
+///       FileOpQueue のワーカースレッドから呼ばれるため、スレッド安全でなければ
+///       ならない。可変な状態を持たないことで満たしている
 class WinFileSystem final : public fs::IFileSystem {
 public:
     /// @brief 既知フォルダと設定ディレクトリを解決し、メディア未挿入時のダイアログを
@@ -66,6 +67,9 @@ public:
     bool Rename(const std::string& from, const std::string& to, std::string* err) override;
 
     /// @copydoc fs::IFileSystem::Delete
+    /// @note ワーカースレッドから呼ばれる。シェルの進捗ダイアログはそのスレッドの
+    ///       ものになるが、`hwnd` を渡していないので Kite のウィンドウは無効化
+    ///       されない ─ 大きな削除の間も一覧を読み、別のタブへ移れる
     bool Delete(const std::vector<std::string>& paths, bool toRecycleBin, std::string* err) override;
 
     /// @copydoc fs::IFileSystem::CopyTo

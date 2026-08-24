@@ -25,6 +25,7 @@ CLAUDE.md。
                     │ kite.exe                             │
                     │   UI スレッド（描画・入力）           │
                     │   DirectoryLoader ワーカー × 2        │
+                    │   FileOpQueue ワーカー × 4            │
                     │   WinIconProvider ワーカー            │
                     │   WinDirectoryWatcher ワーカー        │
                     └───┬──────────┬──────────┬────────────┘
@@ -60,7 +61,8 @@ CLAUDE.md。
 src/
   core/          OS 呼び出しを行わない。例外は core/base/Platform.h の 5 つの自由関数のみ
     base/          UTF-8 / パス / INI / 書式 / 自然順ソート / Platform.h
-    fs/            IFileSystem 抽象、非同期 DirectoryLoader、DirectoryWatcher、VirtualPath
+    fs/            IFileSystem 抽象、非同期 DirectoryLoader / FileOpQueue、
+                   DirectoryWatcher、VirtualPath
     model/         Tab → Pane → SplitNode ツリー → Session → Workspace
     input/         コマンド表・キーマップ・TextField・パス補完・型入力ジャンプ・キー設定
     i18n/          文字列テーブル（en / ja 内蔵）
@@ -188,6 +190,36 @@ App::PumpLoader() ← UI スレッドが結果を回収し、トークンの一�
   `WM_KITE_WAKE` の側で必ず `Invalidate()` する（CLAUDE.md「すでに踏んだ罠」）。
 - **変更通知**は `WinDirectoryWatcher` のワーカーが全ハンドルを所有し、`Watch`/`Unwatch` は
   コマンドを投函するだけ（未完了の読み取りを抱えたままハンドルを閉じないため）。
+
+**ファイル操作も同じ理由で UI スレッドから追い出してある。** `SHFileOperation` は完了
+するまで戻らないので、そこで呼ぶと数 GB のコピーの間ウィンドウがメッセージを 1 つも
+処理できない ─ 進捗ダイアログはシェルが出しているのに、後ろの Kite だけが固まる。
+
+```
+App::DoPaste / DoDelete / PerformDrop / DoUndo
+      → FileOpQueue::Request(依頼) → トークンを返す
+        App は「帰ってきたら何をするか」を控えるだけ（PendingFileOp）
+          空いているワーカーが IFileSystem::Delete / CopyTo / CopyAs
+          → IHost::Wake()
+App::PumpFileOps() ← 履歴に積み、文言を出し、関わったフォルダを取り直す
+```
+
+- **同じ場所を奪い合わない依頼どうしは同時に走る**（上限 4）。大きなコピーの裏で、
+  別フォルダの削除が最後まで通る。
+- **衝突する依頼だけを直列化する**（`fs::FileOpsConflict`）。«同じ場所、または片方が
+  もう片方の下» なら、先に頼まれたほうが終わるまで待つ。これで «履歴が指す先が正しい»
+  «同じ木に 2 つのシェル操作を重ねない» «関係し合う依頼の順序» の 3 つが同時に守れる ─
+  ワーカーを 1 本に絞っていたのは、その 3 つを守るための一番雑な手段だった。
+- **奪い合いは «同じ名前» と «書くかどうか» で見る。** 行き先はフォルダではなく
+  「そこに置く名前」を名乗り、コピー元は読むだけ（読む者どうしは奪い合わない）。
+  フォルダごと名乗らせると USB へのコピー 2 件が待ち合い、親フォルダまで入れると
+  同じフォルダの中の無関係な 2 件が衝突扱いになる ─ どちらも並列にした意味を失わせる。
+- **待っている件数も走っている件数もステータス行が言う。**
+- **依頼した時点では何も起きていない。** 取り消し履歴も「完了」の表示も一覧の取り直しも、
+  答えが出るのは操作が終わったとき ─ `App::FinishFileOp` の仕事。
+- **ごみ箱からの復元はここを通らない。** あちらは `IShellIntegration` ─ その先の
+  `ShellHostClient` は呼び出し側のメッセージを回しながら待つので UI スレッド専用で、
+  回している以上ウィンドウも固まらない。
 
 ## 6. シェル連携と仮想フォルダ
 

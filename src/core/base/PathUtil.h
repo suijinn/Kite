@@ -121,6 +121,17 @@ std::string UncRoot(std::string_view p);
 /// @note ルートより上には遡らない。シンボリックリンクは解決しない
 std::string Normalize(std::string_view p);
 
+/// @brief パスがもう一方の下にあるかを判定する。
+/// @param[in] child 内側かもしれないパス
+/// @param[in] parent 外側かもしれないパス
+/// @return `child` が `parent` の下（何段でも）にあれば true
+/// @note 同じ場所どうしは false。「同じか、下か」を訊きたい側が両方を見ること
+/// @note 両方を `Normalize()` してから比べるので、区切りの違いも大文字小文字も
+///       またぐ。兄弟の接頭辞（`alpha` と `alpha2`）は下ではない ─ **文字列の
+///       前方一致で書くと必ずここを間違える**ので、判定はこの 1 か所に置く
+///       （ドロップ先の検査とファイル操作の衝突判定が同じ答えを使う）
+bool IsInside(std::string_view child, std::string_view parent);
+
 /// @brief 長すぎるパスを "\\\\?\\" 付きの形（拡張パス）に直す。
 /// @param[in] p 対象のパス
 /// @return 260 文字（UTF-16 換算）の制限に掛かる長さなら拡張パス、それ以外は

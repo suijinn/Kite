@@ -133,6 +133,7 @@ add_library(kite_core STATIC
     src/core/base/PathUtil.cpp
     src/core/base/Utf8.cpp
     src/core/fs/DirectoryLoader.cpp
+    src/core/fs/FileOpQueue.cpp
     src/core/fs/FileSystem.cpp
     src/core/fs/VirtualPath.cpp
     src/core/i18n/Strings.cpp
@@ -302,6 +303,7 @@ if(KITE_BUILD_TESTS)
         tests/test_app.cpp
         tests/test_appui.cpp
         tests/test_dropcheck.cpp
+        tests/test_fileops.cpp
         tests/test_undo.cpp
         tests/test_hostproto.cpp
         tests/test_vfolder.cpp
@@ -311,7 +313,7 @@ if(KITE_BUILD_TESTS)
     # One CTest entry per suite so a failure names the area straight away.
     set(KITE_TEST_SUITES
         utf8 path ini format strings keymap keyeditor settings pathcomplete textfield typeahead theme tab workspace session
-        app appui drop iconcache hostproto config undo placepicker palette vfolder)
+        app appui drop iconcache hostproto config undo placepicker palette vfolder fileops)
 
     foreach(suite IN LISTS KITE_TEST_SUITES)
         add_test(NAME ${suite} COMMAND kite_tests --filter ${suite}.)
