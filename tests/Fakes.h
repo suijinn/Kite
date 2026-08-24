@@ -3,7 +3,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <map>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -32,6 +34,13 @@ void ResetFakePlatform();
 
 class FakeFileSystem final : public fs::IFileSystem {
 public:
+    // The real one is thread safe by holding no mutable state; this one is
+    // nothing but mutable state, and two kinds of worker reach it - the
+    // listings and the file operations. Recursive because the operations are
+    // written in terms of each other (CopyTo asks Exists, then Remove).
+    // Tests read the recorded calls from their own thread, but only after
+    // PumpUntilSettled(), by which point no worker is still inside here.
+    std::recursive_mutex mutex;
     // Directory path -> its direct children.
     std::map<std::string, std::vector<fs::Entry>> dirs;
 
@@ -55,6 +64,7 @@ public:
     int listCalls = 0;
 
     void AddDir(const std::string& path) {
+        std::lock_guard<std::recursive_mutex> lock(mutex);
         dirs[path];  // ensure it exists, even if empty
         const std::string parent = kite::path::Parent(path);
         if (parent.empty() || dirs.find(parent) == dirs.end()) return;
@@ -66,6 +76,7 @@ public:
 
     void AddFile(const std::string& dir, const std::string& name, uint64_t size = 0,
                  int64_t mtime = 0, fs::Attr extra = fs::Attr::None) {
+        std::lock_guard<std::recursive_mutex> lock(mutex);
         fs::Entry entry;
         entry.name = name;
         entry.size = size;
@@ -106,6 +117,7 @@ public:
     uint64_t totalBytes = 1000;
 
     fs::ListResult List(const std::string& dir) override {
+        std::lock_guard<std::recursive_mutex> lock(mutex);
         ++listCalls;
         fs::ListResult result;
         if (std::find(denied.begin(), denied.end(), dir) != denied.end()) {
@@ -124,6 +136,7 @@ public:
     }
 
     bool Exists(const std::string& path, bool* isDir = nullptr) override {
+        std::lock_guard<std::recursive_mutex> lock(mutex);
         if (dirs.count(path)) {
             if (isDir) *isDir = true;
             return true;
@@ -174,18 +187,21 @@ public:
     }
 
     bool MakeDirectory(const std::string& path, std::string* err) override {
+        std::lock_guard<std::recursive_mutex> lock(mutex);
         if (Refuse(path, err)) return false;
         AddDir(path);
         return true;
     }
 
     bool MakeFile(const std::string& path, std::string* err) override {
+        std::lock_guard<std::recursive_mutex> lock(mutex);
         if (Refuse(path, err)) return false;
         AddFile(kite::path::Parent(path), kite::path::FileName(path));
         return true;
     }
 
     bool Rename(const std::string& from, const std::string& to, std::string* err) override {
+        std::lock_guard<std::recursive_mutex> lock(mutex);
         if (Refuse(from, err)) return false;
         const std::string parent = kite::path::Parent(from);
         auto it = dirs.find(parent);
@@ -200,6 +216,7 @@ public:
     }
 
     void Remove(const std::string& path) {
+        std::lock_guard<std::recursive_mutex> lock(mutex);
         auto it = dirs.find(kite::path::Parent(path));
         if (it != dirs.end()) {
             const std::string leaf = kite::path::FileName(path);
@@ -212,6 +229,8 @@ public:
 
     bool Delete(const std::vector<std::string>& paths, bool toRecycleBin,
                 std::string* err) override {
+        WaitIfGated(paths);
+        std::lock_guard<std::recursive_mutex> lock(mutex);
         for (const std::string& p : paths) {
             if (Refuse(p, err)) return false;
         }
@@ -226,6 +245,8 @@ public:
     // undo decides what it may touch by asking it before and after.
     bool CopyTo(const std::vector<std::string>& paths, const std::string& destDir, bool move,
                 std::string* err) override {
+        WaitIfGated(paths);
+        std::lock_guard<std::recursive_mutex> lock(mutex);
         if (Refuse(destDir, err)) return false;
         for (const std::string& p : paths) {
             if (Refuse(p, err)) return false;
@@ -248,6 +269,8 @@ public:
 
     bool CopyAs(const std::vector<std::string>& paths, const std::vector<std::string>& destPaths,
                 std::string* err) override {
+        WaitIfGated(paths);
+        std::lock_guard<std::recursive_mutex> lock(mutex);
         if (paths.size() != destPaths.size()) {
             if (err) *err = "count mismatch";
             return false;
@@ -271,6 +294,68 @@ public:
         }
         return true;
     }
+
+    // -----------------------------------------------------------------------
+    // ゲート ─ ワーカーを操作の中で止める仕掛け。
+    //
+    // 「2 つが同時に走っている」を決定的に見る方法は、両方をその場で止めて数える
+    // 以外に無い。速さで見る（片方が終わる前に他方が終わった）と、スケジューラの
+    // 気分で落ちるテストになる。
+    //
+    // **待つのは data ロックの外**（`mutex` を取る前）。中で待つと、止まった 1 本が
+    // 他の全員を締め出して「並列である」ことを検査できなくなる。
+    // -----------------------------------------------------------------------
+
+    // これらのパスに触る操作は Release() されるまで戻らない。
+    void Gate(const std::string& path) {
+        std::lock_guard<std::mutex> lock(gateMutex_);
+        gated_.push_back(path);
+    }
+
+    // 止まっている全員を通す。以後の操作は素通り。
+    void Release() {
+        {
+            std::lock_guard<std::mutex> lock(gateMutex_);
+            open_ = true;
+        }
+        gateCv_.notify_all();
+    }
+
+    // n 本が止まるまで待つ。時間切れなら false。
+    bool WaitForGate(int n, int timeoutMs = 4000) {
+        std::unique_lock<std::mutex> lock(gateMutex_);
+        return gateCv_.wait_for(lock, std::chrono::milliseconds(timeoutMs),
+                                [&] { return waiting_ >= n; });
+    }
+
+    int GateWaiting() {
+        std::lock_guard<std::mutex> lock(gateMutex_);
+        return waiting_;
+    }
+
+private:
+    void WaitIfGated(const std::vector<std::string>& paths) {
+        std::unique_lock<std::mutex> lock(gateMutex_);
+        if (gated_.empty() || open_) return;
+        bool hit = false;
+        for (const std::string& p : paths) {
+            if (std::find(gated_.begin(), gated_.end(), p) != gated_.end()) hit = true;
+        }
+        if (!hit) return;
+        ++waiting_;
+        gateCv_.notify_all();
+        gateCv_.wait(lock, [&] { return open_; });
+        --waiting_;
+    }
+
+    std::mutex gateMutex_;
+    std::condition_variable gateCv_;
+    std::vector<std::string> gated_;
+    int waiting_ = 0;
+    bool open_ = false;
+
+public:
+
 };
 
 // ---------------------------------------------------------------------------
@@ -673,15 +758,17 @@ public:
 // Helpers
 // ---------------------------------------------------------------------------
 
-// DirectoryLoader really uses worker threads, so tests pump the same way the
-// window does rather than pretending the load is synchronous.
+// DirectoryLoader and FileOpQueue really use worker threads, so tests pump the
+// same way the window does rather than pretending the work is synchronous.
 inline bool PumpUntilSettled(App& app, int timeoutMs = 4000) {
     for (int elapsed = 0; elapsed <= timeoutMs; elapsed += 2) {
         app.PumpLoader();
 
         // The address bar's candidates come through the same loader, so a test
         // that types and then checks the offer has to wait for that too.
-        bool settled = !app.pathComplete().wantsListing();
+        // Deletes and copies come back the same way: what they leave on the disk
+        // is not there yet at the moment the command returns.
+        bool settled = !app.pathComplete().wantsListing() && !app.fileOpsBusy();
         if (Session* session = app.workspace().activeSession()) {
             for (Pane* pane : session->Panes()) {
                 for (const std::unique_ptr<Tab>& tab : pane->tabs) {

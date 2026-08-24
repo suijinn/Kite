@@ -57,7 +57,9 @@ KITE_TEST(drop, perform_drop_copies_through_the_filesystem) {
     app.Init({});
     test::PumpUntilSettled(app);
 
+    // 依頼するだけなので、実際にファイルシステムへ届くのはポンプの後。
     KITE_EXPECT(app.PerformDrop({ "C:\\home\\notes.txt" }, "C:\\home\\alpha", false));
+    test::PumpUntilSettled(app);
     KITE_EXPECT_EQ(files.copyCalls.size(), size_t{ 1 });
     KITE_EXPECT_EQ(files.copyCalls[0].destDir, std::string("C:\\home\\alpha"));
     KITE_EXPECT_FALSE(files.copyCalls[0].move);
@@ -76,6 +78,7 @@ KITE_TEST(drop, perform_drop_refuses_an_invalid_target_without_touching_the_disk
 
     KITE_EXPECT_FALSE(
         app.PerformDrop({ "C:\\home\\alpha" }, "C:\\home\\alpha\\nested", true));
+    test::PumpUntilSettled(app);
     KITE_EXPECT_EQ(files.copyCalls.size(), size_t{ 0 });
 }
 
@@ -93,12 +96,14 @@ KITE_TEST(drop, moving_into_the_current_parent_is_dropped_as_a_no_op) {
     // notes.txt already lives in C:\home; moving it there changes nothing and
     // must not reach the filesystem.
     KITE_EXPECT_FALSE(app.PerformDrop({ "C:\\home\\notes.txt" }, "C:\\home", true));
+    test::PumpUntilSettled(app);
     KITE_EXPECT_EQ(files.copyCalls.size(), size_t{ 0 });
 
     // The same drop as a copy is meaningful, but it cannot be handed over as
     // it stands - the name would collide with itself. It becomes a duplicate,
     // the way Explorer answers a copy dropped where the item already lives.
     KITE_EXPECT(app.PerformDrop({ "C:\\home\\notes.txt" }, "C:\\home", false));
+    test::PumpUntilSettled(app);
     KITE_EXPECT_EQ(files.copyCalls.size(), size_t{ 0 });
     KITE_EXPECT_EQ(files.copyAsCalls.size(), size_t{ 1 });
     KITE_EXPECT_EQ(files.copyAsCalls[0].destPaths[0],

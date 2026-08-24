@@ -162,6 +162,21 @@ std::string UncRoot(std::string_view p) {
     return out;
 }
 
+bool IsInside(std::string_view child, std::string_view parent) {
+    // ルート末尾の区切りは「この後に来るものがある」という印で、境目そのもの
+    // ではない。両側から落としてから比べ、境目は child 側の 1 文字で見る ─
+    // 落とすのを片側だけにすると、ルートが自分自身の中にあることになる。
+    std::string c = Normalize(child);
+    std::string up = Normalize(parent);
+    while (c.size() > 1 && IsSep(c.back())) c.pop_back();
+    while (up.size() > 1 && IsSep(up.back())) up.pop_back();
+    if (c.empty() || up.empty()) return false;
+    if (c.size() <= up.size()) return false;
+    if (!utf8::EqualsIgnoreCaseAscii(std::string_view(c).substr(0, up.size()), up)) return false;
+    // ここが無いと、名前の頭が同じだけの兄弟が「下」になる。
+    return IsSep(c[up.size()]);
+}
+
 std::string Normalize(std::string_view p) {
     // A scheme is carried through untouched and only what follows it is folded.
     // Treating the whole string as one path eats the two leading backslashes of

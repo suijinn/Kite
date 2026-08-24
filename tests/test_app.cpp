@@ -1112,6 +1112,7 @@ KITE_TEST(app, copy_and_paste_go_through_the_clipboard) {
     h.app.NavigateFocused("C:\\home\\beta");
     h.Settle();
     h.app.Execute(Cmd::Paste);
+    h.Settle();  // コピーはワーカーで走る
     KITE_EXPECT_EQ(h.files.copyCalls.size(), size_t{ 1 });
     KITE_EXPECT_EQ(h.files.copyCalls[0].destDir, std::string("C:\\home\\beta"));
 }

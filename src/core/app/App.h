@@ -21,6 +21,7 @@
 #include "core/base/Ini.h"
 #include "core/fs/DirectoryLoader.h"
 #include "core/fs/DirectoryWatcher.h"
+#include "core/fs/FileOpQueue.h"
 #include "core/fs/FileSystem.h"
 #include "core/i18n/Strings.h"
 #include "core/input/Commands.h"
@@ -119,6 +120,31 @@ struct WindowPlacement {
     int w = 1180;           ///< 幅
     int h = 720;            ///< 高さ
     bool maximized = false; ///< 最大化状態で復元するか
+};
+
+/// @brief 完了したファイル操作を何として履歴に積むか。
+enum class UndoRecord : uint8_t {
+    None,     ///< 積まない。取り消しの逆操作そのもの（Redo は無い）
+    Fixed,    ///< 依頼したパスをそのまま積む。削除がこれ
+    Created,  ///< **実際に生まれたもの**を積む。コピー・移動・複製がこれ
+};
+
+/// @brief 依頼したファイル操作について、完了時に何をするかの控え。
+///
+/// 操作はワーカースレッドへ渡ってしまうので、履歴も文言も一覧の取り直しも
+/// 「帰ってきたときにやること」として残しておくほかない。ここが持つのは
+/// **Kite 側の都合だけ**で、操作そのものの内容は `fs::FileOpRequest` の側にある。
+struct PendingFileOp {
+    uint64_t token = 0;                     ///< 対応する依頼のトークン
+    const char* runningKey = nullptr;       ///< 実行中に出す文言キー
+    const char* doneKey = nullptr;          ///< 成功時の文言キー。nullptr なら何も言わない
+    const char* failKey = nullptr;          ///< 失敗時の文言キー
+    bool countInDone = false;               ///< 成功時の文言の `{0}` に件数を差し込む
+    UndoRecord record = UndoRecord::None;   ///< 履歴に積むか、何を積むか
+    UndoKind undoKind = UndoKind::Delete;   ///< 積むときの種別
+    std::vector<std::string> undoTargets;   ///< `UndoRecord::Fixed` のとき積むパス列
+    bool clearCut = false;                  ///< 成功したら切り取りの印を捨てる
+    std::vector<std::string> refresh;       ///< 完了時に取り直すフォルダ
 };
 
 /// @brief アプリケーション本体。状態の保持とコマンド実行を担う。
@@ -670,6 +696,22 @@ public:
     /// @return 履歴への参照
     const UndoStack& undoStack() const { return undo_; }
 
+    /// @brief 実行中または処理待ちのファイル操作があるかを返す。
+    /// @return 削除・コピー・移動・複製のいずれかが片付いていなければ true
+    /// @note 操作そのものはワーカースレッドで走る。結果が届くのは PumpLoader()
+    ///       の中なので、依頼した直後に一覧やディスクを見ても答えは出ていない
+    bool fileOpsBusy() const;
+
+    /// @brief 実行中のファイル操作について、ステータス行に出す文言を返す。
+    /// @return 1 件なら「コピーしています…」等、2 件以上なら件数。待っているものが
+    ///         あればそれも添える。何も走っていなければ空
+    /// @note 期限で消えない ─ 数分かかる操作の間、その旨だけは出続けていなければ
+    ///       「押したのに何も起きていない」と見分けが付かない
+    /// @note **覚えずに毎回組み立てる。** 走り始めるのはワーカーの都合なので、
+    ///       依頼した瞬間に作った文字列は «まだ待機中» のまま古くなる（画面を
+    ///       描き直させるほうは `IWakeSink::Wake()` が受け持つ）
+    std::string fileOpStatus() const;
+
 private:
     /// @brief 設定フォルダへ 1 ファイル書き、失敗をステータス行に出す。
     /// @param[in] file 設定フォルダ内のファイル名
@@ -831,28 +873,35 @@ private:
 
     /// @brief 同じフォルダの中に複製を作る。
     /// @param[in] sources 複製する項目のパス列。すべて自分の親フォルダに残る
-    /// @return 1 件も作れなかったとき false。利用者が中断した場合は true
+    /// @param[in] clearCut 成功したら切り取りの印を捨てるか
+    /// @return 依頼できたら true。空いている名前を見つけられなければ false
+    /// @note 名前を選ぶところまでが同期で、コピーそのものは FileOpQueue に渡る
+    ///       ─ 件数と文言（`ui.duplicated`）が決まるのは完了したとき
     /// @note 同一フォルダへの貼り付け（およびドロップ）の答え。同じ名前は
     ///       置けないので `a.txt` → `a_copy.txt` と名前を付け直す
     ///       （`path::DuplicateName` / `path::kCopySuffix`）
     /// @note 名前は Kite が決めてから `IFileSystem::CopyAs()` に渡す。シェルに
     ///       解決させると出来上がった名前が誰にも分からず、取り消し履歴が
     ///       「この操作が作ったもの」を指せなくなる
-    bool DuplicateInPlace(const std::vector<std::string>& sources);
+    bool DuplicateInPlace(const std::vector<std::string>& sources, bool clearCut);
     void DoUndo();
     void RebuildFocused();
 
-    /// @brief 転送先に「実際にこの操作が作ったもの」だけを拾って履歴に積む。
-    /// @param[in] sources 転送元のパス列
-    /// @param[in] destDir 転送先ディレクトリ
-    /// @param[in] existedBefore sources と同じ長さ。転送前に転送先が在ったか
-    /// @param[in] move true なら移動として積む。false ならコピー
-    /// @note 競合したときシェルは別名を付けるか上書きするかで、どちらの場合も
-    ///       転送先の名前は「元の名前」とは限らない。**操作の前に無く、後に在る**
-    ///       ものだけが確実にこの操作の産物で、それ以外に触れれば元から在った
-    ///       ファイルを消すことになる
-    void RecordTransfer(const std::vector<std::string>& sources, const std::string& destDir,
-                        const std::vector<bool>& existedBefore, bool move);
+    /// @brief ファイル操作を依頼し、完了時に何をするかを控える。
+    /// @param[in] request ワーカーに渡す依頼
+    /// @param[in,out] plan 完了時の振る舞い。トークンはここで埋める
+    /// @note 依頼した時点では何も起きていない ─ 履歴も文言も一覧の取り直しも、
+    ///       すべて FinishFileOp() の仕事
+    void QueueFileOp(fs::FileOpRequest request, PendingFileOp plan);
+
+    /// @brief 完了したファイル操作を回収し、控えてあった後始末を行う。
+    /// @note PumpLoader() から呼ばれる
+    void PumpFileOps();
+
+    /// @brief 完了した 1 件について、履歴・文言・一覧の取り直しを行う。
+    /// @param[in] done ワーカーが返した結果
+    /// @param[in] plan 依頼時に控えた振る舞い
+    void FinishFileOp(const fs::FileOpDone& done, const PendingFileOp& plan);
 
     fs::IFileSystem& fs_;
     IShellIntegration& shell_;
@@ -871,6 +920,11 @@ private:
     Theme theme_;
     Ini settings_;
     std::unique_ptr<fs::DirectoryLoader> loader_;
+    // 削除・コピー・移動はここを通る。UI スレッドで `SHFileOperation` を呼ぶと
+    // 終わるまでウィンドウがメッセージを 1 つも処理できない ─ 大きなコピーの間
+    // 「使えなくなる」と報告された形がこれ。
+    std::unique_ptr<fs::FileOpQueue> fileOps_;
+    std::vector<PendingFileOp> pendingOps_;
 
     std::vector<fs::Root> roots_;
     std::vector<fs::Root> quickAccess_;

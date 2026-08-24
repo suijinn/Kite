@@ -266,3 +266,40 @@ KITE_TEST(path, duplicate_name_answers_about_the_leaf_of_a_path) {
     KITE_EXPECT_EQ(path::DuplicateName("C:\\home\\notes.txt", 0, false),
                    std::string("notes_copy.txt"));
 }
+
+// 「下にあるか」は 2 か所が同じ答えを要る ─ ドロップ先の検査（自分の中へは落とせ
+// ない）と、ファイル操作の衝突判定（同じ場所を 2 つの操作に渡さない）。文字列の
+// 前方一致で書くと必ず兄弟を巻き込むので、判定は 1 か所に置いてある。
+KITE_TEST(path, is_inside_finds_a_child_at_any_depth) {
+    KITE_EXPECT(path::IsInside("C:\\home\\alpha", "C:\\home"));
+    KITE_EXPECT(path::IsInside("C:\\home\\alpha\\nested\\deep.txt", "C:\\home"));
+    KITE_EXPECT(path::IsInside("C:\\home", "C:\\"));
+}
+
+KITE_TEST(path, is_inside_is_false_for_the_same_place) {
+    KITE_EXPECT_FALSE(path::IsInside("C:\\home", "C:\\home"));
+    KITE_EXPECT_FALSE(path::IsInside("C:\\home\\", "C:\\home"));
+    KITE_EXPECT_FALSE(path::IsInside("C:\\", "C:\\"));
+}
+
+KITE_TEST(path, is_inside_does_not_take_a_sibling_for_a_child) {
+    // 前方一致だけで書くと、ここが必ず true になる。
+    KITE_EXPECT_FALSE(path::IsInside("C:\\home\\alpha2", "C:\\home\\alpha"));
+    KITE_EXPECT_FALSE(path::IsInside("C:\\homework", "C:\\home"));
+}
+
+KITE_TEST(path, is_inside_ignores_case_and_separator_style) {
+    KITE_EXPECT(path::IsInside("c:/HOME/alpha", "C:\\home"));
+    KITE_EXPECT(path::IsInside("C:\\home\\\\alpha", "C:/home/"));
+}
+
+KITE_TEST(path, is_inside_walks_a_unc_path) {
+    KITE_EXPECT(path::IsInside("\\\\srv\\pub\\file.txt", "\\\\srv\\pub"));
+    KITE_EXPECT(path::IsInside("\\\\srv\\pub", "\\\\srv"));
+    KITE_EXPECT_FALSE(path::IsInside("\\\\srv\\pub2", "\\\\srv\\pub"));
+}
+
+KITE_TEST(path, is_inside_answers_no_when_either_side_is_empty) {
+    KITE_EXPECT_FALSE(path::IsInside("", "C:\\home"));
+    KITE_EXPECT_FALSE(path::IsInside("C:\\home", ""));
+}
