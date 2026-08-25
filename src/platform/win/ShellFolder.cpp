@@ -432,7 +432,21 @@ shellhost::ExtractResponse ExtractShellItem(const std::string& container,
     ::CoTaskMemFree(leaf);
 
     // Believing the copy without looking is how an empty file gets opened.
-    if (::GetFileAttributesW(full.c_str()) == INVALID_FILE_ATTRIBUTES) return response;
+    const DWORD attributes = ::GetFileAttributesW(full.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) return response;
+
+    // Read-only, because nothing carries an edit back into the archive. Kite
+    // says so when it opens ("ui.opened_copy"), but the status line is gone by
+    // the time anyone reaches Ctrl+S - and a copy that saves happily is exactly
+    // the shape in which the work gets lost: the file on disk is not the file
+    // the tab is showing, and nobody ever reads it again. The attribute is what
+    // is still there at the moment it matters, and it puts the question to the
+    // editor, which is the only thing in a position to ask.
+    //
+    // Not treated as a failure if it does not stick: refusing to open a file
+    // over an attribute would be the worse answer, and the copy is no more
+    // wrong than it was before.
+    ::SetFileAttributesW(full.c_str(), attributes | FILE_ATTRIBUTE_READONLY);
 
     response.ok = true;
     response.path = ToUtf8(full.c_str());

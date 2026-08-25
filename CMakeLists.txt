@@ -164,6 +164,7 @@ add_dependencies(kite_core kite_version)
 add_executable(kite WIN32
     src/main_win.cpp
     src/platform/win/D2DRenderer.cpp
+    src/platform/win/WinArchiveTypes.cpp
     src/platform/win/FolderHostClient.cpp
     src/platform/win/IconHostClient.cpp
     src/platform/win/ShellHostClient.cpp
