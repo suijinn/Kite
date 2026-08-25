@@ -616,7 +616,7 @@ void App::OpenForwardedPaths(const std::vector<std::string>& paths) {
     Tab* last = nullptr;
     for (const std::string& p : paths) {
         if (p.empty()) continue;
-        last = OpenTabIn(*pane, path::Normalize(vfs::FromCommandLine(p)), -1, defaultView_);
+        last = OpenTabIn(*pane, CommandLinePath(p), -1, defaultView_);
     }
     if (!last) return;
 
@@ -757,6 +757,19 @@ std::string App::ArchiveTarget(const std::string& path) {
     bool isDir = false;
     if (!fs_.Exists(path, &isDir) || isDir) return path;
     return vfs::ArchivePath(path);
+}
+
+// Three steps, in this order, and in one place. FromCommandLine() first: what
+// the shell hands over for a place with no path is a parsing name, and it has
+// to become a virtual path before anything tries to fold separators in it.
+// ArchiveTarget() last, because it is the only step that asks the disk.
+//
+// Every entrance has to answer the same way. While these arguments went
+// straight into a tab, "kite.exe pack.zip" put the tab on a path the
+// filesystem cannot enumerate and answered "the directory name is invalid" -
+// for the one file type Kite makes a point of opening.
+std::string App::CommandLinePath(const std::string& arg) {
+    return ArchiveTarget(path::Normalize(vfs::FromCommandLine(arg)));
 }
 
 void App::RefreshFocused() {

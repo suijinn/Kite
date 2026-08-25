@@ -516,7 +516,7 @@ void App::LoadWorkspace(const std::vector<std::string>& startPaths) {
     if (workspace_.sessions.empty()) {
         std::string start = fs_.HomeDir();
         if (standalone_ && !startPaths.empty()) {
-            start = path::Normalize(vfs::FromCommandLine(startPaths.front()));
+            start = CommandLinePath(startPaths.front());
             firstExtra = 1;
         }
         workspace_.AddSession(strings_.Format("ui.new_session", { "1" }), start);
@@ -535,7 +535,7 @@ void App::LoadWorkspace(const std::vector<std::string>& startPaths) {
     if (firstExtra < startPaths.size()) {
         if (Pane* p = workspace_.focusedPane()) {
             for (size_t i = firstExtra; i < startPaths.size(); ++i) {
-                Tab* t = p->AddTab(path::Normalize(vfs::FromCommandLine(startPaths[i])));
+                Tab* t = p->AddTab(CommandLinePath(startPaths[i]));
                 t->view = defaultView_;
             }
         }

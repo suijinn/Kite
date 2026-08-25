@@ -1945,6 +1945,68 @@ KITE_TEST(app, workspace_state_round_trips_through_the_config_files) {
     KITE_EXPECT_EQ(reopened.workspace().bookmarks[0].path, std::string("C:\\home\\beta"));
 }
 
+// An archive named on a command line has to reach the same place the listing's
+// Enter reaches. It did not: these arguments went straight into a tab, so
+// "kite.exe pack.zip" stood on a path FindFirstFile cannot enumerate and said
+// "the directory name is invalid".
+KITE_TEST(app, an_archive_named_on_the_command_line_opens_as_a_folder) {
+    test::ResetFakePlatform();
+    test::FakeFileSystem files;
+    test::PopulateStandardTree(files);
+    files.AddFile("C:\\home", "pack.zip", 900, 4000);
+    files.dirs["virtual:C:\\home\\pack.zip"];
+    files.AddFile("virtual:C:\\home\\pack.zip", "readme.md", 40, 4000);
+    files.AddDir("C:\\home\\notreally.zip");
+    test::FakeShell shell;
+    test::FakeHost host;
+
+    App app(files, shell, host);
+    app.Init({ "C:\\home\\pack.zip", "C:\\home\\notreally.zip" });
+    test::PumpUntilSettled(app);
+
+    Pane* pane = app.workspace().focusedPane();
+    KITE_EXPECT_EQ(pane->tabs.size(), size_t{ 3 });
+    KITE_EXPECT_EQ(pane->tabs[1]->path, std::string("virtual:C:\\home\\pack.zip"));
+    // The disk still answers the real question: a folder called .zip is a folder.
+    KITE_EXPECT_EQ(pane->tabs[2]->path, std::string("C:\\home\\notreally.zip"));
+}
+
+// --new-window pack.zip: the first argument is the window's own starting place
+// rather than an extra tab, and it takes the same three steps.
+KITE_TEST(app, a_standalone_window_starts_inside_an_archive_too) {
+    test::ResetFakePlatform();
+    test::FakeFileSystem files;
+    test::PopulateStandardTree(files);
+    files.AddFile("C:\\home", "pack.zip", 900, 4000);
+    files.dirs["virtual:C:\\home\\pack.zip"];
+    files.AddFile("virtual:C:\\home\\pack.zip", "readme.md", 40, 4000);
+    test::FakeShell shell;
+    test::FakeHost host;
+
+    App app(files, shell, host);
+    app.SetStandalone(true);
+    app.Init({ "C:\\home\\pack.zip" });
+    test::PumpUntilSettled(app);
+
+    KITE_EXPECT_EQ(app.workspace().focusedPane()->tabs.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(app.workspace().focusedTab()->path,
+                   std::string("virtual:C:\\home\\pack.zip"));
+}
+
+// And the second launch's arguments, which arrive as tabs in the window that
+// already exists. Same arguments, same answer - the forwarding is the only
+// thing that differs.
+KITE_TEST(app, a_forwarded_archive_opens_as_a_folder) {
+    Harness h;
+    h.files.AddFile("C:\\home", "pack.zip", 900, 4000);
+    h.files.dirs["virtual:C:\\home\\pack.zip"];
+    h.files.AddFile("virtual:C:\\home\\pack.zip", "readme.md", 40, 4000);
+
+    h.app.OpenForwardedPaths({ "C:\\home\\pack.zip" });
+    h.Settle();
+    KITE_EXPECT_EQ(h.tab()->path, std::string("virtual:C:\\home\\pack.zip"));
+}
+
 KITE_TEST(app, command_line_paths_open_as_extra_tabs) {
     test::ResetFakePlatform();
     test::FakeFileSystem files;
