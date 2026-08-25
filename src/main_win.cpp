@@ -1,16 +1,20 @@
 // Kite - Windows entry point.
 //
-// The whole startup path is: read four small ini files, create a window,
-// create a Direct2D target, ask a worker thread for the first listing. No COM,
-// no shell namespace walk, no icon cache warm-up.
+// The whole startup path is: read four small ini files and a handful of registry
+// keys, create a window, create a Direct2D target, ask a worker thread for the
+// first listing. No COM, no shell namespace walk, no icon cache warm-up - the
+// registry reads name keys, they do not load the handlers behind them.
 #include <windows.h>
 
 #include <shellapi.h>
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/app/App.h"
+#include "core/fs/VirtualPath.h"
+#include "platform/win/WinArchiveTypes.h"
 #include "platform/win/WinDirectoryWatcher.h"
 #include "platform/win/WinFileSystem.h"
 #include "platform/win/WinIconProvider.h"
@@ -66,6 +70,15 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
             // releasing the name. Opening a window of our own is worse than
             // ideal; a double-click that does nothing at all is worse still.
         }
+    }
+
+    // Before anything can list a folder, and so before any loader worker exists:
+    // which archives count as folders is a fact about this machine, read once
+    // and read-only from here on. An empty answer means the registry could not
+    // be asked at all, not that nothing opens - core keeps its own zip/cab
+    // default for that case.
+    if (std::vector<std::string> archives = kite::win::ShellFolderExtensions(); !archives.empty()) {
+        kite::vfs::SetArchiveExtensions(std::move(archives));
     }
 
     kite::win::WinFileSystem filesystem;

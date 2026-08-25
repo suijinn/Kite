@@ -1,5 +1,7 @@
 #include "core/fs/VirtualPath.h"
 
+#include <utility>
+
 #include "core/base/PathUtil.h"
 
 namespace kite::vfs {
@@ -8,10 +10,24 @@ namespace {
 // The prefix minus its terminating NUL.
 constexpr size_t kPrefixLength = sizeof(kPrefix) - 1;
 
-// Only what the shell opens as a folder without anyone installing anything.
-// A .7z or .rar reaches the context menu through an extractor, but never the
-// namespace, so listing it here would name a place that cannot be enumerated.
-constexpr const char* kArchiveExtensions[] = { "zip", "cab" };
+// Which extensions the shell walks into is not a rule - it is a fact about the
+// machine Kite happens to be running on. Windows 11 browses tar, gz, 7z and rar
+// through the same namespace that has always taken zip; Windows 10 takes
+// neither, and installing an extractor moves .7z back out of the namespace on
+// either. Naming one here that the shell cannot open would name a place with
+// nobody to enumerate it: the tab opens empty, which is worse than handing the
+// file to the shell in the first place.
+//
+// So the list arrives from outside (SetArchiveExtensions), and what is written
+// here is only the answer for when nobody said: the two the shell has opened as
+// folders since Windows XP, which is also what the tests want to see.
+//
+// Written once at start-up, before any loader worker exists; read from the UI
+// thread and those workers alike afterwards.
+std::vector<std::string>& ArchiveExtensions() {
+    static std::vector<std::string> extensions = { "zip", "cab" };
+    return extensions;
+}
 
 // The path without the prefix, and without a trailing separator - the spelling
 // the shell itself uses for the same place.
@@ -30,10 +46,15 @@ bool IsVirtual(std::string_view p) {
 bool IsWellKnown(std::string_view p) { return LabelKey(p) != nullptr; }
 
 bool IsArchiveExtension(std::string_view ext) {
-    for (const char* known : kArchiveExtensions) {
+    if (ext.empty()) return false;
+    for (const std::string& known : ArchiveExtensions()) {
         if (ext == known) return true;
     }
     return false;
+}
+
+void SetArchiveExtensions(std::vector<std::string> extensions) {
+    ArchiveExtensions() = std::move(extensions);
 }
 
 bool IsArchiveName(std::string_view p) { return IsArchiveExtension(path::Extension(p)); }

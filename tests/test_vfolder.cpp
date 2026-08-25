@@ -1,3 +1,7 @@
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "TestFramework.h"
 #include "core/fs/FileSystem.h"
 #include "core/base/PathUtil.h"
@@ -81,16 +85,54 @@ KITE_TEST(vfolder, entry_path_prefers_the_address_it_was_given) {
     KITE_EXPECT_EQ(fs::EntryPath(vfs::kComputer, drive), std::string("C:\\"));
 }
 
+// The list is process-wide and set once at start-up, so a test that changes it
+// has to put it back - including on the way out of a failed assertion, which
+// throws past the end of the body.
+namespace {
+struct ArchiveExtensions {
+    explicit ArchiveExtensions(std::vector<std::string> extensions) {
+        vfs::SetArchiveExtensions(std::move(extensions));
+    }
+    ~ArchiveExtensions() { vfs::SetArchiveExtensions({ "zip", "cab" }); }
+};
+}  // namespace
+
 KITE_TEST(vfolder, an_archive_is_named_by_its_extension_alone) {
     KITE_EXPECT(vfs::IsArchiveName("C:\\a\\pack.zip"));
     KITE_EXPECT(vfs::IsArchiveName("driver.CAB"));  // Extension() answers in lower case
-    KITE_EXPECT_FALSE(vfs::IsArchiveName("C:\\a\\pack.7z"));
     KITE_EXPECT_FALSE(vfs::IsArchiveName("C:\\a\\notes.txt"));
     KITE_EXPECT_FALSE(vfs::IsArchiveName("C:\\a"));
-    // Only what the shell opens as a folder on a stock Windows. A .7z reaches
-    // the context menu through an extractor but never the namespace, so it
-    // would name a place with nothing to enumerate it.
+    KITE_EXPECT_FALSE(vfs::IsArchiveExtension(""));
+    // Nobody has said what this machine opens, so the answer is the pair every
+    // Windows has opened as a folder since XP - and nothing else. Kite is not
+    // guessing that an extractor is installed.
     KITE_EXPECT_FALSE(vfs::IsArchiveExtension("rar"));
+    KITE_EXPECT_FALSE(vfs::IsArchiveExtension("gz"));
+}
+
+KITE_TEST(vfolder, the_platform_says_which_archives_this_machine_opens) {
+    // What Windows 11 answers: tar and friends walk into the same namespace
+    // that has always taken zip. Windows 10 answers with neither, and there the
+    // same file goes to the shell instead - which is the fallback, not a bug.
+    const ArchiveExtensions installed({ "zip", "cab", "tar", "tgz", "gz", "7z" });
+
+    KITE_EXPECT(vfs::IsArchiveName("C:\\a\\pack.7z"));
+    KITE_EXPECT(vfs::IsArchiveName("C:\\a\\src.tar"));
+    // The point of the whole exercise: ".tar.gz" needs no rule of its own.
+    // Extension() answers "gz", and the handler behind .gz unpacks the tar too.
+    KITE_EXPECT(vfs::IsArchiveName("C:\\a\\src.tar.gz"));
+    KITE_EXPECT(vfs::IsArchiveName("C:\\a\\src.TAR.GZ"));
+    KITE_EXPECT(vfs::IsArchiveName("C:\\a\\src.tgz"));
+    // Still no: it was not in what the platform reported.
+    KITE_EXPECT_FALSE(vfs::IsArchiveName("C:\\a\\pack.rar"));
+
+    // And the seam lands on the outer name, not on the ".tar" in the middle of
+    // it - the walk asks about whole components, so "src.tar.gz" is one.
+    const std::string tgz = vfs::ArchivePath("C:\\a\\src.tar.gz");
+    KITE_EXPECT_EQ(vfs::ArchiveFileOf(tgz + "\\src\\notes.txt"),
+                   std::string("C:\\a\\src.tar.gz"));
+    KITE_EXPECT_EQ(vfs::ParentOf(tgz), std::string("C:\\a"));
+    KITE_EXPECT_EQ(vfs::ParentOf(tgz + "\\src"), tgz);
 }
 
 KITE_TEST(vfolder, opening_an_archive_puts_it_in_the_shell_namespace) {

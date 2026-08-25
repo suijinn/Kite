@@ -47,7 +47,12 @@ shellhost::FolderResponse EnumerateShellFolder(const std::string& parsingName);
 /// @note 取り出し先は `%TEMP%` の下に 1 回ごとに作る新しいフォルダ。**消さない** ─
 ///       開いたアプリがいつ閉じるか分からないうえ、エクスプローラーの同じ操作も
 ///       %TEMP% に残していく
-/// @note 出来上がるのは**写し**。編集しても書庫には戻らない
+/// @note 出来上がるのは**写し**。編集しても書庫には戻らないので、**読み取り専用属性を
+///       立ててから返す** ─ Kite は開いたときにその旨を言うが、ステータス行は次の操作で
+///       消えるので、`Ctrl+S` に届くころには画面のどこにも残っていない。**黙って保存
+///       できる写しは、まさにその形で編集が失われる**（ディスク上のそのファイルは
+///       二度と読まれない）。属性を立てられなくても失敗にはしない ─ 属性 1 つのために
+///       ファイルを開かないほうが悪い
 shellhost::ExtractResponse ExtractShellItem(const std::string& container,
                                             const std::string& parsingName);
 

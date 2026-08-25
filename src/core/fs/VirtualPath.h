@@ -13,6 +13,7 @@
 
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace kite::vfs {
 
@@ -52,11 +53,25 @@ const char* LabelKey(std::string_view p);
 
 /// @brief 書庫（フォルダとして開ける圧縮ファイル）の拡張子かを判定する。
 /// @param[in] ext 先頭のドットを含まない拡張子。小文字で渡すこと
-/// @return シェルがフォルダとして開ける書庫の拡張子なら true
-/// @note 並んでいるのは **OS が最初からフォルダとして開ける**ものだけ。7z や rar は
-///       展開ソフトを入れれば右クリックのメニューには載るが、シェル名前空間には
-///       現れないので、ここに足しても開く先が無い
+/// @return この環境のシェルがフォルダとして開ける書庫の拡張子なら true
+/// @note 答えるのは **その OS が実際に開けるもの**だけ。開けない拡張子をここで
+///       真にすると、開いた先に列挙する者が居らず「開いたのに空」になる ─
+///       だから一覧は決め打ちではなく SetArchiveExtensions() で渡される
+/// @note 二重拡張子は末尾だけで足りる。`path::Extension()` が返すのは `gz` で、
+///       それを開けるシェルは中の tar もそのまま展開して見せる
 bool IsArchiveExtension(std::string_view ext);
+
+/// @brief この環境でフォルダとして開ける拡張子の一覧を差し替える。
+/// @param[in] extensions 先頭のドットを含まない拡張子。小文字で渡すこと
+/// @note **どれが開けるかは OS と、その利用者の関連付け次第**（Windows 11 は tar・
+///       gz・7z・rar まで開けるが、Windows 10 は zip と cab だけ。7-Zip を入れて
+///       関連付ければ 7z はシェル名前空間から外れる）。core が持てるのは規則
+///       だけなので、実際に開ける一覧はプラットフォーム層が起動時に渡す
+/// @note 既定は zip と cab ─ **Windows XP 以降どの版でも開ける 2 つ**で、渡されな
+///       かったとき（テスト、一覧を訊けなかった環境）の答えになる
+/// @note **起動時に 1 回だけ呼ぶこと。** 列挙のワーカーからも UI スレッドからも
+///       読まれるので、走り始めた後に書き換えてはならない
+void SetArchiveExtensions(std::vector<std::string> extensions);
 
 /// @brief パスの末尾が書庫を名指しているかを判定する。
 /// @param[in] p 対象のパス
