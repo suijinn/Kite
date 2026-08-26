@@ -22,6 +22,10 @@ namespace kite::test {
 std::map<std::string, std::string>& FakeFiles();
 uint64_t& FakeClockMs();
 
+// 壁時計。ファイルの時刻と引き算できる値なので、単調増加の FakeClockMs とは別物。
+// 「どれだけ前に更新されたか」を検査するテストはこれを動かす。
+int64_t& FakeUnixTime();
+
 // Paths at or under this prefix refuse to be written. Empty means everything is
 // writable, which is what ResetFakePlatform() puts it back to.
 std::string& FakeReadOnlyPrefix();

@@ -50,13 +50,15 @@ bool AppUi::HandleListClick(const Region& region, const MouseEvent& e) {
     }
 
     const int entry = tab->visible[index];
-    if (entry == Tab::kParentRow) {
+    if (entry < 0) {
+        // 「..」と塊の見出し ─ どちらも選べる実体を持たない。見出しは自分の当たり
+        // 判定を持つので普通は来ないが、前のフレームの行を押していることがある。
         // ".." cannot be marked, so no modifier adds anything here. An unmodified
         // click still drops the selection the way clicking any other row does:
         // otherwise the menu, or a drag started here, would act on files the
         // pointer has long since left.
         if ((e.mods & (kModCtrl | kModShift)) == 0) tab->ClearMarks();
-        tab->cursor = index;
+        tab->cursor = tab->SkipGroupRows(index, 1);
         tab->ResetAnchor();
         app_.EnsureCursorVisible();
         app_.host().Invalidate();
@@ -161,7 +163,9 @@ void AppUi::UpdateMarquee(float x, float y) {
         tab->MarkRange(firstRow, lastRow, true);
         // The cursor follows the moving end, so Shift+arrow afterwards carries
         // on from where the pointer stopped instead of jumping back.
-        tab->cursor = std::clamp(static_cast<int>(std::floor(contentY / rowH)), 0, rows - 1);
+        const int under = std::clamp(static_cast<int>(std::floor(contentY / rowH)), 0, rows - 1);
+        // 見出しの上には止まらない。掃いている向きへ 1 つ越える。
+        tab->cursor = tab->SkipGroupRows(under, contentY >= marqueeAnchorY_ ? 1 : -1);
         tab->ResetAnchor();
     }
 
@@ -293,6 +297,40 @@ bool AppUi::ResolveSessionDrop(float x, float y, int* outIndex, RectF* outMarker
     return false;
 }
 
+// 掴んだ見出しがどの位置を求めているか。数えるのは名前以外の列だけで、名前の列に
+// 触れても何も提案しない ─ そこは動かせない席。
+bool AppUi::ResolveColumnDrop(float x, float y, int* outIndex, RectF* outMarker) const {
+    for (const Region& candidate : regions_) {
+        if (candidate.kind != Hit::ColumnHeader || candidate.index <= 0) continue;
+        if (!candidate.rect.contains(x, y)) continue;
+
+        const bool after = x > candidate.rect.center().x;
+        *outIndex = candidate.index + (after ? 1 : 0);
+        const float edge = after ? candidate.rect.r : candidate.rect.l;
+        *outMarker = { edge - 1.0f, candidate.rect.t, edge + 2.0f, candidate.rect.b };
+        return true;
+    }
+    return false;
+}
+
+void AppUi::FinishColumnDrag() {
+    if (dragColumnIndex_ > 0 && dropColumnIndex_ > 0) {
+        app_.MoveColumn(dragColumnIndex_, LiftedTarget(dragColumnIndex_, dropColumnIndex_));
+    }
+    CancelDrag();
+    app_.host().Invalidate();
+}
+
+// 見出しを押しただけのときの答え。列の識別子は並べ替えの基準そのものなので、
+// 表を引くだけで «その列で並べ替える» コマンドになる。
+void AppUi::SortByColumn(int index) {
+    const ColumnLayout& layout = app_.columns();
+    if (index < 0 || index >= static_cast<int>(layout.columns.size())) return;
+    static const Cmd kSortCommands[] = { Cmd::SortByName, Cmd::SortByExt, Cmd::SortBySize,
+                                         Cmd::SortByDate, Cmd::SortByAge };
+    app_.Execute(kSortCommands[static_cast<int>(layout.columns[static_cast<size_t>(index)].id)]);
+}
+
 void AppUi::FinishSessionDrag() {
     if (dragSessionIndex_ >= 0 && dropSessionIndex_ >= 0) {
         app_.MoveSession(dragSessionIndex_, LiftedTarget(dragSessionIndex_, dropSessionIndex_));
@@ -391,6 +429,10 @@ void AppUi::FinishSectionDrag() {
 void AppUi::CancelDrag() {
     drag_ = Drag::None;
     pendingUnmark_ = false;
+    dragColumnIndex_ = -1;
+    dropColumnIndex_ = -1;
+    dropColumnMarker_ = {};
+    resizeColumnIndex_ = -1;
     dragSessionIndex_ = -1;
     dropSessionIndex_ = -1;
     dropSessionMarker_ = {};
@@ -516,6 +558,17 @@ bool AppUi::OnMouse(const MouseEvent& e) {
         return true;
     }
 
+    if (drag_ == Drag::ColumnWidth && resizeColumnIndex_ > 0) {
+        if (e.type == MouseEvent::Type::Move) {
+            // 掴んでいるのは列の左端で、右端は動かない（右にある列は何も変わらない）。
+            // だから幅は差でそのまま出る ─ 線はポインタにぴったり付いてくる。
+            app_.SetColumnWidth(resizeColumnIndex_, resizeColumnRight_ - e.x);
+            return true;
+        }
+        if (e.type == MouseEvent::Type::Up) CancelDrag();
+        return true;
+    }
+
     const Region* region = Pick(e.x, e.y);
 
     if (e.type == MouseEvent::Type::Move) {
@@ -537,6 +590,10 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             drag_ = Drag::Section;
         } else if (drag_ == Drag::PendingSession && moved > kDragThreshold) {
             drag_ = Drag::Session;
+        } else if (drag_ == Drag::PendingColumn && moved > kDragThreshold) {
+            // 名前の列は動かせない。掴んだままでも並べ替えの答えは «押した» ままなので、
+            // 離せば今までどおり名前順になる。
+            if (dragColumnIndex_ > 0) drag_ = Drag::Column;
         } else if (drag_ == Drag::PendingFile && moved > kDragThreshold) {
             // Hand off to the OS. BeginFileDrag blocks until the drag ends, so
             // clear our own state first.
@@ -603,6 +660,10 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             propose(&AppUi::ResolveSessionDrop, dropSessionIndex_, dropSessionMarker_);
             return true;
         }
+        if (drag_ == Drag::Column) {
+            propose(&AppUi::ResolveColumnDrop, dropColumnIndex_, dropColumnMarker_);
+            return true;
+        }
         if (drag_ == Drag::Section) {
             propose(&AppUi::ResolveSectionDrop, dropSectionIndex_, dropSectionMarker_);
             return true;
@@ -612,9 +673,13 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             return true;
         }
 
-        const int shape = (region && region->kind == Hit::Splitter)
-                              ? (region->node->kind == SplitNode::Kind::LeftRight ? 2 : 3)
-                              : 0;
+        int shape = 0;
+        if (region && region->kind == Hit::Splitter) {
+            shape = (region->node->kind == SplitNode::Kind::LeftRight) ? 2 : 3;
+        } else if (region && region->kind == Hit::ColumnEdge) {
+            // 分割線と同じ形。掴めば横に動くもの、というのは同じ話なので。
+            shape = 2;
+        }
         if (shape != cursorShape_) {
             cursorShape_ = shape;
             app_.host().SetCursorShape(shape);
@@ -650,6 +715,17 @@ bool AppUi::OnMouse(const MouseEvent& e) {
         }
         if (drag_ == Drag::Session) {
             FinishSessionDrag();
+            return true;
+        }
+        if (drag_ == Drag::Column) {
+            FinishColumnDrag();
+            return true;
+        }
+        if (drag_ == Drag::PendingColumn) {
+            // 動かなかったので、見出しを押しただけ ─ その列で並べ替える。
+            const int index = dragColumnIndex_;
+            CancelDrag();
+            SortByColumn(index);
             return true;
         }
         if (drag_ == Drag::PendingSidebar) {
@@ -909,9 +985,52 @@ bool AppUi::OnMouse(const MouseEvent& e) {
 
         case Hit::ColumnHeader: {
             app_.FocusPane(region->pane);
-            static const Cmd kSortCommands[] = { Cmd::SortByName, Cmd::SortByExt, Cmd::SortBySize,
-                                                 Cmd::SortByDate };
-            if (region->index >= 0 && region->index < 4) app_.Execute(kSortCommands[region->index]);
+            if (e.button != 0) return true;
+            // 並べ替えるのは離したとき。押した瞬間に並べ替えると、動かすつもりで
+            // 掴んだ見出しが必ず一覧を並べ直す ─ タブのチップが押した瞬間に
+            // 切り替わってよいのは、それが取り返しのつく答えだから。
+            drag_ = Drag::PendingColumn;
+            dragColumnIndex_ = region->index;
+            dragStartX_ = e.x;
+            dragStartY_ = e.y;
+            return true;
+        }
+
+        case Hit::ColumnEdge: {
+            app_.FocusPane(region->pane);
+            if (e.button != 0) return true;
+            // 縁のダブルクリックはその列の幅を既定へ。掴む場所がそのまま «戻す»
+            // 場所でもある、というのはどの一覧でも同じ読み方で、しかも 1 回目の
+            // 押下は幅を動かしていない（動かすのはドラッグのほう）。
+            if (e.clicks >= 2) {
+                app_.ResetColumnWidths(region->index);
+                return true;
+            }
+            const RectF box = ColumnHeaderRect(region->pane, region->index);
+            if (box.empty()) return true;
+            drag_ = Drag::ColumnWidth;
+            resizeColumnIndex_ = region->index;
+            resizeColumnRight_ = box.r;
+            return true;
+        }
+
+        case Hit::GroupRow: {
+            app_.FocusPane(region->pane);
+            // 見出しはその塊そのものなので、押せば塊が丸ごと選ばれる。カーソルは
+            // 塊の先頭の項目へ ─ 見出しの上には止まらない。
+            Tab* tab = region->pane ? region->pane->activeTab() : nullptr;
+            const Tab::Group* group = tab ? tab->GroupAt(region->index) : nullptr;
+            if (!tab || !group) return true;
+            if ((e.mods & kModCtrl) == 0) tab->ClearMarks();
+            tab->MarkRange(group->firstRow + 1, group->firstRow + group->count, true);
+            tab->cursor = tab->SkipGroupRows(region->index, 1);
+            tab->ResetAnchor();
+            app_.EnsureCursorVisible();
+            app_.host().Invalidate();
+            // 右ボタンは行と同じ ─ 選んだ相手についてのメニューが、選んだ直後に出る。
+            if (e.button == 1) {
+                app_.ShowContextMenuAt(e.screenX, e.screenY, (e.mods & kModShift) != 0);
+            }
             return true;
         }
 

@@ -330,3 +330,115 @@ KITE_TEST(tab, title_is_the_last_component) {
     tab.path = "C:\\";
     KITE_EXPECT_EQ(tab.title(), std::string("C:"));
 }
+
+// --- grouping ---------------------------------------------------------------
+
+KITE_TEST(tab, grouping_inserts_headings_without_changing_the_item_count) {
+    Tab tab = MakeTab();
+    const int before = tab.ItemCount();
+
+    tab.view.grouped = true;
+    tab.Rebuild();
+
+    // Folders first, so they are their own block; the files group by initial.
+    KITE_EXPECT_EQ(static_cast<int>(tab.groups.size()), 3);
+    KITE_EXPECT_EQ(tab.ItemCount(), before);
+    KITE_EXPECT_EQ(tab.visible.size(), static_cast<size_t>(before + 3 + 1));  // +".."
+
+    KITE_EXPECT_EQ(tab.groups[0].labelKey, std::string("ui.group_folders"));
+    KITE_EXPECT_EQ(tab.groups[0].count, 2);
+    KITE_EXPECT_EQ(tab.groups[1].text, std::string("I"));
+    KITE_EXPECT_EQ(tab.groups[1].count, 2);
+    KITE_EXPECT_EQ(tab.groups[2].text, std::string("N"));
+    KITE_EXPECT_EQ(tab.groups[2].count, 1);
+}
+
+KITE_TEST(tab, a_heading_points_at_its_own_row) {
+    Tab tab = MakeTab();
+    tab.view.grouped = true;
+    tab.Rebuild();
+
+    for (const Tab::Group& group : tab.groups) {
+        // ".." shifted every heading down by one; forgetting that fix would make
+        // a heading name the last item of its block.
+        KITE_EXPECT(tab.IsGroupRow(group.firstRow));
+        KITE_EXPECT_EQ(tab.GroupAt(group.firstRow)->count, group.count);
+        KITE_EXPECT(tab.EntryAt(group.firstRow) == nullptr);
+        KITE_EXPECT(tab.EntryAt(group.firstRow + 1) != nullptr);
+    }
+}
+
+KITE_TEST(tab, the_cursor_never_lands_on_a_heading) {
+    Tab tab = MakeTab();
+    tab.view.grouped = true;
+    tab.Rebuild();
+    KITE_EXPECT_FALSE(tab.IsGroupRow(tab.cursor));
+
+    // Whichever way it is asked, the answer is a row that holds something.
+    for (int row = 0; row < static_cast<int>(tab.visible.size()); ++row) {
+        KITE_EXPECT_FALSE(tab.IsGroupRow(tab.SkipGroupRows(row, 1)));
+        KITE_EXPECT_FALSE(tab.IsGroupRow(tab.SkipGroupRows(row, -1)));
+    }
+    // Past the last heading there is always an item, so going forward from the
+    // last row of all still answers with a row.
+    const int last = static_cast<int>(tab.visible.size()) - 1;
+    KITE_EXPECT_FALSE(tab.IsGroupRow(tab.SkipGroupRows(last, 1)));
+}
+
+KITE_TEST(tab, marking_across_a_heading_marks_only_items) {
+    Tab tab = MakeTab();
+    tab.view.grouped = true;
+    tab.Rebuild();
+
+    tab.MarkRange(0, static_cast<int>(tab.visible.size()) - 1, true);
+    KITE_EXPECT_EQ(tab.MarkedCount(), tab.ItemCount());
+
+    // One block on its own: the rows after its heading and nothing else.
+    tab.ClearMarks();
+    const Tab::Group& folders = tab.groups[0];
+    tab.MarkRange(folders.firstRow, folders.firstRow + folders.count, true);
+    KITE_EXPECT_EQ(tab.MarkedCount(), folders.count);
+}
+
+KITE_TEST(tab, extending_onto_a_heading_steps_over_it) {
+    Tab tab = MakeTab();
+    tab.view.grouped = true;
+    tab.Rebuild();
+
+    // Stand on the last folder; the next row down is the files' heading.
+    const Tab::Group& folders = tab.groups[0];
+    tab.cursor = folders.firstRow + folders.count;
+    tab.ResetAnchor();
+    KITE_EXPECT(tab.IsGroupRow(tab.cursor + 1));
+
+    tab.ExtendTo(tab.cursor + 1);
+    KITE_EXPECT_FALSE(tab.IsGroupRow(tab.cursor));
+    KITE_EXPECT_EQ(tab.cursor, folders.firstRow + folders.count + 2);
+    KITE_EXPECT_EQ(tab.MarkedCount(), 2);  // the folder and the first file
+}
+
+KITE_TEST(tab, size_grouping_buckets_files_and_keeps_folders_apart) {
+    Tab tab = MakeTab();
+    tab.view.grouped = true;
+    tab.view.sort = SortKey::Size;
+    tab.Rebuild();
+
+    KITE_EXPECT_EQ(tab.groups[0].labelKey, std::string("ui.group_folders"));
+    // 120 B, 2 KB and 4 KB all sit under a megabyte, so the files are one block.
+    KITE_EXPECT_EQ(static_cast<int>(tab.groups.size()), 2);
+    KITE_EXPECT_EQ(tab.groups[1].text, std::string("< 1 MB"));
+    KITE_EXPECT_EQ(tab.groups[1].count, 3);
+}
+
+KITE_TEST(tab, turning_grouping_off_removes_every_heading) {
+    Tab tab = MakeTab();
+    tab.view.grouped = true;
+    tab.Rebuild();
+    const int rows = static_cast<int>(tab.visible.size());
+
+    tab.view.grouped = false;
+    tab.Rebuild();
+    KITE_EXPECT_EQ(static_cast<int>(tab.groups.size()), 0);
+    KITE_EXPECT_EQ(static_cast<int>(tab.visible.size()), rows - 3);
+    KITE_EXPECT_FALSE(tab.IsGroupRow(tab.cursor));
+}

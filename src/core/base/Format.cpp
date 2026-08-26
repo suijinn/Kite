@@ -23,6 +23,28 @@ std::string FormatSize(uint64_t bytes) {
     return buf;
 }
 
+AgeText FormatAge(int64_t unixSeconds, int64_t nowSeconds) {
+    if (unixSeconds <= 0) return {};
+
+    // 刻みは «その単位で 1 と言える間» まで。分を 90 分まで引っ張ると、1 時間前と
+    // 2 時間前が同じ «90 分前» の側に並ぶ。
+    const int64_t seconds = nowSeconds > unixSeconds ? nowSeconds - unixSeconds : 0;
+    constexpr int64_t kMinute = 60;
+    constexpr int64_t kHour = 60 * kMinute;
+    constexpr int64_t kDay = 24 * kHour;
+    // 月と年は «だいたい» でよい。ここが答えているのは «どれだけ前か» であって、
+    // 暦の上の何月何日かは隣の列がすでに正確に言っている。
+    constexpr int64_t kMonth = 30 * kDay;
+    constexpr int64_t kYear = 365 * kDay;
+
+    if (seconds < kMinute) return { "ui.age_now", 0 };
+    if (seconds < kHour) return { "ui.age_minutes", static_cast<int>(seconds / kMinute) };
+    if (seconds < kDay) return { "ui.age_hours", static_cast<int>(seconds / kHour) };
+    if (seconds < kMonth) return { "ui.age_days", static_cast<int>(seconds / kDay) };
+    if (seconds < kYear) return { "ui.age_months", static_cast<int>(seconds / kMonth) };
+    return { "ui.age_years", static_cast<int>(seconds / kYear) };
+}
+
 std::string FormatDateTime(int64_t unixSeconds) {
     if (unixSeconds <= 0) return {};
     const std::time_t t = static_cast<std::time_t>(unixSeconds);

@@ -2497,3 +2497,222 @@ KITE_TEST(appui, a_long_message_drops_the_volume_line_instead_of_landing_on_it) 
         }
     }
 }
+
+// --- columns ----------------------------------------------------------------
+
+namespace {
+
+// 見出しの帯の中ほどの高さ。列は帯の中でしか掴めない。
+float HeaderY(Fixture& f) {
+    return f.pane()->listArea.t - f.app.theme().headerHeight * 0.5f;
+}
+
+// その列の見出しがこのフレームで置かれた左端。見出しの文字は 4 px 内側から
+// 描くので、列そのものの縁はその手前。
+float ColumnLeft(Fixture& f, const char* key) {
+    const test::FakeRenderer::Text* label = f.TextNamed(f.app.strings().Get(key));
+    return label ? label->rect.l - 4.0f : 0.0f;
+}
+
+float WidthOf(const App& app, SortKey id) {
+    const Column* column = app.columns().Find(id);
+    return column ? column->width : 0.0f;
+}
+
+}  // namespace
+
+KITE_TEST(appui, dragging_a_column_edge_changes_that_column_width) {
+    Fixture f;
+    f.Paint();
+    const float was = WidthOf(f.app, SortKey::Date);
+    const float edge = ColumnLeft(f, "ui.modified");
+    const float y = HeaderY(f);
+
+    // 掴んでいるのは列の左端。左へ引けばその列が広がる ─ 右端は動かない。
+    f.Press(edge, y);
+    f.Drag(edge - 30.0f, y);
+    f.Release(edge - 30.0f, y);
+    f.Paint();
+
+    KITE_EXPECT_NEAR(WidthOf(f.app, SortKey::Date), was + 30.0f, 0.5f);
+    KITE_EXPECT_NEAR(ColumnLeft(f, "ui.modified"), edge - 30.0f, 0.5f);
+    // 左の列は同じ幅のまま押し出される。
+    KITE_EXPECT_NEAR(ColumnLeft(f, "ui.size"), edge - 30.0f - WidthOf(f.app, SortKey::Size), 0.5f);
+}
+
+KITE_TEST(appui, a_column_edge_asks_for_the_resize_cursor) {
+    Fixture f;
+    f.Paint();
+    f.Move(ColumnLeft(f, "ui.modified"), HeaderY(f));
+    KITE_EXPECT_EQ(f.ui.desiredCursorShape(), 2);
+
+    // 見出しの真ん中は掴む場所ではない ─ そこは並べ替えと並べ直しのもの。
+    f.Move(ColumnLeft(f, "ui.modified") + 40.0f, HeaderY(f));
+    KITE_EXPECT_EQ(f.ui.desiredCursorShape(), 0);
+}
+
+KITE_TEST(appui, a_heading_sorts_on_release_not_on_press) {
+    Fixture f;
+    f.Paint();
+    const float x = ColumnLeft(f, "ui.size") + 20.0f;
+    const float y = HeaderY(f);
+
+    f.Press(x, y);
+    KITE_EXPECT(f.tab()->view.sort == SortKey::Name);  // まだ何も起きていない
+    f.Release(x, y);
+    KITE_EXPECT(f.tab()->view.sort == SortKey::Size);
+}
+
+KITE_TEST(appui, dragging_a_heading_reorders_the_columns_without_sorting) {
+    Fixture f;
+    f.Paint();
+    const float y = HeaderY(f);
+    const float from = ColumnLeft(f, "ui.modified") + 20.0f;
+    // 拡張子の見出しの左半分＝「その手前へ」。
+    const float to = ColumnLeft(f, "ui.ext") + 2.0f;
+
+    f.Press(from, y);
+    f.Drag(to, y);
+    f.Release(to, y);
+    f.Paint();
+
+    KITE_EXPECT_EQ(f.app.columns().IndexOf(SortKey::Date), 1);
+    KITE_EXPECT_EQ(f.app.columns().IndexOf(SortKey::Ext), 2);
+    // 動かしたのであって、押したのではない。
+    KITE_EXPECT(f.tab()->view.sort == SortKey::Name);
+    // 並びは画面にも出ている ─ 更新日時が拡張子より左。
+    KITE_EXPECT(ColumnLeft(f, "ui.modified") < ColumnLeft(f, "ui.ext"));
+}
+
+KITE_TEST(appui, hiding_a_column_gives_its_width_to_the_name) {
+    Fixture f;
+    f.Paint();
+    // 名前の列の右端は、最初の列の左端そのもの。
+    const float nameRight = ColumnLeft(f, "ui.ext");
+    const float extWidth = WidthOf(f.app, SortKey::Ext);
+
+    f.app.SetColumnVisible(SortKey::Ext, false);
+    f.Paint();
+
+    KITE_EXPECT(f.TextNamed(f.app.strings().Get("ui.ext")) == nullptr);
+    // 右側の列は動かない（列は右端から積む）ので、空いた幅はそのまま名前の列へ。
+    KITE_EXPECT_NEAR(ColumnLeft(f, "ui.size"), nameRight + extWidth, 0.5f);
+}
+
+KITE_TEST(appui, group_headings_are_drawn_in_the_list) {
+    Fixture f;
+    f.Paint();
+    const std::string folders = f.app.strings().Get("ui.group_folders");
+    KITE_EXPECT(f.TextNamed(folders) == nullptr);
+
+    f.app.Execute(Cmd::ToggleGrouping);
+    f.Paint();
+
+    const test::FakeRenderer::Text* heading = f.TextNamed(folders);
+    KITE_EXPECT(heading != nullptr);
+    KITE_EXPECT(f.pane()->listArea.contains(heading->ink.l + 1.0f, heading->ink.center().y));
+}
+
+KITE_TEST(appui, clicking_a_group_heading_selects_the_whole_group) {
+    Fixture f;
+    f.app.Execute(Cmd::ToggleGrouping);
+    f.Paint();
+
+    const test::FakeRenderer::Text* heading =
+        f.TextNamed(f.app.strings().Get("ui.group_folders"));
+    KITE_EXPECT(heading != nullptr);
+    f.Press(heading->ink.l + 4.0f, heading->ink.center().y);
+
+    Tab* tab = f.tab();
+    KITE_EXPECT_EQ(tab->MarkedCount(), tab->groups[0].count);
+    // カーソルは塊の先頭の項目へ。見出しの上には止まらない。
+    KITE_EXPECT_FALSE(tab->IsGroupRow(tab->cursor));
+}
+
+KITE_TEST(appui, the_age_column_says_how_long_ago_in_words) {
+    Fixture f;
+    // 5 分前に更新されたファイルを 1 つ足して開き直す。
+    f.files.AddFile("C:\\home", "fresh.txt", 10, test::FakeUnixTime() - 5 * 60);
+    f.app.RefreshFocused();
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    const std::string expected = f.app.strings().Format("ui.age_minutes", { "5" });
+    KITE_EXPECT(f.TextNamed(expected) != nullptr);
+
+    // 列を閉じれば消える ─ 出ているのは列であって、名前に書かれた文字ではない。
+    f.app.SetColumnVisible(SortKey::Age, false);
+    f.Paint();
+    KITE_EXPECT(f.TextNamed(expected) == nullptr);
+}
+
+KITE_TEST(appui, the_age_column_sorts_the_newest_first) {
+    Fixture f;
+    f.Paint();
+
+    // 見出しを押すと経過時間順。昇順は «経過が短い» ＝ 新しいものが先で、更新日時の
+    // 昇順（古いものが先）とはちょうど逆になる。
+    const float x = ColumnLeft(f, "ui.age") + 10.0f;
+    const float y = HeaderY(f);
+    f.Press(x, y);
+    f.Release(x, y);
+
+    Tab* tab = f.tab();
+    KITE_EXPECT(tab->view.sort == SortKey::Age);
+    KITE_EXPECT_FALSE(tab->view.sortDesc);
+
+    int64_t previous = 0;
+    bool first = true;
+    for (int row = 0; row < static_cast<int>(tab->visible.size()); ++row) {
+        const fs::Entry* entry = tab->EntryAt(row);
+        if (!entry || entry->isDir()) continue;  // フォルダは先頭にまとまっている
+        if (!first) KITE_EXPECT(entry->mtime <= previous);
+        previous = entry->mtime;
+        first = false;
+    }
+}
+
+KITE_TEST(appui, double_clicking_a_column_edge_puts_that_width_back) {
+    Fixture f;
+    f.Paint();
+    const float was = WidthOf(f.app, SortKey::Date);
+    const float wasSize = WidthOf(f.app, SortKey::Size);
+
+    float edge = ColumnLeft(f, "ui.modified");
+    const float y = HeaderY(f);
+    f.Press(edge, y);
+    f.Drag(edge - 40.0f, y);
+    f.Release(edge - 40.0f, y);
+    f.Paint();
+    KITE_EXPECT_NEAR(WidthOf(f.app, SortKey::Date), was + 40.0f, 0.5f);
+
+    // 掴む場所がそのまま «戻す» 場所。1 回目の押下は幅を動かしていない。
+    edge = ColumnLeft(f, "ui.modified");
+    f.Press(edge, y);
+    f.Release(edge, y);
+    f.Press(edge, y, 0, 0, 2);
+    f.Release(edge, y);
+    f.Paint();
+
+    KITE_EXPECT_NEAR(WidthOf(f.app, SortKey::Date), was, 0.5f);
+    KITE_EXPECT_NEAR(WidthOf(f.app, SortKey::Size), wasSize, 0.5f);
+}
+
+KITE_TEST(appui, the_reset_command_puts_every_width_back) {
+    Fixture f;
+    f.Paint();
+    const float was = WidthOf(f.app, SortKey::Size);
+
+    const float edge = ColumnLeft(f, "ui.size");
+    const float y = HeaderY(f);
+    f.Press(edge, y);
+    f.Drag(edge - 50.0f, y);
+    f.Release(edge - 50.0f, y);
+    KITE_EXPECT_NEAR(WidthOf(f.app, SortKey::Size), was + 50.0f, 0.5f);
+
+    f.app.Execute(Cmd::ResetColumnWidths);
+    KITE_EXPECT_NEAR(WidthOf(f.app, SortKey::Size), was, 0.5f);
+    // 何も動かない操作を黙って済ませない ─ ステータス行がそう言う。
+    f.Paint();
+    KITE_EXPECT(f.StatusTextWith(f.app.strings().Get("ui.columns_reset")) != nullptr);
+}

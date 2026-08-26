@@ -492,11 +492,13 @@ void App::Execute(Cmd cmd) {
         case Cmd::SortByName:
         case Cmd::SortByExt:
         case Cmd::SortBySize:
-        case Cmd::SortByDate: {
+        case Cmd::SortByDate:
+        case Cmd::SortByAge: {
             if (!tab) break;
             const SortKey key = (cmd == Cmd::SortByExt)    ? SortKey::Ext
                                 : (cmd == Cmd::SortBySize) ? SortKey::Size
                                 : (cmd == Cmd::SortByDate) ? SortKey::Date
+                                : (cmd == Cmd::SortByAge)  ? SortKey::Age
                                                            : SortKey::Name;
             // Re-selecting the active column flips the direction, like Explorer.
             if (tab->view.sort == key) {
@@ -516,6 +518,13 @@ void App::Execute(Cmd cmd) {
             break;
         case Cmd::ToggleDirsFirst:
             ToggleViewFlag(tab, &ViewState::dirsFirst);
+            break;
+        case Cmd::ToggleGrouping:
+            ToggleViewFlag(tab, &ViewState::grouped);
+            break;
+        case Cmd::ResetColumnWidths:
+            // 幅だけ。並びと表示は別の操作で決めたことなので巻き添えにしない。
+            ResetColumnWidths();
             break;
         case Cmd::FontLarger:
             SetFontScale(fontScale_ + kFontScaleStep);

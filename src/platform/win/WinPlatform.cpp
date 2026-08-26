@@ -54,6 +54,19 @@ bool EnsureDirectory(const std::string& utf8Path) {
 
 uint64_t NowMs() { return ::GetTickCount64(); }
 
+int64_t NowUnixSeconds() {
+    FILETIME ft{};
+    ::GetSystemTimeAsFileTime(&ft);
+    ULARGE_INTEGER ticks{};
+    ticks.LowPart = ft.dwLowDateTime;
+    ticks.HighPart = ft.dwHighDateTime;
+    // FILETIME は 1601-01-01 起点の 100 ns 刻み。列挙が持ち帰る mtime と同じ物差しに
+    // するため、ここで Unix 秒へ直す（fs::Entry::mtime も同じ変換を通っている）。
+    constexpr uint64_t kTicksPerSecond = 10000000ull;
+    constexpr int64_t kEpochDelta = 11644473600ll;  // 1601 から 1970 までの秒数
+    return static_cast<int64_t>(ticks.QuadPart / kTicksPerSecond) - kEpochDelta;
+}
+
 std::string PreferredLanguage() {
     wchar_t buffer[LOCALE_NAME_MAX_LENGTH] = {};
     ULONG count = 0;

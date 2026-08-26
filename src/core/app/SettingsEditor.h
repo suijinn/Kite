@@ -47,8 +47,13 @@ enum class SettingId : uint8_t {
     TabBarPos,        ///< タブバーを置く場所（上＝横並び／左＝縦並び）
     NewTabPos,        ///< 新しいタブを作る位置
     OpenArchives,     ///< ZIP をフォルダとして開くか
+    ColumnExt,        ///< 拡張子の列を出すか
+    ColumnSize,       ///< サイズの列を出すか
+    ColumnDate,       ///< 更新日時の列を出すか
+    ColumnAge,        ///< 経過時間の列を出すか
     NewTabHidden,     ///< 新しいタブの既定：隠しファイルを表示するか
     NewTabDirsFirst,  ///< 新しいタブの既定：フォルダを先頭にまとめるか
+    NewTabGrouped,    ///< 新しいタブの既定：同じ値の並びを見出しでまとめるか
     /// 既定のファイルマネージャーとして登録するか。
     ///
     /// **この 1 行だけは `settings.ini` に無い。** 実体は OS 側（レジストリ）に
@@ -65,6 +70,7 @@ enum class SettingGroup : uint8_t {
     Appearance,  ///< 外観
     Tabs,        ///< タブ
     Files,       ///< ファイル
+    Columns,     ///< 一覧の列。並びと幅は見出しをドラッグして決める
     NewTab,      ///< 新しいタブの既定
     System,      ///< OS との連携。ここだけ実体が settings.ini の外にある
     Count        ///< 列挙の終端。有効な区画ではない

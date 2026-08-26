@@ -59,7 +59,7 @@ CLAUDE.md。
 
 ```
 src/
-  core/          OS 呼び出しを行わない。例外は core/base/Platform.h の 5 つの自由関数のみ
+  core/          OS 呼び出しを行わない。例外は core/base/Platform.h の 6 つの自由関数のみ
     base/          UTF-8 / パス / INI / 書式 / 自然順ソート / Platform.h
     fs/            IFileSystem 抽象、非同期 DirectoryLoader / FileOpQueue、
                    DirectoryWatcher、VirtualPath
@@ -112,7 +112,7 @@ CMake ターゲットは 3 つ:
 | シェル／クリップボード | `core/app/Host.h` の `IShellIntegration` | `WinShell` |
 | アイコン | `core/app/IconProvider.h` の `IIconProvider` | `WinIconProvider` |
 | ウィンドウ機能 | `core/app/Host.h` の `IHost` | `WinWindow` |
-| ファイル入出力・時刻・ロケール | `core/base/Platform.h`（5 つの自由関数） | `WinPlatform` |
+| ファイル入出力・時刻・ロケール | `core/base/Platform.h`（6 つの自由関数） | `WinPlatform` |
 
 残る OS 依存は `path::kSep` が `'\\'` 固定なことくらい（ROADMAP P5-1）。
 
@@ -321,7 +321,7 @@ configure の時点で止める。開発者プロンプト以外からは `build
 
 テストは **25 スイート・686 ケース**、判定は 100 行の自作ハーネス（`tests/TestFramework.h`）。
 OS 境界のフェイクは `tests/Fakes.h` に揃えてあり、`FakePlatform.cpp` が `Platform.h` の
-5 つをメモリ上で実装するので、実ディスクにも実時計にも触れずに `App` を端から端まで
+6 つをメモリ上で実装するので、実ディスクにも実時計にも触れずに `App` を端から端まで
 動かせる。`FakeRenderer` は塗った矩形・色・文字の外接矩形を覚えるので、**ウィンドウ無しで
 1 フレーム描いて「どこに何色を塗ったか」「2 つの文字列が重なっていないか」を検査できる。**
 

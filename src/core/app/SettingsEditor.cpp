@@ -69,8 +69,21 @@ const Info kSettings[] = {
     { SettingId::TabBarPos, SettingGroup::Tabs, "settings.tab_bar_pos", 2, kTabBarPos, nullptr },
     { SettingId::NewTabPos, SettingGroup::Tabs, "settings.new_tab_pos", 2, kNewTabPos, nullptr },
     { SettingId::OpenArchives, SettingGroup::Files, "settings.open_archives", 2, kOnOff, nullptr },
+    // 幅と並びはこの画面に持ち込まない ─ 見出しをつまんで決めるものなので、
+    // 数字の列を並べても «その場で目で確かめられる» にならない（設定画面に
+    // 出すものの基準そのまま）。ここが答えるのは出すか出さないかだけ。
+    //
+    // **ラベルは列の見出しそのもの**（ColumnLabelKey と同じキー）。区画が「列」で
+    // ある以上「拡張子の列」は «の列» が二度言っているし、行と見出しの綴りが違うと
+    // どの列の話なのかを読み替えることになる。
+    { SettingId::ColumnExt, SettingGroup::Columns, "ui.ext", 2, kOnOff, nullptr },
+    { SettingId::ColumnSize, SettingGroup::Columns, "ui.size", 2, kOnOff, nullptr },
+    { SettingId::ColumnDate, SettingGroup::Columns, "ui.modified", 2, kOnOff, nullptr },
+    { SettingId::ColumnAge, SettingGroup::Columns, "ui.age", 2, kOnOff, nullptr },
     { SettingId::NewTabHidden, SettingGroup::NewTab, "settings.show_hidden", 2, kOnOff, nullptr },
     { SettingId::NewTabDirsFirst, SettingGroup::NewTab, "settings.dirs_first", 2, kOnOff, nullptr },
+    { SettingId::NewTabGrouped, SettingGroup::NewTab, "settings.group_rows", 2, kOnOff,
+      nullptr },
     { SettingId::DefaultManager, SettingGroup::System, "settings.default_manager", 2, kNoYes,
       nullptr },
 };
@@ -104,6 +117,7 @@ const char* SettingGroupLabelKey(SettingGroup group) {
         case SettingGroup::Appearance: return "settings.group.appearance";
         case SettingGroup::Tabs: return "settings.group.tabs";
         case SettingGroup::Files: return "settings.group.files";
+        case SettingGroup::Columns: return "settings.group.columns";
         case SettingGroup::NewTab: return "settings.group.new_tab";
         case SettingGroup::System: return "settings.group.system";
         default: return "settings.group.appearance";

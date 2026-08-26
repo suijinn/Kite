@@ -2710,3 +2710,71 @@ KITE_TEST(app, the_keys_file_header_names_the_chords_that_are_actually_bound) {
     // 既定が動いた後も嘘にならないこと ─ 書き写した文字列が残っていれば、ここで出る。
     KITE_EXPECT(written.find("Ctrl+F1") == std::string::npos);
 }
+
+// --- columns ----------------------------------------------------------------
+
+KITE_TEST(app, the_column_layout_survives_a_save_and_a_reload) {
+    Harness h;
+    h.app.MoveColumn(h.app.columns().IndexOf(SortKey::Date), 1);
+    h.app.SetColumnWidth(h.app.columns().IndexOf(SortKey::Size), 150.0f);
+    h.app.SetColumnVisible(SortKey::Ext, false);
+    KITE_EXPECT(h.app.SaveAll());
+
+    h.app.Execute(Cmd::ReloadConfig);
+    const ColumnLayout& layout = h.app.columns();
+    KITE_EXPECT_EQ(layout.IndexOf(SortKey::Date), 1);
+    KITE_EXPECT_NEAR(layout.Find(SortKey::Size)->width, 150.0f, 0.5f);
+    KITE_EXPECT_FALSE(layout.Find(SortKey::Ext)->visible);
+}
+
+KITE_TEST(app, a_settings_file_naming_one_column_still_shows_all_of_them) {
+    // Same rule the sidebar sections follow: a hand-edited file, or one written
+    // by an older build, will not name every column. Dropping the rest would
+    // take them off the screen with no way back short of editing the file again.
+    test::ResetFakePlatform();
+    test::FakeFiles()["C:\\home\\config\\settings.ini"] =
+        "[columns]\ncolumn=date:90:0\ncolumn=nonsense:10:1\n";
+
+    test::FakeFileSystem files;
+    test::PopulateStandardTree(files);
+    test::FakeShell shell;
+    test::FakeHost host;
+    App app(files, shell, host);
+    app.Init({});
+    test::PumpUntilSettled(app);
+
+    const ColumnLayout& layout = app.columns();
+    KITE_EXPECT_EQ(static_cast<int>(layout.columns.size()), kColumnCount);
+    KITE_EXPECT_EQ(layout.IndexOf(SortKey::Name), 0);
+    KITE_EXPECT_EQ(layout.IndexOf(SortKey::Date), 1);
+    KITE_EXPECT_FALSE(layout.Find(SortKey::Date)->visible);
+    // The ones the file never mentioned come back in the built-in order.
+    KITE_EXPECT_EQ(layout.IndexOf(SortKey::Ext), 2);
+    KITE_EXPECT_EQ(layout.IndexOf(SortKey::Size), 3);
+}
+
+KITE_TEST(app, column_widths_follow_the_text_size) {
+    Harness h;
+    const float was = h.app.columns().Find(SortKey::Date)->width;
+
+    h.app.Execute(Cmd::FontLarger);
+    const float bigger = h.app.columns().Find(SortKey::Date)->width;
+    KITE_EXPECT(bigger > was);
+
+    // 覚えているのは倍率を掛ける前の幅なので、戻せば元の値に戻る。
+    h.app.Execute(Cmd::FontReset);
+    KITE_EXPECT_NEAR(h.app.columns().Find(SortKey::Date)->width, was, 0.01f);
+}
+
+KITE_TEST(app, the_reset_width_chord_reaches_the_command) {
+    Harness h;
+    const int date = h.app.columns().IndexOf(SortKey::Date);
+    const float was = h.app.columns().Find(SortKey::Date)->width;
+    h.app.SetColumnWidth(date, was + 40.0f);
+
+    // 既定の和音を書き写さない ─ 動かした日に「キーが違う」で落ちるテストになる。
+    const std::vector<Chord> chords = KeyMap::DefaultChordsFor(Cmd::ResetColumnWidths);
+    KITE_EXPECT_EQ(chords.size(), size_t{ 1 });
+    KITE_EXPECT(h.app.OnKey(chords.front()));
+    KITE_EXPECT_NEAR(h.app.columns().Find(SortKey::Date)->width, was, 0.5f);
+}

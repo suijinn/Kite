@@ -114,6 +114,8 @@ private:
         TabAdd,
         Crumb,
         ColumnHeader,
+        ColumnEdge,  ///< 列の左端の縁。掴むと幅が変わる
+        GroupRow,    ///< 塊の見出し。押すとその塊が丸ごと選ばれる
         ListRow,
         ListBackground,
         Splitter,
@@ -148,6 +150,9 @@ private:
         Section,         // reordering the sidebar sections themselves
         PendingSession,  // pressed on a session chip, not yet moved far enough
         Session,         // reordering the session chips
+        PendingColumn,   // pressed on a column heading; a click here sorts
+        Column,          // reordering the columns
+        ColumnWidth,     // dragging a column edge
     };
 
     struct Region {
@@ -320,6 +325,35 @@ private:
 
     bool ResolveTabDrop(float x, float y, Pane** outPane, int* outIndex) const;
     void FinishTabDrag();
+    /// 1 ペインに置いた列 1 つ。見出しを描くときも行を描くときも同じ位置を使う。
+    struct PlacedColumn {
+        SortKey id = SortKey::Name;  ///< どの列か
+        int index = 0;               ///< App::columns() への添字
+        float l = 0.0f;              ///< 左端
+        float r = 0.0f;              ///< 右端
+    };
+
+    /// @brief 列を並べ、入らない列を落とす。
+    /// @param[in] area 一覧の矩形
+    /// @param[out] outName 名前の列の右端
+    /// @return 名前以外の列を左から順に並べたもの
+    /// @note **落とすのは右端から。** どれを右へ置いたかは利用者が決めたことなので、
+    ///       «名前から遠いほう» の答えはその並びがすでに言っている
+    std::vector<PlacedColumn> LayoutColumns(const RectF& area, float* outName) const;
+
+    /// @brief 見出しの矩形を前フレームの当たり判定から引く。
+    /// @param[in] pane 対象のペイン
+    /// @param[in] index App::columns() への添字
+    /// @return 見出しの矩形。無ければ空
+    RectF ColumnHeaderRect(const Pane* pane, int index) const;
+
+    bool ResolveColumnDrop(float x, float y, int* outIndex, RectF* outMarker) const;
+    void FinishColumnDrag();
+
+    /// @brief その列で並べ替える。
+    /// @param[in] index App::columns() への添字。範囲外なら何もしない
+    /// @note 列の識別子は並べ替えの基準そのものなので、表を 1 つ引くだけで済む
+    void SortByColumn(int index);
     bool ResolveSessionDrop(float x, float y, int* outIndex, RectF* outMarker) const;
     void FinishSessionDrag();
     bool ResolveSidebarDrop(float x, float y, int* outIndex, RectF* outMarker) const;
@@ -404,6 +438,16 @@ private:
     int dragSessionIndex_ = -1;
     int dropSessionIndex_ = -1;
     RectF dropSessionMarker_{};
+
+    // 掴んでいる見出しと、離したときに入る位置。押しただけなら並べ替えではなく
+    // 並べ替えの基準の切り替えなので、どちらなのかは離すまで決まらない。
+    int dragColumnIndex_ = -1;
+    int dropColumnIndex_ = -1;
+    RectF dropColumnMarker_{};
+    // 幅を変えている列と、その列の右端。右端はドラッグの間動かない（右の列は
+    // 何も変わらない）ので、幅は «右端 - ポインタ» で毎フレーム出せる。
+    int resizeColumnIndex_ = -1;
+    float resizeColumnRight_ = 0.0f;
 
     Pane* dragTabPane_ = nullptr;
     int dragTabIndex_ = -1;

@@ -136,8 +136,11 @@ enum class CmdGroup : uint8_t {
     X(SortByExt,          "view.sort_ext",           "cmd.sort_ext",           View)             \
     X(SortBySize,         "view.sort_size",          "cmd.sort_size",          View)             \
     X(SortByDate,         "view.sort_date",          "cmd.sort_date",          View)             \
+    X(SortByAge,          "view.sort_age",           "cmd.sort_age",           View)             \
     X(ToggleSortOrder,    "view.toggle_sort_order",  "cmd.toggle_sort_order",  View)             \
     X(ToggleDirsFirst,    "view.toggle_dirs_first",  "cmd.toggle_dirs_first",  View)             \
+    X(ToggleGrouping,     "view.toggle_group",       "cmd.toggle_group",       View)             \
+    X(ResetColumnWidths,  "view.reset_column_widths","cmd.reset_column_widths",View)             \
     X(FontLarger,         "view.font_larger",        "cmd.font_larger",        View)             \
     X(FontSmaller,        "view.font_smaller",       "cmd.font_smaller",       View)             \
     X(FontReset,          "view.font_reset",         "cmd.font_reset",         View)             \
