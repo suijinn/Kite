@@ -40,7 +40,8 @@ enum class TabBarPosition : uint8_t {
 enum class SettingId : uint8_t {
     Theme,            ///< 明暗テーマ
     Language,         ///< 表示言語
-    FontScale,        ///< 文字の大きさ
+    FontSize,         ///< 既定の文字サイズ（DIP）。倍率 100 % のときの大きさ
+    FontScale,        ///< 文字の大きさ（既定サイズに対する倍率）
     Sidebar,          ///< サイドバーを表示するか
     ShellIcons,       ///< シェルの実アイコンを使うか
     TabBarPos,        ///< タブバーを置く場所（上＝横並び／左＝縦並び）
@@ -111,6 +112,19 @@ int SettingOptionCount(SettingId id);
 /// @param[in] index 選択肢の添字。範囲外はクランプする
 /// @return 表示文字列
 std::string SettingOptionText(const Strings& strings, SettingId id, int index);
+
+/// @brief 既定の文字サイズを選択肢の添字に直す。
+/// @param[in] size 文字サイズ（DIP）
+/// @return 最も近い選択肢の添字。範囲外は端に丸める
+int FontSizeIndex(float size);
+
+/// @brief 選択肢の添字を既定の文字サイズに直す。
+/// @param[in] index 選択肢の添字。範囲外はクランプする
+/// @return 文字サイズ（DIP）
+/// @note **この 2 つが `[ui] font_size` の取りうる値の正**。App は読み込んだ値を
+///       `FontSizeValue(FontSizeIndex(v))` で丸めるので、行が画面に出せない
+///       大きさが動いていることはない
+float FontSizeValue(int index);
 
 /// @brief 文字サイズの倍率を選択肢の添字に直す。
 /// @param[in] scale 倍率
