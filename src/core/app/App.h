@@ -414,8 +414,12 @@ public:
     void ToggleSidebarSection(SidebarSection section);
 
     /// @brief 文字サイズの倍率を返す。
-    /// @return 倍率。1.0 が設定ファイルどおりの大きさ
+    /// @return 倍率。1.0 が既定の文字サイズそのもの
     float fontScale() const { return fontScale_; }
+
+    /// @brief 既定の文字サイズを返す。
+    /// @return 文字サイズ（DIP）。`Ctrl+0` が戻る先で、`Ctrl++` の倍率が掛かる相手
+    float fontSize() const { return fontSize_; }
 
     /// @brief サイドバーの項目を同じ区画の中で並べ替える。
     /// @param[in] section 対象の区画。SidebarSection::Count なら何もしない
@@ -969,6 +973,10 @@ private:
                                                      SidebarSection::Drives };
     bool sidebarCollapsed_[static_cast<size_t>(SidebarSection::Count)] = {};
     float fontScale_ = 1.0f;
+    // 倍率 100 % のときの文字の大きさ。器（行・バー・サイドバー幅）は
+    // Theme::kDefaultFontSize の文字が入る前提の値なので、ここを動かすと
+    // ApplyTheme() がその比ぶんだけ器ごと伸ばす。
+    float fontSize_ = kDefaultFontSize;
     bool windowActive_ = true;
     bool darkTheme_ = true;
     // 「切り取り」でクリップボードに入れた項目。エクスプローラーと同じく、その行を

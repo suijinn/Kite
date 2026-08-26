@@ -150,6 +150,11 @@ void App::LoadConfig() {
     if (plat::ReadTextFile(ConfigPath("settings.ini"), text)) settings_.Parse(text);
 
     darkTheme_ = settings_.GetStr("ui", "theme", "dark") != "light";
+    // 設定画面が出せる大きさに丸める。ini に 13.5 と書かれていても行は 13 と言う
+    // しかないので、そこで食い違わせない ─ 値の正は FontSizeValue() の側
+    // （SettingsEditor.h の注記）。
+    fontSize_ = FontSizeValue(FontSizeIndex(settings_.GetFloat("ui", "font_size",
+                                                              kDefaultFontSize)));
     fontScale_ = std::clamp(settings_.GetFloat("ui", "font_scale", 1.0f), kFontScaleMin,
                             kFontScaleMax);
     ApplyTheme();
@@ -211,6 +216,9 @@ void App::LoadConfig() {
     // And these hold labels and chords from the language and keymap being replaced
     // right now - a palette left open would be offering the previous ones.
     commandPalette_.Close();
+    // 同じ理由で設定画面も畳む ─ 行が出しているのは、たった今差し替わった値の
+    // 「前の」姿。開いたまま残すと、画面の言う大きさと実際の大きさが食い違う。
+    settingsEditor_.Close();
 
     workspace_.bookmarks.clear();
     Ini bookmarksIni;
@@ -248,10 +256,15 @@ void App::LoadLanguage() {
 // built-in defaults, what settings.ini says about them, then the text size the
 // user asked for on top. Anything that skips a step - the theme toggle used to -
 // silently drops whichever of the three came later.
+//
+// 3 段目が 2 つの値の積なのは、どちらも «器ごと» 効くから。既定のサイズは
+// kDefaultFontSize に対する比として、倍率はその上に掛かる ─ Ctrl+0 は倍率だけを
+// 1.0 に戻すので、戻る先は設定画面で選んだ大きさになる。Scale() を 2 回呼ばない
+// のは、高さを整数 DIP に丸める処理が 2 回入って器だけがずれるため。
 void App::ApplyTheme() {
     theme_ = darkTheme_ ? Theme::Dark() : Theme::Light();
     theme_.ApplyIni(settings_);
-    theme_.Scale(fontScale_);
+    theme_.Scale(fontSize_ / kDefaultFontSize * fontScale_);
 }
 
 void App::SetFontScale(float scale) {
@@ -336,6 +349,7 @@ SettingsValues App::CollectSettings() const {
     SettingsValues v;
     v.Set(SettingId::Theme, darkTheme_ ? 0 : 1);
     v.Set(SettingId::Language, LanguageIndex(language_));
+    v.Set(SettingId::FontSize, FontSizeIndex(fontSize_));
     v.Set(SettingId::FontScale, FontScaleIndex(fontScale_));
     v.Set(SettingId::Sidebar, sidebarVisible_ ? 1 : 0);
     v.Set(SettingId::ShellIcons, shellIcons_ ? 1 : 0);
@@ -364,6 +378,12 @@ void App::ApplySetting(SettingId id, const SettingsValues& values) {
         case SettingId::Language:
             language_ = LanguageCode(index);
             LoadLanguage();
+            break;
+        case SettingId::FontSize:
+            // 倍率は据え置く。ここで動かすのは «100 % がどの大きさか» のほうなので、
+            // Ctrl++ で拡大したまま基準を変えた人の拡大を勝手に捨てない。
+            fontSize_ = FontSizeValue(index);
+            ApplyTheme();
             break;
         case SettingId::FontScale:
             // SetFontScale はステータス行に倍率を出すが、ここでは画面に値が出て
@@ -450,6 +470,7 @@ bool App::SaveSettings() {
     for (SidebarSection section : sidebarSections_) {
         settings_.Append("sidebar", "section", SidebarSectionName(section));
     }
+    settings_.SetFloat("ui", "font_size", fontSize_);
     settings_.SetFloat("ui", "font_scale", fontScale_);
     settings_.SetBool("ui", "shell_icons", shellIcons_);
     settings_.SetBool("ui", "open_archives", openArchives_);

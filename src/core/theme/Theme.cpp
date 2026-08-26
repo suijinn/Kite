@@ -159,7 +159,7 @@ void Theme::ApplyIni(const Ini& ini) {
     ReadColor(ini, sec, "overlay_bg", &overlayBg);
 
     rowHeight = ini.GetFloat("ui", "row_height", rowHeight);
-    fontSize = ini.GetFloat("ui", "font_size", fontSize);
+    // font_size はここで読まない ─ 読む場所は App だけ（Theme::ApplyIni の注記）。
     uiScale = ini.GetFloat("ui", "scale", uiScale);
     sidebarWidth = ini.GetFloat("ui", "sidebar_width", sidebarWidth);
     tabBarWidth = ini.GetFloat("ui", "tab_bar_width", tabBarWidth);

@@ -10,6 +10,14 @@
 
 namespace kite {
 
+/// @brief 基準フォントサイズの既定値（DIP）。
+///
+/// **器（行・各バー・サイドバー幅）はこの大きさの文字が入る前提で書かれている。**
+/// 設定画面の「既定の文字サイズ」も `Ctrl++` の倍率も、最後はこの値に対する比として
+/// Scale() に畳んでから掛かる（App::ApplyTheme）─ 出どころを 2 つにすると、
+/// 100 % が 100 % でなくなる。
+inline constexpr float kDefaultFontSize = 13.0f;
+
 /// @brief 画面全体の配色と寸法。
 struct Theme {
     Color windowBg;   ///< ウィンドウ背景
@@ -71,7 +79,7 @@ struct Theme {
     float statusBarHeight = 22.0f;   ///< ステータスバーの高さ（DIP）
     float sidebarWidth = 190.0f;     ///< サイドバーの幅（DIP）
     float splitterWidth = 4.0f;      ///< ペイン分割線の幅（DIP）
-    float fontSize = 13.0f;          ///< 基準フォントサイズ（DIP）
+    float fontSize = kDefaultFontSize;  ///< 基準フォントサイズ（DIP）
     float uiScale = 1.0f;            ///< フォントサイズ全体の倍率
 
     std::string fontFamily = "Yu Gothic UI";  ///< UI フォントのファミリ名
@@ -91,6 +99,9 @@ struct Theme {
     /// @param[in] ini `[theme.dark]` / `[theme.light]` と `[ui]` を含む設定
     /// @note 読むのは dark メンバに対応する側のセクションのみ。解釈できない色は
     ///       既定値のまま残す
+    /// @note **`[ui] font_size` はここでは読まない。** 実体は App が持ち、
+    ///       `kDefaultFontSize` に対する比として Scale() に渡される ─ ここでも
+    ///       読むと、器が伸びないまま文字だけが二重に大きくなる
     void ApplyIni(const Ini& ini);
 
     /// @brief 文字と、文字を載せる寸法をまとめて拡大・縮小する。

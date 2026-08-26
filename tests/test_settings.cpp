@@ -153,6 +153,33 @@ KITE_TEST(settings, the_font_scale_steps_match_the_keyboard_steps) {
     KITE_EXPECT_NEAR(FontScaleValue(99), 2.0f, 0.0001f);
 }
 
+KITE_TEST(settings, the_base_font_size_options_are_whole_pixels) {
+    // 選択肢がそのまま `[ui] font_size` の取りうる値。1 きざみの整数でない値が
+    // 動いていると、行が言う大きさと実際の大きさが食い違う。
+    KITE_EXPECT_NEAR(FontSizeValue(FontSizeIndex(kDefaultFontSize)), kDefaultFontSize, 0.0001f);
+    KITE_EXPECT_EQ(FontSizeIndex(kDefaultFontSize + 1.0f), FontSizeIndex(kDefaultFontSize) + 1);
+    // 半端な値は最も近い選択肢へ丸める。
+    KITE_EXPECT_EQ(FontSizeIndex(13.4f), FontSizeIndex(13.0f));
+    // 範囲外は端に丸める。
+    KITE_EXPECT_EQ(FontSizeIndex(1.0f), 0);
+    KITE_EXPECT_NEAR(FontSizeValue(999), FontSizeValue(SettingOptionCount(SettingId::FontSize) - 1),
+                     0.0001f);
+}
+
+KITE_TEST(settings, the_two_text_size_rows_carry_their_own_units) {
+    // 「数値ならパーセント」で済ませていた頃の名残が残っていると、既定のサイズが
+    // 1300 % として出る。
+    Strings strings;
+    strings.Load("en");
+    SettingsEditor editor;
+    editor.Open(strings, SettingsValues{});
+
+    KITE_EXPECT_EQ(SettingOptionText(strings, SettingId::FontSize, FontSizeIndex(13.0f)),
+                   std::string("13 px"));
+    KITE_EXPECT_EQ(SettingOptionText(strings, SettingId::FontScale, FontScaleIndex(1.0f)),
+                   std::string("100%"));
+}
+
 // --- through the App --------------------------------------------------------
 
 KITE_TEST(settings, new_tabs_go_to_the_end_by_default) {
@@ -234,6 +261,82 @@ KITE_TEST(settings, changing_the_theme_on_the_screen_rebuilds_the_theme) {
     // 文字サイズの倍率は据え置かれる ─ テーマは毎回 3 段階で組み直す。
     h.app.OnKey(ParseChord("Escape"));
     KITE_EXPECT_FALSE(h.app.settingsEditor().visible());
+}
+
+KITE_TEST(settings, the_base_font_size_takes_the_rows_up_with_it) {
+    // 器を据え置いて文字だけ大きくすると下端から切れる ─ font_size を ini の
+    // 生の値として渡していた頃がその形だった（Theme::Scale の注記）。
+    Harness h;
+    const float row = h.app.theme().rowHeight;
+    h.OpenAt(SettingId::FontSize);
+    for (int i = 0; i < 5; ++i) h.app.OnKey(ParseChord("Right"));
+
+    KITE_EXPECT_NEAR(h.app.fontSize(), kDefaultFontSize + 5.0f, 0.001);
+    KITE_EXPECT_NEAR(h.app.theme().fontSize, kDefaultFontSize + 5.0f, 0.001);
+    KITE_EXPECT(h.app.theme().rowHeight > row);
+    KITE_EXPECT(h.app.theme().sidebarWidth > Theme::Dark().sidebarWidth);
+}
+
+KITE_TEST(settings, the_zoom_multiplies_the_base_size_and_ctrl_zero_returns_to_it) {
+    // 利用者が言っている «既定のフォントサイズ» はここ ─ Ctrl++ が掛かる相手で、
+    // Ctrl+0 が戻る先。組み込みの 13 px に戻ってしまってはこの行を置いた意味が無い。
+    Harness h;
+    h.OpenAt(SettingId::FontSize);
+    for (int i = 0; i < 3; ++i) h.app.OnKey(ParseChord("Right"));
+    h.app.OnKey(ParseChord("Escape"));
+    const float base = h.app.fontSize();
+    KITE_EXPECT_NEAR(base, kDefaultFontSize + 3.0f, 0.001);
+
+    h.app.Execute(Cmd::FontLarger);
+    KITE_EXPECT_NEAR(h.app.theme().fontSize, base * h.app.fontScale(), 0.001);
+    KITE_EXPECT(h.app.theme().fontSize > base);
+
+    h.app.Execute(Cmd::FontReset);
+    KITE_EXPECT_NEAR(h.app.fontScale(), 1.0f, 0.001);
+    KITE_EXPECT_NEAR(h.app.theme().fontSize, base, 0.001);
+}
+
+KITE_TEST(settings, changing_the_base_size_keeps_the_zoom) {
+    // 動かしているのは «100 % がどの大きさか» なので、拡大したままの人の拡大を
+    // 巻き添えにしない。
+    Harness h;
+    h.app.Execute(Cmd::FontLarger);
+    const float zoom = h.app.fontScale();
+    KITE_EXPECT(zoom > 1.0f);
+
+    h.OpenAt(SettingId::FontSize);
+    h.app.OnKey(ParseChord("Right"));
+    KITE_EXPECT_NEAR(h.app.fontScale(), zoom, 0.001);
+    KITE_EXPECT_NEAR(h.app.theme().fontSize, (kDefaultFontSize + 1.0f) * zoom, 0.001);
+}
+
+KITE_TEST(settings, the_base_font_size_survives_a_restart) {
+    Harness h;
+    h.OpenAt(SettingId::FontSize);
+    h.app.OnKey(ParseChord("Right"));
+    KITE_EXPECT(h.SettingsFile().find("font_size") != std::string::npos);
+
+    test::FakeFiles()["C:\\home\\config\\settings.ini"] = "[ui]\nfont_size=18\n";
+    h.app.Execute(Cmd::ReloadConfig);
+    // 読み直したら画面は畳む ─ 開いたままの行が出しているのは差し替わる前の値。
+    KITE_EXPECT_FALSE(h.app.settingsEditor().visible());
+    KITE_EXPECT_NEAR(h.app.fontSize(), 18.0f, 0.001);
+    KITE_EXPECT_NEAR(h.app.theme().fontSize, 18.0f, 0.001);
+    // 行もその値を出す ─ 実際に効いている大きさと画面が食い違わない。
+    h.app.Execute(Cmd::ShowSettings);
+    KITE_EXPECT_EQ(ValueOf(h.app.settingsEditor(), SettingId::FontSize), std::string("18 px"));
+}
+
+KITE_TEST(settings, an_ini_size_the_screen_cannot_show_is_rounded_to_one_it_can) {
+    Harness h;
+    test::FakeFiles()["C:\\home\\config\\settings.ini"] = "[ui]\nfont_size=13.4\n";
+    h.app.Execute(Cmd::ReloadConfig);
+    KITE_EXPECT_NEAR(h.app.fontSize(), 13.0f, 0.001);
+
+    test::FakeFiles()["C:\\home\\config\\settings.ini"] = "[ui]\nfont_size=400\n";
+    h.app.Execute(Cmd::ReloadConfig);
+    KITE_EXPECT_NEAR(h.app.fontSize(),
+                     FontSizeValue(SettingOptionCount(SettingId::FontSize) - 1), 0.001);
 }
 
 KITE_TEST(settings, the_screen_takes_the_keyboard_while_it_is_up) {

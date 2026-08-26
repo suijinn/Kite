@@ -164,6 +164,17 @@ KITE_TEST(theme, ini_overrides_metrics_and_fonts) {
     KITE_EXPECT_EQ(dark.fontFamily, std::string("Meiryo"));
 }
 
+KITE_TEST(theme, the_base_font_size_is_not_read_here) {
+    // `[ui] font_size` を読む場所は App だけ。ここでも読むと、App が器ごと伸ばす
+    // ために掛ける比の上に、文字だけがもう一度大きくなって乗る。
+    Ini ini;
+    ini.SetFloat("ui", "font_size", 26.0f);
+
+    Theme dark = Theme::Dark();
+    dark.ApplyIni(ini);
+    KITE_EXPECT_NEAR(dark.fontSize, kDefaultFontSize, 0.001);
+}
+
 KITE_TEST(theme, scaling_takes_the_row_up_with_the_text) {
     // The whole point of the method: a row that keeps its height while the text
     // in it grows clips the text, which is exactly the bug a plain font_size

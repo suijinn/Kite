@@ -6,15 +6,27 @@
 namespace kite {
 namespace {
 
+// 選択肢が数値そのものである項目の書式。
+//
+// **単位は項目ごとに持たせる。** 「数値ならパーセント」で済ませていた時期があるが、
+// それは数値の項目が文字サイズの倍率 1 つしか無かったから成り立っていただけで、
+// 2 つ目（既定の文字サイズ）が来た時点で嘘になる。
+struct Numeric {
+    float (*value)(int);  ///< 添字を値に直す
+    float factor;         ///< 表示する数に直す倍率（倍率は 100 倍でパーセント）
+    const char* key;      ///< 単位を付ける書式の i18n キー
+};
+
 // 1 項目分の定義。並び順は SettingId の宣言順そのもので、画面の並びにもなる。
 struct Info {
     SettingId id;
     SettingGroup group;
     const char* labelKey;
     int options;
-    // 選択肢のラベル。nullptr なら SettingOptionText() が値から組み立てる
-    // （文字サイズのように選択肢が数値そのものである項目）。
+    // 選択肢のラベル。nullptr なら numeric が答える。
     const char* const* optionKeys;
+    // 数値の選択肢。optionKeys が nullptr のときだけ意味を持つ。
+    const Numeric* numeric;
 };
 
 const char* const kOnOff[] = { "settings.off", "settings.on" };
@@ -27,6 +39,13 @@ const char* const kLanguage[] = { "settings.language.auto", "settings.language.e
 const char* const kNewTabPos[] = { "settings.new_tab_pos.end", "settings.new_tab_pos.after" };
 const char* const kTabBarPos[] = { "settings.tab_bar_pos.top", "settings.tab_bar_pos.left" };
 
+// 既定の文字サイズの刻み。1 DIP きざみで、これがそのまま `[ui] font_size` の
+// 取りうる値になる（App が読み込んだ値をこの表に丸める）─ 行が出せない大きさで
+// 動いていると、画面の値と実際の大きさが食い違う。
+constexpr float kFontSizeBase = 8.0f;
+constexpr float kFontSizeStep = 1.0f;
+constexpr int kFontSizeCount = 17;  // 8 .. 24
+
 // 文字サイズの刻み。Ctrl++ / Ctrl+- と同じ 0.1 きざみで、範囲も App の
 // kFontScaleMin / kFontScaleMax に合わせてある ─ 片方だけ広げると、キーでは
 // 出せる倍率が設定画面では選べない（またはその逆）ことになる。
@@ -34,19 +53,26 @@ constexpr float kFontScaleBase = 0.7f;
 constexpr float kFontScaleStep = 0.1f;
 constexpr int kFontScaleCount = 14;  // 0.7 .. 2.0
 
+const Numeric kFontSizeNumeric = { &FontSizeValue, 1.0f, "settings.pixels" };
+const Numeric kFontScaleNumeric = { &FontScaleValue, 100.0f, "settings.percent" };
+
 const Info kSettings[] = {
-    { SettingId::Theme, SettingGroup::Appearance, "settings.theme", 2, kTheme },
-    { SettingId::Language, SettingGroup::Appearance, "settings.language", 3, kLanguage },
+    { SettingId::Theme, SettingGroup::Appearance, "settings.theme", 2, kTheme, nullptr },
+    { SettingId::Language, SettingGroup::Appearance, "settings.language", 3, kLanguage, nullptr },
+    // 基準が先、倍率が後。倍率は基準に掛かるものなので、読む順もそれに合わせる。
+    { SettingId::FontSize, SettingGroup::Appearance, "settings.font_size", kFontSizeCount, nullptr,
+      &kFontSizeNumeric },
     { SettingId::FontScale, SettingGroup::Appearance, "settings.font_scale", kFontScaleCount,
+      nullptr, &kFontScaleNumeric },
+    { SettingId::Sidebar, SettingGroup::Appearance, "settings.sidebar", 2, kOnOff, nullptr },
+    { SettingId::ShellIcons, SettingGroup::Appearance, "settings.shell_icons", 2, kOnOff, nullptr },
+    { SettingId::TabBarPos, SettingGroup::Tabs, "settings.tab_bar_pos", 2, kTabBarPos, nullptr },
+    { SettingId::NewTabPos, SettingGroup::Tabs, "settings.new_tab_pos", 2, kNewTabPos, nullptr },
+    { SettingId::OpenArchives, SettingGroup::Files, "settings.open_archives", 2, kOnOff, nullptr },
+    { SettingId::NewTabHidden, SettingGroup::NewTab, "settings.show_hidden", 2, kOnOff, nullptr },
+    { SettingId::NewTabDirsFirst, SettingGroup::NewTab, "settings.dirs_first", 2, kOnOff, nullptr },
+    { SettingId::DefaultManager, SettingGroup::System, "settings.default_manager", 2, kNoYes,
       nullptr },
-    { SettingId::Sidebar, SettingGroup::Appearance, "settings.sidebar", 2, kOnOff },
-    { SettingId::ShellIcons, SettingGroup::Appearance, "settings.shell_icons", 2, kOnOff },
-    { SettingId::TabBarPos, SettingGroup::Tabs, "settings.tab_bar_pos", 2, kTabBarPos },
-    { SettingId::NewTabPos, SettingGroup::Tabs, "settings.new_tab_pos", 2, kNewTabPos },
-    { SettingId::OpenArchives, SettingGroup::Files, "settings.open_archives", 2, kOnOff },
-    { SettingId::NewTabHidden, SettingGroup::NewTab, "settings.show_hidden", 2, kOnOff },
-    { SettingId::NewTabDirsFirst, SettingGroup::NewTab, "settings.dirs_first", 2, kOnOff },
-    { SettingId::DefaultManager, SettingGroup::System, "settings.default_manager", 2, kNoYes },
 };
 
 const Info* Find(SettingId id) {
@@ -99,10 +125,19 @@ std::string SettingOptionText(const Strings& strings, SettingId id, int index) {
     if (!info) return {};
     const int i = std::clamp(index, 0, info->options - 1);
     if (info->optionKeys) return strings.Get(info->optionKeys[i]);
-    // 数値の項目は今のところ文字サイズだけ。ここに項目が増えるなら Info に単位を
-    // 持たせること ─ 「数値ならパーセント」は今たまたま成り立っているだけ。
-    const int percent = static_cast<int>(FontScaleValue(i) * 100.0f + 0.5f);
-    return strings.Format("settings.percent", { std::to_string(percent) });
+    if (!info->numeric) return {};
+    const int n = static_cast<int>(std::lround(info->numeric->value(i) * info->numeric->factor));
+    return strings.Format(info->numeric->key, { std::to_string(n) });
+}
+
+int FontSizeIndex(float size) {
+    const int i = static_cast<int>(std::lround((size - kFontSizeBase) / kFontSizeStep));
+    return std::clamp(i, 0, kFontSizeCount - 1);
+}
+
+float FontSizeValue(int index) {
+    return kFontSizeBase +
+           kFontSizeStep * static_cast<float>(std::clamp(index, 0, kFontSizeCount - 1));
 }
 
 int FontScaleIndex(float scale) {
