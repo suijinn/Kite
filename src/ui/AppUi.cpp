@@ -13,9 +13,9 @@
 namespace kite::ui {
 namespace {
 
-constexpr float kColExt = 58.0f;
-constexpr float kColSize = 84.0f;
-constexpr float kColDate = 124.0f;
+// 列の縁を掴める幅（DIP、縁の左右それぞれ）。細すぎると狙えず、太くすると見出しを
+// 押したつもりが幅の変更になる。
+constexpr float kColumnGrab = 3.0f;
 
 std::string SortArrow(bool desc) { return desc ? "\xE2\x96\xBC" : "\xE2\x96\xB2"; }  // ▼ ▲
 
@@ -200,6 +200,11 @@ void AppUi::PaintDragOverlay(Renderer& r) {
     // Where the dragged tab would be inserted.
     if (drag_ == Drag::Tab && !dropTabMarker_.empty()) {
         r.FillRect(dropTabMarker_, th.accent);
+    }
+
+    // And down the side of a column heading, where letting go would put it.
+    if (drag_ == Drag::Column && !dropColumnMarker_.empty()) {
+        r.FillRect(dropColumnMarker_, th.accent);
     }
 
     // The same caret for a sidebar item, laid across the row boundary rather
@@ -927,6 +932,51 @@ void AppUi::PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area, b
     r.FillRect({ area.l, area.b - 1.0f, area.r, area.b }, th.border);
 }
 
+// 名前の列は残りを取り、それ以外は右端から順に自分の幅を取る。入らなくなったら
+// 右端の列から落とす ─ どれを右へ置いたかは利用者が決めたことなので、«名前から
+// 遠いほう» の答えはその並びがすでに言っている（`F1` の見出し行と同じ落とし方）。
+std::vector<AppUi::PlacedColumn> AppUi::LayoutColumns(const RectF& area, float* outName) const {
+    const ColumnLayout& layout = app_.columns();
+    const float right = area.r - (kScrollbarWidth + 2.0f);
+    const float left = area.l + kPad;
+
+    std::vector<PlacedColumn> placed;
+    std::vector<float> widths;
+    float others = 0.0f;
+    for (size_t i = 1; i < layout.columns.size(); ++i) {
+        const Column& column = layout.columns[i];
+        if (!column.visible) continue;
+        placed.push_back({ column.id, static_cast<int>(i), 0.0f, 0.0f });
+        widths.push_back(column.width);
+        others += column.width;
+    }
+    while (!placed.empty() && right - left - others < kColumnNameMinWidth) {
+        others -= widths.back();
+        widths.pop_back();
+        placed.pop_back();
+    }
+
+    float x = right - others;
+    if (outName) *outName = x;
+    for (size_t i = 0; i < placed.size(); ++i) {
+        placed[i].l = x;
+        placed[i].r = x + widths[i];
+        x = placed[i].r;
+    }
+    return placed;
+}
+
+// 前フレームの当たり判定から引く。列の位置を «描くときに決める» 1 か所に保つため
+// で、掴んだ縁がどの列の右端なのかもここで答えられる。
+RectF AppUi::ColumnHeaderRect(const Pane* pane, int index) const {
+    for (const Region& candidate : regions_) {
+        if (candidate.kind != Hit::ColumnHeader) continue;
+        if (candidate.pane != pane || candidate.index != index) continue;
+        return candidate.rect;
+    }
+    return {};
+}
+
 void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool focused) {
     const Theme& th = app_.theme();
     const Strings& str = app_.strings();
@@ -936,37 +986,34 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
     r.FillRect(header, th.panelBg);
     r.FillRect({ header.l, header.b - 1.0f, header.r, header.b }, th.border);
 
-    const bool wide = area.w() > 420.0f;
-    const bool medium = area.w() > 300.0f;
-    float right = header.r - (kScrollbarWidth + 2.0f);
-    RectF colDate{}, colSize{}, colExt{};
-    if (wide) {
-        colDate = { right - kColDate, header.t, right, header.b };
-        right = colDate.l;
-    }
-    if (medium) {
-        colSize = { right - kColSize, header.t, right, header.b };
-        right = colSize.l;
-    }
-    if (wide) {
-        colExt = { right - kColExt, header.t, right, header.b };
-        right = colExt.l;
-    }
-    const RectF colName = { header.l + kPad, header.t, right, header.b };
+    float nameRight = header.r;
+    const std::vector<PlacedColumn> placed = LayoutColumns(area, &nameRight);
+    // 「どれだけ前か」は行ごとに訊かない ─ 1 フレームの中では同じ «今» で揃って
+    // いなければ、隣り合う行が別の時刻を基準に答えることになる。
+    const int64_t now = app_.nowUnixSeconds();
+    const RectF colName = { header.l + kPad, header.t, nameRight, header.b };
 
-    auto headerCell = [&](const RectF& box, const char* key, SortKey key_id, TextAlign align) {
+    auto headerCell = [&](const RectF& box, SortKey id, int index, TextAlign align) {
         if (box.w() <= 0.0f) return;
-        const bool activeSort = tab && tab->view.sort == key_id;
-        std::string label = str.Get(key);
+        const bool activeSort = tab && tab->view.sort == id;
+        std::string label = str.Get(ColumnLabelKey(id));
         if (activeSort) label += " " + SortArrow(tab->view.sortDesc);
         r.DrawText(label, box.inset(4.0f, 0.0f), activeSort ? th.text : th.textDim,
                    FontRole::UiSmall, align);
-        Add(box, Hit::ColumnHeader, static_cast<int>(key_id), pane);
+        Add(box, Hit::ColumnHeader, index, pane);
     };
-    headerCell(colName, "ui.name", SortKey::Name, TextAlign::Left);
-    if (wide) headerCell(colExt, "ui.ext", SortKey::Ext, TextAlign::Left);
-    if (medium) headerCell(colSize, "ui.size", SortKey::Size, TextAlign::Right);
-    if (wide) headerCell(colDate, "ui.modified", SortKey::Date, TextAlign::Left);
+    headerCell(colName, SortKey::Name, 0, TextAlign::Left);
+    for (const PlacedColumn& column : placed) {
+        const RectF box = { column.l, header.t, column.r, header.b };
+        headerCell(box, column.id, column.index,
+                   column.id == SortKey::Size ? TextAlign::Right : TextAlign::Left);
+        // 縁は見出しの «後» に登録する。Pick は後ろから引くので、重なった数ピクセルは
+        // 幅の変更のものになる ─ 並べ替えは残り全部で押せるが、縁はここにしかない。
+        r.FillRect({ column.l, header.t + 4.0f, column.l + 1.0f, header.b - 4.0f },
+                   th.border);
+        Add({ column.l - kColumnGrab, header.t, column.l + kColumnGrab, header.b },
+            Hit::ColumnEdge, column.index, pane);
+    }
 
     // --- rows ---
     const RectF body = { area.l, header.b, area.r, area.b };
@@ -1068,6 +1115,30 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
         // Past the borrowed row every slot names the entry one before it.
         const int i = (phantom >= 0 && slot > phantom) ? slot - 1 : slot;
 
+        // 塊の見出し。行そのものは «..» と同じで実体を持たないので、選択にも
+        // カーソルにも関わらない ─ 帯を張って言葉を置くだけ。
+        if (const Tab::Group* group = tab->GroupAt(i)) {
+            r.FillRect(row, th.panelBg);
+            // 押せる行なので、他の行と同じく光らせる（押せそうに見せない相手は
+            // «押せないもの» のほう）。押せば塊が丸ごと選ばれる。
+            if (pointerInList && row.contains(mouseX_, mouseY_)) r.FillRect(row, th.rowHover);
+            r.FillRect({ row.l, row.b - 1.0f, row.r, row.b }, th.border);
+            const std::string label =
+                group->labelKey.empty() ? group->text : str.Get(group->labelKey);
+            const RectF box = { row.l + kPad, row.t, row.r - kPad, row.b };
+            const float used = r.MeasureText(label, FontRole::UiSmall) + 12.0f;
+            r.DrawText(label, box, th.text, FontRole::UiSmall, TextAlign::Left);
+            // 件数は右端に、入る幅があるときだけ。塊が «いくつ» なのかは、畳めない
+            // 一覧では画面の外まで続いている塊を数える唯一の手段になる。
+            if (box.w() > used) {
+                r.DrawText(str.Format("ui.status_items", { std::to_string(group->count) }),
+                           { box.l + used, box.t, box.r, box.b }, th.textDim, FontRole::UiSmall,
+                           TextAlign::Right);
+            }
+            Add(row, Hit::GroupRow, i, pane);
+            continue;
+        }
+
         const fs::Entry* entry = tab->EntryAt(i);
         const bool marked = entry && tab->marked[tab->visible[i]] != 0;
         const bool isCursor = (i == tab->cursor);
@@ -1114,8 +1185,9 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
             glyph::ChevronUp(r, icon, th.textFolder);
             r.DrawText(str.Get("ui.parent_dir"), nameBox, th.textFolder, FontRole::Ui,
                        TextAlign::Left);
-            if (medium && colSize.w() > 0.0f) {
-                r.DrawText(str.Get("ui.dir_marker"), { colSize.l, row.t, colSize.r - 6.0f, row.b },
+            for (const PlacedColumn& column : placed) {
+                if (column.id != SortKey::Size) continue;
+                r.DrawText(str.Get("ui.dir_marker"), { column.l, row.t, column.r - 6.0f, row.b },
                            th.textDim, FontRole::UiSmall, TextAlign::Right);
             }
             Add(row, Hit::ListRow, i, pane);
@@ -1161,19 +1233,39 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
         // one row into two answers about whether it is going anywhere.
         Color detail = marked ? th.rowSelectedText : th.textDim;
         if (ink < 1.0f) detail = detail.alpha(detail.a * ink);
-        if (wide && colExt.w() > 0.0f) {
-            const std::string ext = e.isDir() ? std::string() : path::Extension(e.name);
-            r.DrawText(ext, { colExt.l + 4.0f, row.t, colExt.r, row.b }, detail,
-                       FontRole::UiSmall, TextAlign::Left);
-        }
-        if (medium && colSize.w() > 0.0f) {
-            const std::string sizeText = e.isDir() ? str.Get("ui.dir_marker") : FormatSize(e.size);
-            r.DrawText(sizeText, { colSize.l, row.t, colSize.r - 6.0f, row.b }, detail,
-                       FontRole::UiSmall, TextAlign::Right);
-        }
-        if (wide && colDate.w() > 0.0f) {
-            r.DrawText(FormatDateTime(e.mtime), { colDate.l + 6.0f, row.t, colDate.r, row.b },
-                       detail, FontRole::UiSmall, TextAlign::Left);
+        for (const PlacedColumn& column : placed) {
+            switch (column.id) {
+                case SortKey::Ext: {
+                    const std::string ext = e.isDir() ? std::string() : path::Extension(e.name);
+                    r.DrawText(ext, { column.l + 4.0f, row.t, column.r, row.b }, detail,
+                               FontRole::UiSmall, TextAlign::Left);
+                    break;
+                }
+                case SortKey::Size: {
+                    const std::string sizeText =
+                        e.isDir() ? str.Get("ui.dir_marker") : FormatSize(e.size);
+                    r.DrawText(sizeText, { column.l, row.t, column.r - 6.0f, row.b }, detail,
+                               FontRole::UiSmall, TextAlign::Right);
+                    break;
+                }
+                case SortKey::Date:
+                    r.DrawText(FormatDateTime(e.mtime),
+                               { column.l + 6.0f, row.t, column.r, row.b }, detail,
+                               FontRole::UiSmall, TextAlign::Left);
+                    break;
+                case SortKey::Age: {
+                    // 「5 分前」の綴りは言語のもの。core が答えるのは数と単位までで、
+                    // 言葉にするのはここ（塊の見出しと同じ 2 本立て）。
+                    const AgeText age = FormatAge(e.mtime, now);
+                    if (*age.labelKey == 0) break;
+                    r.DrawText(str.Format(age.labelKey, { std::to_string(age.count) }),
+                               { column.l + 6.0f, row.t, column.r, row.b }, detail,
+                               FontRole::UiSmall, TextAlign::Left);
+                    break;
+                }
+                default:
+                    break;
+            }
         }
 
         Add(row, Hit::ListRow, i, pane);

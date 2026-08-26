@@ -7,6 +7,7 @@
 // stops a value from being saved under a name nothing loads.
 
 #include <algorithm>
+#include <cstdlib>
 
 #include "core/app/App.h"
 #include "core/base/PathUtil.h"
@@ -16,20 +17,12 @@
 namespace kite {
 namespace {
 
-const char* SortKeyName(SortKey k) {
-    switch (k) {
-        case SortKey::Ext: return "ext";
-        case SortKey::Size: return "size";
-        case SortKey::Date: return "date";
-        default: return "name";
-    }
-}
-
+// 並べ替えの基準の綴りは列の綴りそのもの（ColumnName）。同じものを 2 通りの名前で
+// 書かないため ─ `[view] sort = date` と `[columns] column = date` は同じ列を指す。
 SortKey SortKeyFromName(const std::string& s) {
-    if (s == "ext") return SortKey::Ext;
-    if (s == "size") return SortKey::Size;
-    if (s == "date") return SortKey::Date;
-    return SortKey::Name;
+    SortKey key = SortKey::Name;
+    ColumnFromName(s, key);
+    return key;
 }
 
 // Text-size limits. The floor is where the row height stops leaving room for an
@@ -53,6 +46,17 @@ const char* TabBarPositionName(TabBarPosition p) {
 
 TabBarPosition TabBarPositionFromName(const std::string& s) {
     return s == "left" ? TabBarPosition::Left : TabBarPosition::Top;
+}
+
+// 列を出すかどうかを訊く 3 行と、その列。行を足すならここも足す ─ 対応表を
+// 2 か所に分けると、読む側と書く側で別の列を指す日が来る。
+SortKey ColumnOfSetting(SettingId id) {
+    switch (id) {
+        case SettingId::ColumnSize: return SortKey::Size;
+        case SettingId::ColumnDate: return SortKey::Date;
+        case SettingId::ColumnAge: return SortKey::Age;
+        default: return SortKey::Ext;
+    }
 }
 
 // Section in settings.ini holding one such order, or nullptr for a section
@@ -138,6 +142,43 @@ void App::LoadSidebarSections() {
     }
 }
 
+// `[columns]` の 1 行は `<列>:<幅>:<0|1>`。名前の列は書かない（動かせないし消せない）。
+//
+// 書かれていない列は Normalize() が組み込みの順で末尾に足す ─ 手で編集したファイルや
+// 古い版が書いたファイルに全部が並んでいるとは限らず、落とすと画面から消えたまま、
+// ファイルを直す以外に戻す手段が無くなる（サイドバーの区画と同じ規則）。
+void App::LoadColumns() {
+    ColumnLayout layout;
+    layout.columns.push_back({ SortKey::Name, 0.0f, true });
+
+    if (const Ini::Section* sec = settings_.Find("columns")) {
+        for (const Ini::Entry& e : sec->entries) {
+            const std::string& spec = e.value;
+            const size_t first = spec.find(':');
+            SortKey id = SortKey::Name;
+            if (!ColumnFromName(spec.substr(0, first), id)) continue;
+            if (id == SortKey::Name) continue;
+
+            Column column = { id, 0.0f, true };
+            if (first != std::string::npos) {
+                const size_t second = spec.find(':', first + 1);
+                column.width = static_cast<float>(std::atof(spec.substr(first + 1).c_str()));
+                if (second != std::string::npos) column.visible = spec[second + 1] != '0';
+            }
+            // 幅が読めなかった行は既定の幅に戻す。0 のまま通すと、その列だけが
+            // 見出しも中身も無い 0 px の帯になる。
+            if (column.width <= 0.0f) {
+                const Column* fallback = ColumnLayout::Default().Find(id);
+                if (fallback) column.width = fallback->width;
+            }
+            layout.columns.push_back(column);
+        }
+    }
+    layout.Normalize();
+    columns_ = layout;
+    RebuildColumns();
+}
+
 void App::LoadConfig() {
     // The folder itself failing is worth saying on its own: every write after
     // this one will fail too, and at that point nothing at all is being kept.
@@ -187,6 +228,9 @@ void App::LoadConfig() {
     defaultView_.dirsFirst = settings_.GetBool("view", "dirs_first", true);
     defaultView_.sortDesc = settings_.GetBool("view", "sort_desc", false);
     defaultView_.sort = SortKeyFromName(settings_.GetStr("view", "sort", "name"));
+    defaultView_.grouped = settings_.GetBool("view", "group", false);
+
+    LoadColumns();
 
     placement_.x = settings_.GetInt("window", "x", -1);
     placement_.y = settings_.GetInt("window", "y", -1);
@@ -264,7 +308,54 @@ void App::LoadLanguage() {
 void App::ApplyTheme() {
     theme_ = darkTheme_ ? Theme::Dark() : Theme::Light();
     theme_.ApplyIni(settings_);
-    theme_.Scale(fontSize_ / kDefaultFontSize * fontScale_);
+    theme_.Scale(uiFactor());
+    // 列も文字を入れる器なので同じ率で伸ばす（行やサイドバーの幅と同じ話 ─
+    // 据え置くと、文字だけが大きくなって「2026-08-09 17:11」が切れる）。
+    RebuildColumns();
+}
+
+float App::uiFactor() const { return fontSize_ / kDefaultFontSize * fontScale_; }
+
+void App::RebuildColumns() {
+    const float factor = uiFactor();
+    scaledColumns_ = columns_;
+    for (Column& column : scaledColumns_.columns) column.width *= factor;
+}
+
+bool App::SetColumnWidth(int index, float width) {
+    // 受け取るのは画面の上の幅なので、覚える前に割り戻す。掛けるのは 1 か所
+    // （RebuildColumns）だけ、というのを崩さないため。
+    const float factor = uiFactor();
+    if (!columns_.SetWidth(index, factor > 0.0f ? width / factor : width)) return false;
+    RebuildColumns();
+    dirty_ = true;
+    host_.Invalidate();
+    return true;
+}
+
+void App::ResetColumnWidths(int index) {
+    if (columns_.ResetWidth(index)) {
+        RebuildColumns();
+        dirty_ = true;
+    }
+    // 変わらなかったときも同じ文言。訊かれているのは «既定に戻っているか» で、
+    // その答えはどちらの場合も「戻っている」。
+    SetStatus(strings_.Get("ui.columns_reset"));
+}
+
+bool App::MoveColumn(int from, int to) {
+    if (!columns_.Move(from, to)) return false;
+    RebuildColumns();
+    dirty_ = true;
+    host_.Invalidate();
+    return true;
+}
+
+void App::SetColumnVisible(SortKey id, bool visible) {
+    if (!columns_.SetVisible(id, visible)) return;
+    RebuildColumns();
+    dirty_ = true;
+    host_.Invalidate();
 }
 
 void App::SetFontScale(float scale) {
@@ -358,6 +449,12 @@ SettingsValues App::CollectSettings() const {
     v.Set(SettingId::NewTabPos, newTabPosition_ == NewTabPosition::AfterCurrent ? 1 : 0);
     v.Set(SettingId::NewTabHidden, defaultView_.showHidden ? 1 : 0);
     v.Set(SettingId::NewTabDirsFirst, defaultView_.dirsFirst ? 1 : 0);
+    v.Set(SettingId::NewTabGrouped, defaultView_.grouped ? 1 : 0);
+    for (SettingId id : { SettingId::ColumnExt, SettingId::ColumnSize, SettingId::ColumnDate,
+                          SettingId::ColumnAge }) {
+        const Column* column = columns_.Find(ColumnOfSetting(id));
+        v.Set(id, column && column->visible ? 1 : 0);
+    }
     // 唯一 settings.ini に無い行。実体は OS 側にあるので、覚えている値ではなく
     // その場で訊く ─ Kite の外で（別のファイラーが、あるいは別の Kite が）変えられて
     // いても、行が嘘をつかない。Other は「この exe ではない」ので «いいえ» 側。
@@ -411,6 +508,15 @@ void App::ApplySetting(SettingId id, const SettingsValues& values) {
             break;
         case SettingId::NewTabDirsFirst:
             defaultView_.dirsFirst = (index != 0);
+            break;
+        case SettingId::NewTabGrouped:
+            defaultView_.grouped = (index != 0);
+            break;
+        case SettingId::ColumnExt:
+        case SettingId::ColumnSize:
+        case SettingId::ColumnDate:
+        case SettingId::ColumnAge:
+            SetColumnVisible(ColumnOfSetting(id), index != 0);
             break;
         case SettingId::DefaultManager:
             // ApplyPendingSetting() が先に横取りしている。ここに来るのは、この関数を
@@ -490,10 +596,22 @@ bool App::SaveSettings() {
     saveOrder(SidebarSection::QuickAccess, quickAccessOrder_);
     saveOrder(SidebarSection::Drives, driveOrder_);
 
+    // Rewritten whole for the same reason the sidebar order is: a column left in
+    // the file after the layout changed would sit there forever.
+    settings_.ClearSection("columns");
+    for (const Column& column : columns_.columns) {
+        if (column.id == SortKey::Name) continue;  // 名前の列は動かせないし消せない
+        settings_.Append("columns", "column",
+                         std::string(ColumnName(column.id)) + ":" +
+                             std::to_string(static_cast<int>(column.width + 0.5f)) + ":" +
+                             (column.visible ? "1" : "0"));
+    }
+
+    settings_.SetBool("view", "group", defaultView_.grouped);
     settings_.SetBool("view", "show_hidden", defaultView_.showHidden);
     settings_.SetBool("view", "dirs_first", defaultView_.dirsFirst);
     settings_.SetBool("view", "sort_desc", defaultView_.sortDesc);
-    settings_.Set("view", "sort", SortKeyName(defaultView_.sort));
+    settings_.Set("view", "sort", ColumnName(defaultView_.sort));
 
     settings_.SetInt("window", "x", placement_.x);
     settings_.SetInt("window", "y", placement_.y);

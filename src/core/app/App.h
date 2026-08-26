@@ -30,6 +30,7 @@
 #include "core/input/PathComplete.h"
 #include "core/input/TextField.h"
 #include "core/input/TypeAhead.h"
+#include "core/model/Columns.h"
 #include "core/model/Workspace.h"
 #include "core/theme/Theme.h"
 
@@ -401,6 +402,47 @@ public:
     ///            （MoveSidebarItem と同じ約束）
     /// @return 並びが実際に変わったら true
     bool MoveSidebarSection(int from, int to);
+
+    /// @brief 現在時刻を Unix 秒で返す。
+    /// @return 1970-01-01 UTC からの秒数
+    /// @note 「どれだけ前に更新されたか」の列が毎フレーム引く。UI 層が自分で時計を
+    ///       読まないのは、OS を知らない側に «今» の出どころを増やさないため ─
+    ///       `FormatAge()` は受け取った時刻で答えるだけなので、テストは時計を
+    ///       止めたまま端から端まで検査できる
+    int64_t nowUnixSeconds() const;
+
+    /// @brief 一覧の列を表示順に返す。
+    /// @return 列の並び。幅は倍率を掛けた後の DIP
+    /// @note **UI 層はここから受け取る値をそのまま使う。** 倍率を掛けるのは App の
+    ///       仕事で、`Theme` と同じ扱い ─ ui 側に「今 1.4 倍だから」と判断する場所を
+    ///       作らない
+    const ColumnLayout& columns() const { return scaledColumns_; }
+
+    /// @brief 列の幅を変える。
+    /// @param[in] index 対象の列。columns() への添字。0（名前）は動かせない
+    /// @param[in] width 新しい幅（DIP、**倍率を掛けた後**の値）
+    /// @return 実際に変わったら true
+    /// @note 掛け算済みの幅を受けるのは、掴んでいる縁の位置がそのまま答えだから。
+    ///       割り戻して覚えるので、文字を大きくすれば列も同じだけ広くなる
+    bool SetColumnWidth(int index, float width);
+
+    /// @brief 列の幅を組み込みの既定に戻す。
+    /// @param[in] index 対象の列。columns() への添字。**負なら全部の列**
+    /// @note すでに既定のときも黙らない ─ 何も動かない操作は「効かないキー」と
+    ///       見分けが付かないので、ステータス行がそう言う（`SetFontScale` と同じ）
+    void ResetColumnWidths(int index = -1);
+
+    /// @brief 列を並べ替える。
+    /// @param[in] from 動かす列の位置。columns() への添字
+    /// @param[in] to 動かした先の位置。**抜き取ったあとの並びでの添字**
+    ///            （MoveSidebarItem と同じ約束）
+    /// @return 並びが実際に変わったら true
+    bool MoveColumn(int from, int to);
+
+    /// @brief 列を表示するかどうかを変える。
+    /// @param[in] id 対象の列。名前の列は変えられない
+    /// @param[in] visible 表示するなら true
+    void SetColumnVisible(SortKey id, bool visible);
 
     /// @brief サイドバーの区画が折り畳まれているかを返す。
     /// @param[in] section 対象の区画。SidebarSection::Count は常に false
@@ -818,6 +860,18 @@ private:
     void LoadSidebarSections();
     void LoadLanguage();
     void ApplyTheme();
+
+    /// @brief `settings.ini` の `[columns]` から列の並びを読む。
+    /// @note 書かれていない列は組み込みの順で末尾に足す（ColumnLayout::Normalize）
+    void LoadColumns();
+
+    /// @brief 列の幅に文字サイズの倍率を掛け直す。
+    /// @note ApplyTheme() と、列そのものが変わったときだけ呼ぶ
+    void RebuildColumns();
+
+    /// @brief 文字サイズの倍率を返す。器を伸ばすのに使っている比そのもの。
+    /// @return 倍率。1.0 なら既定の大きさ
+    float uiFactor() const;
     SettingsValues CollectSettings() const;
     void ApplySetting(SettingId id, const SettingsValues& values);
     int NewTabAt(const Pane& pane) const;
@@ -991,6 +1045,12 @@ private:
     // 確認待ちの «既定のファイルマネージャーにするか»。行が動かした値をそのまま
     // 読み直せない ─ 確認の間に行のカーソルは動きうるし、取り消せば値は戻る
     bool pendingDefaultManager_ = false;
+    // 列の並び・幅・表示。**倍率を掛ける前**の値で、これが settings.ini に書く正。
+    // 掛けた結果は scaledColumns_ で、作り直すのは ApplyTheme() を通る 1 か所だけ
+    // （テーマの «既定 → ini → 大きさ» と同じ理由 ─ 2 か所で組み立てると、後から
+    // 走ったほうが先の結果を黙って捨てる）。
+    ColumnLayout columns_ = ColumnLayout::Default();
+    ColumnLayout scaledColumns_ = ColumnLayout::Default();
     NewTabPosition newTabPosition_ = NewTabPosition::End;
     TabBarPosition tabBarPosition_ = TabBarPosition::Top;
     std::string language_ = "auto";

@@ -145,8 +145,14 @@ const DefaultBinding kDefaults[] = {
     { Cmd::SortByExt,           "Ctrl+Shift+2" },
     { Cmd::SortBySize,          "Ctrl+Shift+3" },
     { Cmd::SortByDate,          "Ctrl+Shift+4" },
+    { Cmd::SortByAge,           "Ctrl+Shift+5" },
     { Cmd::ToggleSortOrder,     "Ctrl+Shift+R" },
     { Cmd::ToggleDirsFirst,     "Ctrl+Shift+F" },
+    { Cmd::ToggleGrouping,      "Ctrl+Shift+G" },
+    // Ctrl+0 が文字の大きさを戻すのと同じ読み方 ─ 0 に戻す組。**Ctrl+Shift+0 では
+    // ない** ─ あの列は Windows がキーボードレイアウトの切り替えに予約していて、
+    // 追加レイアウトのある実機では Kite まで届かなかった（下の「すでに踏んだ罠」）。
+    { Cmd::ResetColumnWidths,   "Ctrl+Alt+0" },
     // The browser row, and for the same reason: this is the one setting people
     // reach for without wanting to know where the settings live. Ctrl+Plus is
     // VK_OEM_PLUS, which is "=" on a US layout and ";" on a JIS one - both are

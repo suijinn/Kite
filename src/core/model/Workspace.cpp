@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "core/base/Format.h"
 #include "core/base/PathUtil.h"
 #include "core/base/Utf8.h"
 #include "core/fs/VirtualPath.h"
@@ -38,6 +39,76 @@ bool ReorderKeepingActive(std::vector<std::unique_ptr<T>>& items, int& active, i
         ++active;
     }
     return true;
+}
+
+// 塊の見出し 1 つ分。text は言語に依らない綴り、labelKey は言葉が要るときだけ。
+struct GroupKey {
+    std::string text;
+    std::string labelKey;
+};
+
+// 名前の頭文字。ASCII の英字は大文字に畳み、数字はまとめて 1 つの塊にする ─
+// 「0-9」だけは畳まないと、数字で始まる名前が並ぶフォルダで塊が 10 個できる。
+// それ以外（記号・かな・漢字）は最初の 1 文字がそのまま塊の名前になる。
+std::string InitialOf(const std::string& name) {
+    if (name.empty()) return {};
+    size_t i = 0;
+    const uint32_t cp = utf8::Decode(name, i);
+    if (cp >= '0' && cp <= '9') return "0-9";
+    if (cp >= 'a' && cp <= 'z') return std::string(1, static_cast<char>(cp - 'a' + 'A'));
+    return utf8::Encode(cp);
+}
+
+// サイズの塊。単位の綴りは列と同じ（FormatSize と揃えてある）。境目に «だいたい
+// このくらい» で答えられる粒度を選んである ─ 1 バイト刻みで塊を作っても、探して
+// いる «大きいファイル» は見つからない。
+std::string SizeBucketOf(uint64_t bytes) {
+    constexpr uint64_t kMB = 1024ull * 1024ull;
+    if (bytes == 0) return "0 B";
+    if (bytes < kMB) return "< 1 MB";
+    if (bytes < 10 * kMB) return "1 - 10 MB";
+    if (bytes < 100 * kMB) return "10 - 100 MB";
+    if (bytes < 1024 * kMB) return "100 MB - 1 GB";
+    return "> 1 GB";
+}
+
+// その項目が属する塊。並べ替えの基準がそのまま塊の基準になるので、ここで見るのは
+// view.sort ひとつ。
+GroupKey GroupKeyOf(const fs::Entry& e, const ViewState& view) {
+    // フォルダを先頭にまとめてあるなら、その «先頭のまとまり» がそのまま 1 つの塊。
+    // 拡張子とサイズでは、まとめていなくてもフォルダは自分の塊にする ─ 列が
+    // 「<DIR>」としか言えない値で塊を作っても、名前が付かない。
+    if (e.isDir() && (view.dirsFirst || view.sort == SortKey::Ext ||
+                      view.sort == SortKey::Size)) {
+        return { {}, "ui.group_folders" };
+    }
+    switch (view.sort) {
+        case SortKey::Ext: {
+            const std::string ext = path::Extension(e.name);
+            if (ext.empty()) return { {}, "ui.group_no_ext" };
+            return { ext, {} };
+        }
+        case SortKey::Size:
+            return { SizeBucketOf(e.size), {} };
+        case SortKey::Date:
+        case SortKey::Age: {
+            // 年月まで。日付そのものは列に出ているし、1 日ごとの塊は «先月ぶん» を
+            // 探している目には細かすぎる。切り出す先を FormatDateTime にしてある
+            // のは、ローカル時刻への直し方を 2 通り持たないため。
+            //
+            // **経過時間で並べていても見出しは年月。** 「3 日前」でまとめるには
+            // Rebuild() が時計を持つことになり、しかも同じ一覧が翌日には別の塊に
+            // 割れる ─ 値は同じ更新時刻なので、動かない綴りのほうで言う。
+            const std::string stamp = FormatDateTime(e.mtime);
+            if (stamp.size() < 7) return { {}, "ui.group_unknown" };
+            return { stamp.substr(0, 7), {} };
+        }
+        default: {
+            const std::string initial = InitialOf(e.name);
+            if (initial.empty()) return { {}, "ui.group_unknown" };
+            return { initial, {} };
+        }
+    }
 }
 
 }  // namespace
@@ -109,19 +180,52 @@ void Tab::Rebuild() {
                 cmp = (a.mtime == b.mtime) ? path::NaturalCompare(a.name, b.name)
                                            : (a.mtime < b.mtime ? -1 : 1);
                 break;
+            case SortKey::Age:
+                // 見ている値は更新日時と同じだが、向きが逆。この列が答えているのは
+                // «どれだけ前か» なので、昇順は «経過が短い» ＝ 新しいものが先。
+                cmp = (a.mtime == b.mtime) ? path::NaturalCompare(a.name, b.name)
+                                           : (a.mtime > b.mtime ? -1 : 1);
+                break;
         }
         return v.sortDesc ? cmp > 0 : cmp < 0;
     });
+
+    // 塊の見出しは並べ替えの «後» に挿す。塊とは同じ値が続いている範囲のことなので、
+    // 並び終わるまではどこで切れるのかが決まらない。
+    groups.clear();
+    if (view.grouped) {
+        std::vector<int> rows;
+        rows.reserve(visible.size() + 8);
+        GroupKey last;
+        for (int index : visible) {
+            GroupKey key = GroupKeyOf(entries[index], view);
+            if (groups.empty() || key.text != last.text || key.labelKey != last.labelKey) {
+                Group group;
+                group.text = key.text;
+                group.labelKey = key.labelKey;
+                group.firstRow = static_cast<int>(rows.size());
+                groups.push_back(std::move(group));
+                rows.push_back(kGroupRowBase - static_cast<int>(groups.size() - 1));
+                last = std::move(key);
+            }
+            ++groups.back().count;
+            rows.push_back(index);
+        }
+        visible.swap(rows);
+    }
 
     // 並べ替えの後に挿す。「..」は名前でも日付でも動かない。読めなかったフォルダに
     // は出さない ─ 画面はエラーだけを出すので、触れない行が残るだけになる。
     if (listing.status == fs::Status::Ok && !vfs::ParentOf(path).empty()) {
         visible.insert(visible.begin(), kParentRow);
+        // 見出しの行番号は 1 つずつ後ろへ。ここを忘れると、塊の見出しがその塊の
+        // 最後の項目を指す。
+        for (Group& group : groups) ++group.firstRow;
     }
 
     if (!keepName.empty()) {
         for (int i = 0; i < static_cast<int>(visible.size()); ++i) {
-            if (visible[i] == kParentRow) continue;
+            if (visible[i] < 0) continue;
             if (entries[visible[i]].name == keepName) {
                 cursor = i;
                 break;
@@ -136,6 +240,9 @@ void Tab::Rebuild() {
     // 添字がずれて「..」に載っただけなら最初の項目へ送る。新しいフォルダを開いた
     // 直後（cursor = 0）に、まず目に入るのが移動手段では困る。
     if (!onParentRow && IsParentRow(cursor) && ItemCount() > 0) cursor = 1;
+    // 見出しの上には止まらない。並べ替えを変えただけで塊の切れ目が動くので、
+    // 添字がそのまま残っていると、まさにその見出しにカーソルが乗る。
+    cursor = SkipGroupRows(cursor, 1);
     ResetAnchor();
 }
 
@@ -148,6 +255,8 @@ void Tab::DropListing() {
     visible.shrink_to_fit();
     marked.clear();
     marked.shrink_to_fit();
+    groups.clear();
+    groups.shrink_to_fit();
     loaded = false;
     ResetAnchor();
 }
@@ -155,6 +264,33 @@ void Tab::DropListing() {
 bool Tab::IsParentRow(int visibleIndex) const {
     if (visibleIndex < 0 || visibleIndex >= static_cast<int>(visible.size())) return false;
     return visible[visibleIndex] == kParentRow;
+}
+
+bool Tab::IsGroupRow(int visibleIndex) const {
+    if (visibleIndex < 0 || visibleIndex >= static_cast<int>(visible.size())) return false;
+    return visible[visibleIndex] <= kGroupRowBase;
+}
+
+const Tab::Group* Tab::GroupAt(int visibleIndex) const {
+    if (!IsGroupRow(visibleIndex)) return nullptr;
+    const int index = kGroupRowBase - visible[visibleIndex];
+    if (index < 0 || index >= static_cast<int>(groups.size())) return nullptr;
+    return &groups[static_cast<size_t>(index)];
+}
+
+int Tab::SkipGroupRows(int visibleIndex, int direction) const {
+    const int count = static_cast<int>(visible.size());
+    if (count == 0) return visibleIndex;
+    const int step = direction < 0 ? -1 : 1;
+    for (int i = visibleIndex; i >= 0 && i < count; i += step) {
+        if (!IsGroupRow(i)) return i;
+    }
+    // 進みたい向きが行き止まりだった。見出しの下には必ず項目があるので、逆向きなら
+    // 必ず見つかる ─ 一覧の末尾が見出しになるのは、塊が空のときだけで、それは無い。
+    for (int i = visibleIndex; i >= 0 && i < count; i -= step) {
+        if (!IsGroupRow(i)) return i;
+    }
+    return visibleIndex;
 }
 
 const fs::Entry* Tab::EntryAt(int visibleIndex) const {
@@ -165,7 +301,10 @@ const fs::Entry* Tab::EntryAt(int visibleIndex) const {
 }
 
 int Tab::ItemCount() const {
-    return static_cast<int>(visible.size()) - (hasParentRow() ? 1 : 0);
+    // 実体を持たない行を引く。塊の見出しはちょうど groups の数だけ挿してあるので、
+    // 数え直さなくても分かる。
+    return static_cast<int>(visible.size()) - (hasParentRow() ? 1 : 0) -
+           static_cast<int>(groups.size());
 }
 
 const fs::Entry* Tab::CursorEntry() const { return EntryAt(cursor); }
@@ -221,7 +360,7 @@ void Tab::MarkRange(int fromVisible, int toVisible, bool value) {
     int lo = std::clamp(std::min(fromVisible, toVisible), 0, static_cast<int>(visible.size()) - 1);
     int hi = std::clamp(std::max(fromVisible, toVisible), 0, static_cast<int>(visible.size()) - 1);
     for (int i = lo; i <= hi; ++i) {
-        if (visible[i] == kParentRow) continue;
+        if (visible[i] < 0) continue;  // 「..」と塊の見出し ─ 選べる実体が無い
         marked[visible[i]] = value ? 1 : 0;
     }
 }
@@ -240,7 +379,10 @@ void Tab::ExtendTo(int toVisible) {
         extending = true;
     }
     marked = markBase;
-    cursor = std::clamp(toVisible, 0, static_cast<int>(visible.size()) - 1);
+    const int want = std::clamp(toVisible, 0, static_cast<int>(visible.size()) - 1);
+    // 見出しへ伸ばそうとしたら、進んでいる向きへ 1 つ越える。手前で止めると
+    // Shift+↓ が塊の切れ目で効かなくなる ─ 次に押しても同じ見出しを指すので。
+    cursor = SkipGroupRows(want, want >= anchor ? 1 : -1);
     MarkRange(anchor, cursor, true);
 }
 

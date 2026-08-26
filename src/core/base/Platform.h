@@ -33,6 +33,13 @@ bool EnsureDirectory(const std::string& utf8Path);
 /// @return 任意の固定原点からのミリ秒。壁時計ではないので日時計算には使えない
 uint64_t NowMs();
 
+/// @brief 現在時刻を Unix 秒で返す。
+/// @return 1970-01-01 UTC からの秒数。取れなければ 0
+/// @note NowMs() とは別物。あちらは原点の無い単調増加で、日時の計算には使えない ─
+///       «どれだけ前に更新されたか» のように、ファイルの持つ時刻と引き算できる値が
+///       要る場所はこちらを呼ぶ
+int64_t NowUnixSeconds();
+
 /// @brief ユーザーの UI 言語を返す。
 /// @return "ja" や "en" のような言語コード。判定できない場合は "en"
 std::string PreferredLanguage();

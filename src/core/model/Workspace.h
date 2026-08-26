@@ -21,23 +21,26 @@
 
 #include "core/base/Types.h"
 #include "core/fs/FileSystem.h"
+#include "core/model/Columns.h"
 
 namespace kite {
 
-/// @brief 一覧の並べ替え基準。
-enum class SortKey : uint8_t {
-    Name,  ///< 名前順
-    Ext,   ///< 拡張子順
-    Size,  ///< サイズ順
-    Date,  ///< 更新日時順
-};
-
 /// @brief タブごとの表示設定。
+///
+/// @note 列の並びと幅はここに無い。あれは «この一覧の中身» ではなく «一覧の読み方» で、
+///       ウィンドウに 1 つしかない（`App::columns()`）
 struct ViewState {
     SortKey sort = SortKey::Name;  ///< 並べ替えの基準
     bool sortDesc = false;         ///< true なら降順
     bool dirsFirst = true;         ///< true ならフォルダを先頭にまとめる
     bool showHidden = false;       ///< true なら隠しファイルも表示する
+
+    /// 同じ値の並びを見出しでまとめるか。
+    ///
+    /// **まとめる基準は `sort` そのもの。** 塊とは «同じ値が続いている範囲» なので、
+    /// 別の基準でまとめるにはまずその基準で並べ替えることになる ─ つまり
+    /// «まとめる基準» は必ず並べ替えの基準と同じものになる。
+    bool grouped = false;
 };
 
 /// @brief 1 つのタブ。表示中のフォルダとその一覧・選択状態・履歴を持つ。
@@ -51,12 +54,30 @@ public:
     /// 添字として使う前に必ず IsParentRow() か EntryAt() を通すこと。
     static constexpr int kParentRow = -1;
 
+    /// @brief 塊の見出し行を表す visible の値の起点。
+    ///
+    /// 見出し行 i は `kGroupRowBase - i`。「..」と同じで実体を持たない行だが、
+    /// あちらと違って何個でも増えるので、1 つの値では足りない ─ 負の側へ伸ばして
+    /// おけば「表示行 = visible への添字」も「0 以上なら項目」も崩れない。
+    static constexpr int kGroupRowBase = -2;
+
+    /// @brief 塊 1 つ。見出しに出す言葉と、そこに入っている件数。
+    struct Group {
+        /// 見出しの文字列。言語に依らないもの（"A"、"txt"、"2026-08"、"< 1 MB"）
+        std::string text;
+        /// 言葉が要る見出しの i18n キー。空でなければこちらが答え
+        std::string labelKey;
+        int count = 0;     ///< この塊に入っている項目数
+        int firstRow = 0;  ///< 見出しの行。visible への添字。項目はこの次の行から
+    };
+
     std::string path;  ///< 表示しているディレクトリのパス
     ViewState view;    ///< 並べ替えと表示の設定
 
     fs::ListResult listing;       ///< 列挙結果そのもの
     std::vector<int> visible;     ///< 表示行。listing.entries への添字か kParentRow
     std::vector<uint8_t> marked;  ///< listing.entries と同じ長さの選択フラグ
+    std::vector<Group> groups;    ///< 塊の見出し。view.grouped が false なら空
 
     std::string filter;   ///< 絞り込み文字列。空なら絞り込みなし
     int cursor = 0;       ///< カーソル位置。visible への添字
@@ -90,6 +111,25 @@ public:
     /// @brief 先頭に「..」行があるかを判定する。
     /// @return あれば true。path がルートなら false
     bool hasParentRow() const { return !visible.empty() && visible.front() == kParentRow; }
+
+    /// @brief 表示行が塊の見出しかを判定する。
+    /// @param[in] visibleIndex 判定する行。visible への添字
+    /// @return 見出し行なら true。範囲外なら false
+    bool IsGroupRow(int visibleIndex) const;
+
+    /// @brief 表示行に対応する塊を返す。
+    /// @param[in] visibleIndex 対象の行。visible への添字
+    /// @return 対応する塊。見出し行でなければ nullptr
+    const Group* GroupAt(int visibleIndex) const;
+
+    /// @brief 見出し行を飛ばした行を返す。
+    /// @param[in] visibleIndex 出発点。visible への添字
+    /// @param[in] direction 進む向き。0 以上なら下、負なら上
+    /// @return カーソルを置ける行。行き止まりなら逆向きに探し、それも無ければ
+    ///         `visibleIndex` をそのまま返す
+    /// @note カーソルは見出しの上に止まらない ─ 止まると `Enter` も `Space` も
+    ///       答えを持たない行に対して押されることになる
+    int SkipGroupRows(int visibleIndex, int direction) const;
 
     /// @brief 表示行が「..」かを判定する。
     /// @param[in] visibleIndex 判定する行。visible への添字

@@ -21,6 +21,13 @@ uint64_t& FakeClockMs() {
     return now;
 }
 
+int64_t& FakeUnixTime() {
+    // 2026-01-01 00:00:00 UTC。値そのものに意味は無いが、固定してあることに意味が
+    // ある ─ 経過時間の検査が «テストを走らせた日» で答えを変えてはならない。
+    static int64_t now = 1767225600;
+    return now;
+}
+
 std::string& FakeReadOnlyPrefix() {
     static std::string prefix;
     return prefix;
@@ -29,6 +36,7 @@ std::string& FakeReadOnlyPrefix() {
 void ResetFakePlatform() {
     FakeFiles().clear();
     FakeClockMs() = 1000;
+    FakeUnixTime() = 1767225600;
     FakeReadOnlyPrefix().clear();
 }
 
@@ -73,6 +81,8 @@ bool WriteTextFile(const std::string& utf8Path, std::string_view data) {
 bool EnsureDirectory(const std::string& utf8Path) { return !test::IsBelowReadOnly(utf8Path); }
 
 uint64_t NowMs() { return test::FakeClockMs(); }
+
+int64_t NowUnixSeconds() { return test::FakeUnixTime(); }
 
 std::string PreferredLanguage() { return "en"; }
 

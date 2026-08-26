@@ -585,6 +585,8 @@ void App::NavigateFocused(const std::string& raw) {
     t->listing.entries.clear();
     t->visible.clear();
     t->marked.clear();
+    // 行が 1 つも無いのに塊が残っていると、ItemCount() が負を答える。
+    t->groups.clear();
     t->loaded = false;
     RequestLoad(*t, true);
     SyncWatches();
@@ -869,6 +871,8 @@ void App::RefreshTabsShowing(const std::string& dir) {
     }
 }
 
+int64_t App::nowUnixSeconds() const { return plat::NowUnixSeconds(); }
+
 void App::RebuildFocused() {
     if (Tab* t = workspace_.focusedTab()) {
         t->Rebuild();
@@ -916,6 +920,9 @@ void App::MoveCursor(int delta, bool extend, bool absolute) {
 
     int target = absolute ? delta : t->cursor + delta;
     target = std::clamp(target, 0, static_cast<int>(t->visible.size()) - 1);
+    // 塊の見出しは «行» ではあるが止まれる場所ではない。進んでいる向きへ 1 つ
+    // 越えるので、↓ を押し続ければ見出しをまたいで次の塊の先頭へ着く。
+    target = t->SkipGroupRows(target, target >= t->cursor ? 1 : -1);
 
     if (extend) {
         t->ExtendTo(target);
