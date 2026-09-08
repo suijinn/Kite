@@ -433,6 +433,8 @@ void AppUi::CancelDrag() {
     dropColumnIndex_ = -1;
     dropColumnMarker_ = {};
     resizeColumnIndex_ = -1;
+    resizeTabBarLeft_ = 0.0f;
+    resizeTabBarMax_ = 0.0f;
     dragSessionIndex_ = -1;
     dropSessionIndex_ = -1;
     dropSessionMarker_ = {};
@@ -569,6 +571,21 @@ bool AppUi::OnMouse(const MouseEvent& e) {
         return true;
     }
 
+    if (drag_ == Drag::TabBarWidth) {
+        if (e.type == MouseEvent::Type::Move) {
+            // 掴んでいるのは右の縁で、バーの左端は動かない ─ 幅は差でそのまま出る
+            // （列の縁と左右が逆なだけ）。ペインの半分で頭打ちにするのは、
+            // レイアウトがそこで止めるから ─ 渡してしまうと、画面のバーはもう
+            // 伸びないのに覚えている幅だけが増える。
+            float width = e.x - resizeTabBarLeft_;
+            if (resizeTabBarMax_ > 0.0f) width = std::min(width, resizeTabBarMax_);
+            app_.SetTabBarWidth(width);
+            return true;
+        }
+        if (e.type == MouseEvent::Type::Up) CancelDrag();
+        return true;
+    }
+
     const Region* region = Pick(e.x, e.y);
 
     if (e.type == MouseEvent::Type::Move) {
@@ -676,7 +693,8 @@ bool AppUi::OnMouse(const MouseEvent& e) {
         int shape = 0;
         if (region && region->kind == Hit::Splitter) {
             shape = (region->node->kind == SplitNode::Kind::LeftRight) ? 2 : 3;
-        } else if (region && region->kind == Hit::ColumnEdge) {
+        } else if (region && (region->kind == Hit::ColumnEdge ||
+                              region->kind == Hit::TabBarEdge)) {
             // 分割線と同じ形。掴めば横に動くもの、というのは同じ話なので。
             shape = 2;
         }
@@ -1011,6 +1029,26 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             drag_ = Drag::ColumnWidth;
             resizeColumnIndex_ = region->index;
             resizeColumnRight_ = box.r;
+            return true;
+        }
+
+        case Hit::TabBarEdge: {
+            app_.FocusPane(region->pane);
+            if (e.button != 0) return true;
+            // 縁のダブルクリックで既定の幅へ。掴む場所がそのまま «戻す» 場所、
+            // というのは列の縁と同じ読み方で、1 回目の押下は幅を動かしていない。
+            if (e.clicks >= 2) {
+                app_.ResetTabBarWidth();
+                return true;
+            }
+            const RectF bar = TabBarRect(region->pane);
+            if (bar.empty()) return true;
+            drag_ = Drag::TabBarWidth;
+            resizeTabBarLeft_ = bar.l;
+            // ペインの右端は一覧の右端。バーの左端からそこまでがペインの幅で、
+            // レイアウトが幅を止めるのはその半分。
+            const RectF list = region->pane ? region->pane->listArea : RectF{};
+            resizeTabBarMax_ = list.empty() ? 0.0f : (list.r - bar.l) * 0.5f;
             return true;
         }
 

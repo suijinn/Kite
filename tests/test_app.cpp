@@ -2766,6 +2766,73 @@ KITE_TEST(app, column_widths_follow_the_text_size) {
     KITE_EXPECT_NEAR(h.app.columns().Find(SortKey::Date)->width, was, 0.01f);
 }
 
+// --- the vertical tab bar's width -------------------------------------------
+
+KITE_TEST(app, the_tab_bar_width_survives_a_save_and_a_reload) {
+    Harness h;
+    KITE_EXPECT(h.app.SetTabBarWidth(240.0f));
+    KITE_EXPECT(h.app.SaveAll());
+
+    h.app.Execute(Cmd::ReloadConfig);
+    KITE_EXPECT_NEAR(h.app.tabBarWidth(), 240.0f, 0.01f);
+    KITE_EXPECT_NEAR(h.app.theme().tabBarWidth, 240.0f, 0.01f);
+}
+
+KITE_TEST(app, the_tab_bar_width_follows_the_text_size) {
+    Harness h;
+    const float was = h.app.theme().tabBarWidth;
+
+    h.app.Execute(Cmd::FontLarger);
+    KITE_EXPECT(h.app.theme().tabBarWidth > was);
+    // 覚えているのは倍率を掛ける前の幅なので、戻せば元の値に戻る（列と同じ）。
+    h.app.Execute(Cmd::FontReset);
+    KITE_EXPECT_NEAR(h.app.theme().tabBarWidth, was, 0.01f);
+}
+
+// 掴んで動かした幅の上に ini の値がもう一度かぶさらないこと ─ 読む場所は App だけ
+// で、Theme::ApplyIni はこのキーを見ない。
+KITE_TEST(app, a_width_from_the_settings_file_is_what_the_bar_gets) {
+    test::ResetFakePlatform();
+    test::FakeFiles()["C:\\home\\config\\settings.ini"] =
+        "[ui]\ntab_bar_width=250\n";
+
+    test::FakeFileSystem files;
+    test::PopulateStandardTree(files);
+    test::FakeShell shell;
+    test::FakeHost host;
+    App app(files, shell, host);
+    app.Init({});
+    test::PumpUntilSettled(app);
+
+    KITE_EXPECT_NEAR(app.tabBarWidth(), 250.0f, 0.01f);
+    KITE_EXPECT_NEAR(app.theme().tabBarWidth, 250.0f, 0.01f);
+}
+
+// 手で書かれたファイルや古い版の書いたファイルが範囲の外の値を持っていても、
+// 掴んで戻せる幅で始める ─ 0 と書かれたバーは縁ごと画面から消える。
+KITE_TEST(app, a_wild_width_in_the_settings_file_is_pulled_back_into_range) {
+    test::ResetFakePlatform();
+    test::FakeFiles()["C:\\home\\config\\settings.ini"] =
+        "[ui]\ntab_bar_width=0\n";
+
+    test::FakeFileSystem files;
+    test::PopulateStandardTree(files);
+    test::FakeShell shell;
+    test::FakeHost host;
+    App app(files, shell, host);
+    app.Init({});
+    test::PumpUntilSettled(app);
+
+    KITE_EXPECT_NEAR(app.tabBarWidth(), kTabBarMinWidth, 0.01f);
+}
+
+KITE_TEST(app, resetting_the_tab_bar_width_answers_even_when_nothing_moves) {
+    Harness h;
+    h.app.ResetTabBarWidth();
+    KITE_EXPECT_NEAR(h.app.tabBarWidth(), kDefaultTabBarWidth, 0.01f);
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.tab_bar_reset"));
+}
+
 KITE_TEST(app, the_reset_width_chord_reaches_the_command) {
     Harness h;
     const int date = h.app.columns().IndexOf(SortKey::Date);

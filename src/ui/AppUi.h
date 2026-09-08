@@ -112,6 +112,7 @@ private:
         TabItem,
         TabClose,
         TabAdd,
+        TabBarEdge,  ///< 縦置きタブバーの右の縁。掴むと幅が変わる
         Crumb,
         ColumnHeader,
         ColumnEdge,  ///< 列の左端の縁。掴むと幅が変わる
@@ -153,6 +154,7 @@ private:
         PendingColumn,   // pressed on a column heading; a click here sorts
         Column,          // reordering the columns
         ColumnWidth,     // dragging a column edge
+        TabBarWidth,     // dragging the vertical tab bar's edge
     };
 
     struct Region {
@@ -346,6 +348,7 @@ private:
     /// @param[in] index App::columns() への添字
     /// @return 見出しの矩形。無ければ空
     RectF ColumnHeaderRect(const Pane* pane, int index) const;
+    RectF TabBarRect(const Pane* pane) const;
 
     bool ResolveColumnDrop(float x, float y, int* outIndex, RectF* outMarker) const;
     void FinishColumnDrag();
@@ -448,6 +451,13 @@ private:
     // 何も変わらない）ので、幅は «右端 - ポインタ» で毎フレーム出せる。
     int resizeColumnIndex_ = -1;
     float resizeColumnRight_ = 0.0f;
+    // 縦置きタブバーの幅を変えている間の 2 つ。掴んでいるのは右の縁で、左端は
+    // ドラッグの間動かない（バーはペインの左端から始まる）ので、幅は
+    // «ポインタ - 左端» で出る ─ 列の縁と左右が逆なだけで同じ話。
+    // 上限をここに控えるのは、レイアウトが幅をペインの半分で止めるため。
+    // 控えずに渡すと、ポインタだけが先へ進んで掴んだ線が指から離れる。
+    float resizeTabBarLeft_ = 0.0f;
+    float resizeTabBarMax_ = 0.0f;
 
     Pane* dragTabPane_ = nullptr;
     int dragTabIndex_ = -1;

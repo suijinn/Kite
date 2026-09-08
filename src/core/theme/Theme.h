@@ -18,6 +18,20 @@ namespace kite {
 /// 100 % が 100 % でなくなる。
 inline constexpr float kDefaultFontSize = 13.0f;
 
+/// @brief 縦置きタブバーの幅（DIP）の既定値と、掴んで動かせる範囲。
+///
+/// **値の正は App（`[ui] tab_bar_width`）で、Theme::ApplyIni はここを読まない。**
+/// 縁を掴んで決めるものなので、読む側と書く側が別のファイルを見ていては
+/// 「動かしたのに次の起動で戻る」が起きる（`[ui] font_size` と同じ話）。
+///
+/// 下限はタブ名が数文字も残らなくなるところ ─ 名前を最後まで読むために縦にして
+/// あるので、そこを割ると縦置きの理由そのものが消える。上限は «それ以上覚えない»
+/// 線でしかない。実際に効く上限はペインの半分（AppUi::LayoutTabBar）のほうで、
+/// バーが一覧を押し潰さないためのその線は窓の広さで決まる。
+inline constexpr float kDefaultTabBarWidth = 170.0f;
+inline constexpr float kTabBarMinWidth = 80.0f;    ///< 縦置きタブバーの最小幅（DIP）
+inline constexpr float kTabBarMaxWidth = 400.0f;   ///< 縦置きタブバーの最大幅（DIP）
+
 /// @brief 画面全体の配色と寸法。
 struct Theme {
     Color windowBg;   ///< ウィンドウ背景
@@ -73,7 +87,9 @@ struct Theme {
     float rowHeight = 22.0f;         ///< 一覧 1 行の高さ（DIP）
     float headerHeight = 24.0f;      ///< 列見出しの高さ（DIP）
     float tabBarHeight = 28.0f;      ///< タブバー 1 行の高さ（DIP）。縦置きではタブ 1 枚の高さ
-    float tabBarWidth = 170.0f;      ///< 縦置きタブバーの幅（DIP）。横置きでは使わない
+    /// 縦置きタブバーの幅（DIP）。横置きでは使わない。正は App::tabBarWidth() の側で、
+    /// ここに入るのは倍率を掛けた後の値（App::ApplyTheme）。
+    float tabBarWidth = kDefaultTabBarWidth;
     float pathBarHeight = 26.0f;     ///< パスバーの高さ（DIP）
     float sessionBarHeight = 26.0f;  ///< セッションバーの高さ（DIP）
     float statusBarHeight = 22.0f;   ///< ステータスバーの高さ（DIP）

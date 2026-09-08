@@ -198,6 +198,10 @@ void App::LoadConfig() {
                                                               kDefaultFontSize)));
     fontScale_ = std::clamp(settings_.GetFloat("ui", "font_scale", 1.0f), kFontScaleMin,
                             kFontScaleMax);
+    // 手で書かれた ini や古い版のファイルが範囲の外の値を持っていても、掴んで
+    // 戻せる幅に丸めてから使う ─ 0 と書かれたバーは縁ごと画面から消える。
+    tabBarWidth_ = std::clamp(settings_.GetFloat("ui", "tab_bar_width", kDefaultTabBarWidth),
+                              kTabBarMinWidth, kTabBarMaxWidth);
     ApplyTheme();
 
     language_ = settings_.GetStr("ui", "language", "auto");
@@ -308,6 +312,10 @@ void App::LoadLanguage() {
 void App::ApplyTheme() {
     theme_ = darkTheme_ ? Theme::Dark() : Theme::Light();
     theme_.ApplyIni(settings_);
+    // 縦置きタブバーの幅は縁を掴んで決めるものなので、ini ではなくここから入れる
+    // （Theme::ApplyIni は読まない）。Scale() の前に置くのは、器としての倍率を
+    // 他の高さや幅と同じ 1 か所で受けるため ─ 掛け算を 2 通りにしない。
+    theme_.tabBarWidth = tabBarWidth_;
     theme_.Scale(uiFactor());
     // 列も文字を入れる器なので同じ率で伸ばす（行やサイドバーの幅と同じ話 ─
     // 据え置くと、文字だけが大きくなって「2026-08-09 17:11」が切れる）。
@@ -341,6 +349,30 @@ void App::ResetColumnWidths(int index) {
     // 変わらなかったときも同じ文言。訊かれているのは «既定に戻っているか» で、
     // その答えはどちらの場合も「戻っている」。
     SetStatus(strings_.Get("ui.columns_reset"));
+}
+
+// 列の幅と同じ作り ─ 受け取るのは画面の上の幅なので、覚える前に割り戻す。
+bool App::SetTabBarWidth(float width) {
+    const float factor = uiFactor();
+    const float wanted = std::clamp(factor > 0.0f ? width / factor : width, kTabBarMinWidth,
+                                    kTabBarMaxWidth);
+    if (wanted == tabBarWidth_) return false;
+    tabBarWidth_ = wanted;
+    ApplyTheme();
+    dirty_ = true;
+    host_.Invalidate();
+    return true;
+}
+
+void App::ResetTabBarWidth() {
+    if (tabBarWidth_ != kDefaultTabBarWidth) {
+        tabBarWidth_ = kDefaultTabBarWidth;
+        ApplyTheme();
+        dirty_ = true;
+    }
+    // 変わらなかったときも同じ文言。訊かれているのは «既定に戻っているか» で、
+    // その答えはどちらの場合も「戻っている」（ResetColumnWidths と同じ）。
+    SetStatus(strings_.Get("ui.tab_bar_reset"));
 }
 
 bool App::MoveColumn(int from, int to) {
@@ -582,6 +614,7 @@ bool App::SaveSettings() {
     settings_.SetBool("ui", "open_archives", openArchives_);
     settings_.Set("ui", "new_tab_position", NewTabPositionName(newTabPosition_));
     settings_.Set("ui", "tab_bar_position", TabBarPositionName(tabBarPosition_));
+    settings_.SetFloat("ui", "tab_bar_width", tabBarWidth_);
 
     // Rewritten whole rather than merged: a folder that has since disappeared
     // would otherwise sit in the file forever, holding a slot nothing fills.
