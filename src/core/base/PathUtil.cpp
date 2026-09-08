@@ -177,6 +177,18 @@ bool IsInside(std::string_view child, std::string_view parent) {
     return IsSep(c[up.size()]);
 }
 
+std::string RelativeTo(std::string_view p, std::string_view base) {
+    std::string full = Normalize(p);
+    std::string up = Normalize(base);
+    while (full.size() > 1 && IsSep(full.back())) full.pop_back();
+    while (up.size() > 1 && IsSep(up.back())) up.pop_back();
+    if (utf8::EqualsIgnoreCaseAscii(full, up)) return {};
+    if (!IsInside(full, up)) return full;
+    // 境目の区切り 1 文字ぶんだけ余分に落とす。IsInside() が「そこが区切りである」
+    // ことまで確かめているので、ここで数え直さない。
+    return full.substr(up.size() + 1);
+}
+
 std::string Normalize(std::string_view p) {
     // A scheme is carried through untouched and only what follows it is folded.
     // Treating the whole string as one path eats the two leading backslashes of

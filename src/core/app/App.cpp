@@ -232,6 +232,7 @@ bool App::Init(const std::vector<std::string>& startPaths) {
     LoadConfig();
     loader_ = std::make_unique<fs::DirectoryLoader>(fs_, host_, 2);
     fileOps_ = std::make_unique<fs::FileOpQueue>(fs_, host_);
+    search_ = std::make_unique<fs::SearchJob>(fs_, host_);
     RefreshRoots();
     LoadWorkspace(startPaths);
     EnsureVisibleTabsLoaded();
@@ -257,6 +258,9 @@ void App::Shutdown() {
     // asked for.
     loader_.reset();
     fileOps_.reset();
+    // 検索は途中で捨ててよい ─ 歩くだけで何も書き換えないので、待つ理由が無い。
+    // デストラクタが «次のフォルダの切れ目で抜けろ» と言ってから join する。
+    search_.reset();
 }
 
 uint32_t App::IconFor(const std::string& path) {
@@ -339,6 +343,9 @@ void App::CloseAllOverlays() {
 // other pane and syncing the panes all move a tab the same way, and only the
 // caller knows whether the place being left is worth remembering.
 void App::RetargetTab(Tab& tab, const std::string& path) {
+    // 「戻る」も「他のペインで開く」もここを通る。行き先が変わるのだから、
+    // 検索結果はそのタブのものではなくなる（NavigateFocused と同じ理由）。
+    CancelSearch(tab);
     tab.path = path;
     tab.loaded = false;
     tab.cursor = 0;
@@ -426,7 +433,11 @@ void App::PumpLoader() {
                     Tab* t = p->activeTab();
                     // Re-list only if the tab is still showing the folder that
                     // changed; it may have navigated away in the meantime.
-                    if (t && t->watchId == change.watchId && t->path == change.path) {
+                    // 検索結果を出している間は取り直さない。届くのはフォルダの
+                    // 中身で、画面に出ているのはその下から集めたもの ─ 通すと、
+                    // 通知 1 つで検索結果が消える。
+                    if (t && !t->search.active && t->watchId == change.watchId &&
+                        t->path == change.path) {
                         RequestLoad(*t, true);
                     }
                 }
@@ -437,6 +448,8 @@ void App::PumpLoader() {
     // ファイル操作の完了も同じ起こされ方で届く。列挙より先に片付けるのは、
     // 完了が一覧の取り直しを要求するから ─ 後回しにすると 1 フレーム遅れる。
     PumpFileOps();
+    // 検索の途中経過も同じ起こされ方で届く。
+    PumpSearch();
 
     if (!loader_) return;
     std::vector<fs::LoadedListing> done;
@@ -482,6 +495,144 @@ void App::PumpLoader() {
     EnsureCursorVisible();
     UpdateTitle();
     host_.Invalidate();
+}
+
+// ---------------------------------------------------------------------------
+// Search
+//
+// 絞り込み（Ctrl+F）とは別の機能。あちらは今の一覧から行を減らすだけで、こちらは
+// このフォルダの下を歩いて **別の一覧を作る** ─ 並ぶ項目はどのサブフォルダのもの
+// でもよく、`fs::Entry::address` が自分自身のパスを持つ（仮想フォルダと同じ手）。
+//
+// 打ち込まれた問いは `Tab::filter` が持ち、`Tab::Rebuild()` がそのまま絞り込みに
+// 使う ─ 検索のためだけの絞り込みをもう 1 つ書かない。ワーカーに渡した «ふるい»
+// （`Tab::search.sieve`）とは普通ずれていて、そのずれこそが「前へ打ち足している
+// 間は歩き直さない」という約束の中身になる（`fs::SearchJob` の冒頭）。
+// ---------------------------------------------------------------------------
+
+void App::StartSearch(Tab& tab, const std::string& query) {
+    if (!search_) return;
+    if (tab.search.token) search_->Cancel(tab.search.token);
+
+    tab.search.active = true;
+    tab.search.truncated = false;
+    tab.search.sieve = query;
+    tab.filter = query;
+
+    // 0 件から始める。フォルダの中身を残したまま検索欄を出すと、最初の 1 打鍵が
+    // それを消したように見える ─ 検索欄の下に並ぶ行は検索結果でなければならない。
+    // 場所そのものについての値（表示名・容量）は残す。タブはまだそこに立っている。
+    tab.listing.entries.clear();
+    tab.listing.status = fs::Status::Ok;
+    tab.listing.message.clear();
+    tab.marked.clear();
+    tab.groups.clear();
+    tab.cursor = 0;
+    tab.anchor = 0;
+    tab.scroll = 0.0f;
+    tab.loaded = true;
+    // 走っている列挙のトークンを落とす。残したままだと、後から届いたフォルダの
+    // 一覧が、集めたばかりの検索結果を黙って上書きする（PumpLoader はトークンで
+    // 突き合わせるので、0 にしておけばその答えはどのタブのものでもなくなる）。
+    tab.loadToken = 0;
+    tab.search.token = search_->Start(tab.path, query);
+    tab.Rebuild();
+}
+
+void App::CancelSearch(Tab& tab) {
+    if (!tab.search.active) return;
+    if (search_ && tab.search.token) search_->Cancel(tab.search.token);
+    tab.search = SearchState{};
+    // 問いも一緒に捨てる。検索を抜けた先の一覧はこのフォルダの中身で、そこに
+    // 検索語が絞り込みとして残っていると、フォルダが空に見える。
+    tab.filter.clear();
+}
+
+void App::SyncSearchQuery(Tab& tab, const std::string& query) {
+    tab.filter = query;
+    const std::string sieve = utf8::ToLowerAscii(tab.search.sieve);
+    const std::string asked = utf8::ToLowerAscii(query);
+    // ふるいが今の問いの部分文字列である限り、«今の問いに当たるもの» はすべて
+    // «ふるいに当たるもの» でもある ─ つまり、もう手元にある。前へ打ち足している
+    // 限り歩き直しが起きないのはこれが理由で、縮めたときだけディスクを歩き直す。
+    //
+    // **ただし «全部» を持ち帰った歩きに限る。** 条件は 2 つ:
+    //
+    // - **まだ歩いている最中なら歩き直す。** そうしないと、ふるいは «最初の 1 文字»
+    //   のまま固まる ─ 打ち始めた瞬間に走り出した歩きが、以後どれだけ打ち足しても
+    //   «全部持っている» と主張し続けるので、`C:\` から `report` を探すつもりが
+    //   «r を含むもの» を集める歩きになる。捨てるのは途中まで集めたものだけで、
+    //   同じものは狭い問いで拾い直せる。
+    // - **上限で打ち切られた歩きも歩き直す。** あれは «当たりの一部» なので、
+    //   絞り込んだ答えが完全である保証がない。広すぎる問いはたいてい歩き始めて
+    //   すぐ上限に届くので、歩き直す代金もそこで頭打ちになる。
+    const bool complete = !tab.search.running() && !tab.search.truncated;
+    if (complete && !sieve.empty() && asked.find(sieve) != std::string::npos) {
+        tab.Rebuild();
+        EnsureCursorVisible();
+        return;
+    }
+    StartSearch(tab, query);
+}
+
+void App::PumpSearch() {
+    if (!search_) return;
+    std::vector<fs::SearchBatch> batches;
+    search_->Drain(batches);
+    if (batches.empty()) return;
+
+    bool touched = false;
+    for (fs::SearchBatch& batch : batches) {
+        Tab* target = nullptr;
+        for (const std::unique_ptr<Session>& s : workspace_.sessions) {
+            for (Pane* p : s->Panes()) {
+                for (std::unique_ptr<Tab>& t : p->tabs) {
+                    if (t->search.token != 0 && t->search.token == batch.token) target = t.get();
+                }
+            }
+        }
+        if (!target) {
+            // 行き先が無い ─ タブが閉じた、または背面に回って一覧を手放した
+            // （`Tab::DropListing`）。歩き続ける理由がもう無いので、ここで畳む。
+            search_->Cancel(batch.token);
+            continue;
+        }
+
+        // まだ動かしていないカーソルは先頭に留める。Rebuild() は «同じ項目の上に
+        // 留まる» を約束するので、放っておくと最初に見つかった 1 件を追いかけて
+        // 一覧の中を下がっていく ─ 誰も指していないものを指し続けることになる。
+        const bool atTop = target->cursor == 0;
+
+        for (fs::Entry& e : batch.entries) target->listing.entries.push_back(std::move(e));
+        target->marked.resize(target->listing.entries.size(), 0);
+        if (batch.truncated) target->search.truncated = true;
+        if (batch.done) target->search.token = 0;
+        target->Rebuild();
+        if (atTop) target->cursor = target->SkipGroupRows(0, 1);
+        touched = true;
+    }
+
+    if (!touched) return;
+    EnsureCursorVisible();
+    host_.Invalidate();
+}
+
+std::string App::searchStatus() const {
+    const Session* s = workspace_.activeSession();
+    if (!s || !s->focus) return {};
+    const Tab* t = s->focus->activeTab();
+    if (!t || !t->search.active) return {};
+    // まだ何も訊かれていない。案内はここではなく一覧の側が出す ─ 帯の右は
+    // «今何が起きたか» で、まだ何も起きていない。
+    if (t->search.sieve.empty()) return {};
+
+    const std::string count = strings_.Format("ui.status_items", { std::to_string(t->ItemCount()) });
+    if (t->search.running()) return strings_.Format("ui.search_running", { count });
+    if (t->search.truncated) {
+        return strings_.Format("ui.search_truncated",
+                               { count, std::to_string(fs::kSearchMaxResults) });
+    }
+    return strings_.Format("ui.search_done", { count });
 }
 
 void App::UpdateTitle() {
@@ -572,6 +723,10 @@ void App::NavigateFocused(const std::string& raw) {
     if (!t) return;
     const std::string target = ArchiveTarget(path::Normalize(raw));
     if (target.empty()) return;
+
+    // どこかへ動く以上、集めた «当たり» はもうこのタブのものではない。一覧の
+    // 取り直しは下でどのみち頼むので、ここでは畳むだけ。
+    CancelSearch(*t);
 
     if (target != t->path) {
         t->back.push_back(t->path);
@@ -776,6 +931,14 @@ std::string App::CommandLinePath(const std::string& arg) {
 
 void App::RefreshFocused() {
     if (Tab* t = workspace_.focusedTab()) {
+        // 検索結果を出しているなら、同じ問いで歩き直す。F5 は «訊き直せ» であって
+        // «検索をやめろ» ではない ─ フォルダの一覧を持ってきたら、探している人は
+        // 打ち直すところからやり直すことになる。
+        if (t->search.active) {
+            StartSearch(*t, t->filter);
+            host_.Invalidate();
+            return;
+        }
         RequestLoad(*t, true);
         // Overlays show a file's state (committed, synced, locked), and every
         // caller here has just changed something - including the shell menu,
@@ -866,6 +1029,9 @@ void App::RefreshTabsShowing(const std::string& dir) {
     if (!s) return;
     for (Pane* p : s->Panes()) {
         if (Tab* t = p->activeTab()) {
+            // 検索結果を出しているタブは取り直さない ─ 届くのはフォルダの
+            // 中身で、画面に出ているのはその下から集めたもの（監視の通知と同じ話）。
+            if (t->search.active) continue;
             if (utf8::EqualsIgnoreCaseAscii(t->path, dir)) RequestLoad(*t, true);
         }
     }
@@ -1253,6 +1419,13 @@ void App::CancelPrompt() {
             t->Rebuild();
             EnsureCursorVisible();
         }
+    } else if (prompt_.kind == PromptKind::Search) {
+        // 絞り込みの Escape が絞り込みを捨てるのと同じ読み方 ─ ただし捨てる相手は
+        // 一覧そのものなので、フォルダの中身を取り直すところまでが «元に戻す»。
+        if (Tab* t = workspace_.focusedTab()) {
+            CancelSearch(*t);
+            RequestLoad(*t, true);
+        }
     }
     prompt_ = Prompt{};
     // 欄そのものが消えるので、そこで変換していた未確定文字列も行き場を失う。
@@ -1382,6 +1555,16 @@ void App::ApplyPrompt() {
             break;
 
         case PromptKind::Filter:
+        case PromptKind::Search:
+            // 何も訊かずに閉じたのなら、何も変わっていないはず ─ 空の検索結果と
+            // 閉じた欄だけが残ると、そこから出る道が `Escape` しか無くなる。
+            if (t && kind == PromptKind::Search && t->search.sieve.empty()) {
+                CancelSearch(*t);
+                RequestLoad(*t, true);
+                break;
+            }
+            // 欄は閉じるが、検索結果はそのまま残る ─ 打ち終わって行を選ぶところ
+            // までが 1 つの動作で、開いた先が «見つけたもの» でなくなっては困る。
             if (t) ActivateEntry(t->cursor, false);
             break;
 
@@ -1469,8 +1652,9 @@ void App::ApplyPrompt() {
 bool App::HandlePromptKey(const Chord& chord) {
     if (!prompt_.active()) return false;
 
-    // While filtering, the list must stay drivable from the keyboard.
-    if (prompt_.kind == PromptKind::Filter) {
+    // While filtering or searching, the list must stay drivable from the
+    // keyboard: both fields address the whole list rather than one row in it.
+    if (prompt_.kind == PromptKind::Filter || prompt_.kind == PromptKind::Search) {
         const Cmd c = keymap_.Lookup(chord);
         if (c == Cmd::CursorUp || c == Cmd::CursorDown || c == Cmd::CursorPageUp ||
             c == Cmd::CursorPageDown || c == Cmd::CursorTop || c == Cmd::CursorBottom) {
@@ -1479,12 +1663,18 @@ bool App::HandlePromptKey(const Chord& chord) {
     }
 
     auto syncFilter = [&] {
-        if (prompt_.kind != PromptKind::Filter) return;
-        if (Tab* t = workspace_.focusedTab()) {
-            t->filter = prompt_.text;
-            t->Rebuild();
-            EnsureCursorVisible();
+        Tab* t = workspace_.focusedTab();
+        if (!t) return;
+        // 検索は «歩き直すかどうか» の判断が要るので別の道を通る。同じ文字列を
+        // 同じ `Tab::filter` へ入れているのは変わらない。
+        if (prompt_.kind == PromptKind::Search) {
+            SyncSearchQuery(*t, prompt_.text);
+            return;
         }
+        if (prompt_.kind != PromptKind::Filter) return;
+        t->filter = prompt_.text;
+        t->Rebuild();
+        EnsureCursorVisible();
     };
 
     // The field is a text field, so it answers the clipboard keys itself. Left
@@ -1628,6 +1818,8 @@ bool App::OnChar(uint32_t cp) {
             t->Rebuild();
             EnsureCursorVisible();
         }
+    } else if (prompt_.kind == PromptKind::Search) {
+        if (Tab* t = workspace_.focusedTab()) SyncSearchQuery(*t, prompt_.text);
     }
     SyncCompletion(true);
     host_.Invalidate();

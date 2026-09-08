@@ -216,7 +216,11 @@ void Tab::Rebuild() {
 
     // 並べ替えの後に挿す。「..」は名前でも日付でも動かない。読めなかったフォルダに
     // は出さない ─ 画面はエラーだけを出すので、触れない行が残るだけになる。
-    if (listing.status == fs::Status::Ok && !vfs::ParentOf(path).empty()) {
+    //
+    // 検索結果にも出さない。並んでいるのは path のフォルダの中身ではなく、その下
+    // から拾い集めたものなので、«1 つ上» に当たるものが無い ─ 出せば、押した人は
+    // 検索を抜けて親フォルダへ飛ばされる。
+    if (!search.active && listing.status == fs::Status::Ok && !vfs::ParentOf(path).empty()) {
         visible.insert(visible.begin(), kParentRow);
         // 見出しの行番号は 1 つずつ後ろへ。ここを忘れると、塊の見出しがその塊の
         // 最後の項目を指す。
@@ -247,6 +251,11 @@ void Tab::Rebuild() {
 }
 
 void Tab::DropListing() {
+    // 検索結果もここで捨てる。歩いて集めたものは «画面に映っている量» そのもので、
+    // 背面に回った以上いちばん先に手放してよい ─ ワーカーはここからは止められない
+    // が、トークンの持ち主が消えたので届いた答えは黙って捨てられる
+    // （`App::PumpSearch` が、行き先の無い答えを見つけたところで歩きも打ち切る）。
+    search = SearchState{};
     listing.entries.clear();
     listing.entries.shrink_to_fit();
     listing.status = fs::Status::Ok;

@@ -9,6 +9,7 @@
 
 #include "core/app/App.h"
 #include "core/base/PathUtil.h"
+#include "core/fs/VirtualPath.h"
 
 namespace kite {
 namespace {
@@ -113,7 +114,13 @@ void App::Execute(Cmd cmd) {
                 CancelPrompt();
             } else if (tab) {
                 tab->ClearMarks();
-                if (!tab->filter.empty()) {
+                // 検索結果を出しているなら、まずそこから抜ける ─ 絞り込みだけを
+                // 消しても «このフォルダの中身ではない一覧» が残るので、Escape が
+                // 元の場所に戻す手にならない。
+                if (tab->search.active) {
+                    CancelSearch(*tab);
+                    RequestLoad(*tab, true);
+                } else if (!tab->filter.empty()) {
                     tab->filter.clear();
                     tab->Rebuild();
                 }
@@ -175,6 +182,27 @@ void App::Execute(Cmd cmd) {
         case Cmd::FocusFilter:
             if (tab) BeginPrompt(PromptKind::Filter, "ui.filter_label", tab->filter);
             break;
+        case Cmd::Search: {
+            if (!tab) break;
+            // 仮想フォルダは歩かない。「PC」もごみ箱も書庫も列挙はシェルの側で
+            // 起き、`kite_shellhost.exe` 1 本を通して直列に流れる（しかも 30 秒の
+            // 制限付き）─ その 1 本を再帰的に占有すれば、他のフォルダが 1 つも
+            // 開けなくなる。断る理由は画面が言う。
+            if (vfs::IsVirtual(tab->path)) {
+                SetStatus(strings_.Get("ui.search_unsupported"));
+                break;
+            }
+            // すでに検索中なら、打ちかけの問いを持ったまま欄を開き直す ─ Enter で
+            // 一度閉じた後に絞り直せる道が他に無い。**歩き直しはしない** ─ 同じ
+            // 問いのままなので、集めてある当たりがそのまま答え。
+            if (!tab->search.active) StartSearch(*tab, {});
+            // 開いたら全選択。アドレスバーと同じ理由で、開き直した人の次の一手は
+            // たいてい «別の名前» ─ 打ち足したいなら `End` で畳んでから、という
+            // 入力欄の一般則どおりに。初回は空なので何も起きない。
+            BeginPrompt(PromptKind::Search, "ui.search_label", tab->filter);
+            prompt_.SelectAll();
+            break;
+        }
 
         // --- cursor and selection --------------------------------------------
         case Cmd::CursorUp:        MoveCursor(-1, false); break;
