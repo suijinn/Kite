@@ -1613,6 +1613,115 @@ KITE_TEST(appui, the_thumb_sits_where_the_column_is_scrolled_to) {
     KITE_EXPECT_NEAR(atTop.t, pane.t + 3.0f, 0.01f);
 }
 
+// --- the vertical bar's width -----------------------------------------------
+//
+// The one thing the column costs is the width it takes from the listing, so how
+// much it takes has to be the reader's to decide. The edge where the bar meets
+// the list is the handle, the same way a column heading's edge is.
+
+KITE_TEST(appui, dragging_the_edge_of_the_column_widens_it_and_the_list_follows) {
+    Fixture f;
+    f.UseVerticalTabBar();
+
+    const RectF pane = f.paneRect();
+    const float before = f.app.theme().tabBarWidth;
+    const float edge = pane.l + before;
+
+    f.Press(edge - 1.0f, pane.center().y);
+    f.Drag(edge + 40.0f, pane.center().y);
+    f.Release(edge + 40.0f, pane.center().y);
+    f.Paint();
+
+    KITE_EXPECT_NEAR(f.app.theme().tabBarWidth, before + 40.0f, 1.0f);
+    // 幅はバーだけの話ではない ─ 取ったぶんだけ一覧が右から始まる。
+    KITE_EXPECT_NEAR(f.pane()->listArea.l, pane.l + f.app.theme().tabBarWidth, 0.01f);
+}
+
+KITE_TEST(appui, the_edge_stops_where_the_bar_would_start_replacing_the_list) {
+    Fixture f;
+    f.UseVerticalTabBar();
+
+    const RectF pane = f.paneRect();
+    const float edge = pane.l + f.app.theme().tabBarWidth;
+
+    // Hauled all the way to the right of the pane: the bar is a label for the
+    // listing, so it stops at half of it rather than taking the whole pane.
+    f.Press(edge - 1.0f, pane.center().y);
+    f.Drag(pane.r - 2.0f, pane.center().y);
+    f.Release(pane.r - 2.0f, pane.center().y);
+    f.Paint();
+
+    KITE_EXPECT(f.app.theme().tabBarWidth <= pane.w() * 0.5f + 0.01f);
+    // 掴んだ線がポインタから離れない、が守れているかは «止まった» ことでしか
+    // 見えない ─ 覚えた幅が画面の外まで伸びていれば、次に窓を広げたときに跳ぶ。
+    KITE_EXPECT_NEAR(f.pane()->listArea.l, pane.l + f.app.theme().tabBarWidth, 0.01f);
+}
+
+KITE_TEST(appui, the_edge_keeps_enough_of_the_bar_to_read_a_name_in) {
+    Fixture f;
+    f.UseVerticalTabBar();
+
+    const RectF pane = f.paneRect();
+    const float edge = pane.l + f.app.theme().tabBarWidth;
+
+    f.Press(edge - 1.0f, pane.center().y);
+    f.Drag(pane.l + 1.0f, pane.center().y);
+    f.Release(pane.l + 1.0f, pane.center().y);
+    f.Paint();
+
+    KITE_EXPECT(f.app.theme().tabBarWidth >= kTabBarMinWidth);
+}
+
+KITE_TEST(appui, double_clicking_the_edge_puts_the_width_back) {
+    Fixture f;
+    f.UseVerticalTabBar();
+
+    const RectF pane = f.paneRect();
+    const float before = f.app.theme().tabBarWidth;
+    const float edge = pane.l + before;
+
+    f.Press(edge - 1.0f, pane.center().y);
+    f.Drag(edge + 60.0f, pane.center().y);
+    f.Release(edge + 60.0f, pane.center().y);
+    f.Paint();
+    KITE_EXPECT(f.app.theme().tabBarWidth > before);
+
+    const RectF wider = f.paneRect();
+    f.DoubleClick(wider.l + f.app.theme().tabBarWidth - 1.0f, pane.center().y);
+    f.Paint();
+    KITE_EXPECT_NEAR(f.app.theme().tabBarWidth, before, 0.01f);
+}
+
+// 掴む場所は帯の «内側» にしかない。行の側へはみ出させても、後から登録される
+// 一覧の行が勝つので、そこを押せば今までどおり行が選ばれる。
+KITE_TEST(appui, a_press_just_inside_the_list_still_belongs_to_the_list) {
+    Fixture f;
+    f.UseVerticalTabBar();
+
+    const float before = f.app.theme().tabBarWidth;
+    const RectF list = f.pane()->listArea;
+    f.Press(list.l + 1.0f, list.t + f.app.theme().rowHeight * 0.5f);
+    f.Drag(list.l + 60.0f, list.t + f.app.theme().rowHeight * 0.5f);
+    f.Release(list.l + 60.0f, list.t + f.app.theme().rowHeight * 0.5f);
+    f.Paint();
+
+    KITE_EXPECT_NEAR(f.app.theme().tabBarWidth, before, 0.01f);
+}
+
+// 横置きのバーに縁は無い ─ 幅を持っていないので、掴めるものが無い。
+KITE_TEST(appui, the_horizontal_bar_has_no_edge_to_grab) {
+    Fixture f;
+    const float before = f.app.theme().tabBarWidth;
+    const RectF pane = f.paneRect();
+
+    f.Press(pane.l + before - 1.0f, pane.t + f.app.theme().tabBarHeight * 0.5f);
+    f.Drag(pane.l + before + 60.0f, pane.t + f.app.theme().tabBarHeight * 0.5f);
+    f.Release(pane.l + before + 60.0f, pane.t + f.app.theme().tabBarHeight * 0.5f);
+    f.Paint();
+
+    KITE_EXPECT_NEAR(f.app.theme().tabBarWidth, before, 0.01f);
+}
+
 KITE_TEST(appui, nothing_behind_the_settings_screen_is_lit) {
     Fixture f;
     const PointF p = f.RowPoint(1);

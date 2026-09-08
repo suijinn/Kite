@@ -390,6 +390,25 @@ public:
     /// @note UI 層はこれ 1 つでタブバーの向きを決める。Left なら縦置き
     TabBarPosition tabBarPosition() const { return tabBarPosition_; }
 
+    /// @brief 縦置きタブバーの幅を返す。
+    /// @return 幅（DIP、**倍率を掛ける前**の値）。横置きでは使わない
+    /// @note 画面に出る幅は `theme().tabBarWidth`（倍率を掛けた後）。掛けるのは
+    ///       ApplyTheme() の 1 か所だけ、というのは列の幅と同じ約束
+    float tabBarWidth() const { return tabBarWidth_; }
+
+    /// @brief 縦置きタブバーの幅を変える。
+    /// @param[in] width 新しい幅（DIP、**倍率を掛けた後**の値）
+    /// @return 実際に変わったら true
+    /// @note 掛け算済みの幅を受けるのは、掴んでいる縁の位置がそのまま答えだから。
+    ///       割り戻して覚えるので、文字を大きくすればバーも同じだけ広くなる。
+    ///       範囲は kTabBarMinWidth〜kTabBarMaxWidth に丸める
+    bool SetTabBarWidth(float width);
+
+    /// @brief 縦置きタブバーの幅を組み込みの既定に戻す。
+    /// @note すでに既定のときも黙らない ─ 何も動かない操作は「効かないキー」と
+    ///       見分けが付かないので、ステータス行がそう言う（ResetColumnWidths と同じ）
+    void ResetTabBarWidth();
+
     /// @brief サイドバーが表示中かを返す。
     /// @return 表示中なら true
     bool sidebarVisible() const { return sidebarVisible_; }
@@ -1096,6 +1115,10 @@ private:
     ColumnLayout scaledColumns_ = ColumnLayout::Default();
     NewTabPosition newTabPosition_ = NewTabPosition::End;
     TabBarPosition tabBarPosition_ = TabBarPosition::Top;
+    // 縦置きタブバーの幅。倍率を掛ける前の値で覚えるのは列の幅と同じ理由で、
+    // 掛けるのは ApplyTheme() の 1 か所だけ ─ ui 側に「今 1.4 倍だから」と
+    // 判断する場所を作らない
+    float tabBarWidth_ = kDefaultTabBarWidth;
     std::string language_ = "auto";
     ViewState defaultView_;
 

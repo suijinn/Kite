@@ -16,6 +16,9 @@ namespace {
 // 列の縁を掴める幅（DIP、縁の左右それぞれ）。細すぎると狙えず、太くすると見出しを
 // 押したつもりが幅の変更になる。
 constexpr float kColumnGrab = 3.0f;
+// 縦置きタブバーの縁を掴める幅。列の縁と違って «内側» にしか取れないので、
+// 片側 3 px ではなく 5 px ─ 掴める帯の広さは同じになる。
+constexpr float kTabBarGrab = 5.0f;
 
 std::string SortArrow(bool desc) { return desc ? "\xE2\x96\xBC" : "\xE2\x96\xB2"; }  // ▼ ▲
 
@@ -86,7 +89,8 @@ bool AppUi::OutsideWindow(float x, float y) const {
 bool AppUi::PointerOver(const RectF& box) const {
     if (!mouseInside_ || dropActive_) return false;
     if (drag_ == Drag::Splitter || drag_ == Drag::Tab || drag_ == Drag::Marquee ||
-        drag_ == Drag::Sidebar || drag_ == Drag::Section || drag_ == Drag::Session) {
+        drag_ == Drag::Sidebar || drag_ == Drag::Section || drag_ == Drag::Session ||
+        drag_ == Drag::TabBarWidth) {
         return false;
     }
     return box.contains(mouseX_, mouseY_);
@@ -111,7 +115,7 @@ bool AppUi::Hovered(const RectF& box) const {
 // it happens to be over a tab.
 bool AppUi::IsTabBarHit(Hit kind) {
     return kind == Hit::TabBar || kind == Hit::TabItem || kind == Hit::TabClose ||
-           kind == Hit::TabAdd;
+           kind == Hit::TabAdd || kind == Hit::TabBarEdge;
 }
 
 // ---------------------------------------------------------------------------
@@ -839,6 +843,13 @@ void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused
         // already carry the lines between themselves.
         r.FillRect({ area.r - 1.0f, area.t, area.r, area.b }, th.border);
 
+        // その線が幅を変える取っ手でもある。タブより «後» に登録するので、重なった
+        // 数ピクセルは幅のものになる（列の縁と同じ順序の話 ─ Pick は後ろから引く）。
+        // 帯の «内側» だけを取るのは、一覧の側は後から登録される行が必ず勝つから ─
+        // はみ出させても、その数ピクセルはどのみち行のものになる。閉じるボタンが
+        // 右端から 6 px 内側で終わっているので、取り合いにもならない。
+        Add({ area.r - kTabBarGrab, area.t, area.r, area.b }, Hit::TabBarEdge, 0, pane);
+
         // And, when there are tabs it is not showing, the thumb that says so.
         // Without it the column looks the same whether it holds five tabs or
         // fifty: the wheel moves it, and nothing on screen says there was
@@ -985,6 +996,16 @@ std::vector<AppUi::PlacedColumn> AppUi::LayoutColumns(const RectF& area, float* 
 
 // 前フレームの当たり判定から引く。列の位置を «描くときに決める» 1 か所に保つため
 // で、掴んだ縁がどの列の右端なのかもここで答えられる。
+// バーの矩形は幅を変えるときの土台（左端がドラッグの原点）。前のフレームで
+// PaintTabBar が登録した Hit::TabBar から引く ─ 覚え直すと、ペインが複数ある窓で
+// 「最後に描いたバー」を掴んだことになる。
+RectF AppUi::TabBarRect(const Pane* pane) const {
+    for (const Region& candidate : regions_) {
+        if (candidate.kind == Hit::TabBar && candidate.pane == pane) return candidate.rect;
+    }
+    return {};
+}
+
 RectF AppUi::ColumnHeaderRect(const Pane* pane, int index) const {
     for (const Region& candidate : regions_) {
         if (candidate.kind != Hit::ColumnHeader) continue;
