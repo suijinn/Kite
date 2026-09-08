@@ -23,6 +23,7 @@
 #include "core/fs/DirectoryWatcher.h"
 #include "core/fs/FileOpQueue.h"
 #include "core/fs/FileSystem.h"
+#include "core/fs/SearchJob.h"
 #include "core/i18n/Strings.h"
 #include "core/input/Commands.h"
 #include "core/input/KeyEditor.h"
@@ -41,6 +42,7 @@ enum class PromptKind : uint8_t {
     None,                    ///< 入力欄は出ていない
     Path,                    ///< 移動先パスの入力
     Filter,                  ///< 一覧の絞り込み
+    Search,                  ///< このフォルダ以下の再帰検索
     Rename,                  ///< 名前の変更
     NewFolder,               ///< 新しいフォルダ名
     NewFile,                 ///< 新しいファイル名
@@ -74,7 +76,7 @@ struct Prompt : TextField {
     /// @brief 対象そのものの上で編集する入力欄かを判定する。
     /// @return パンくずの行・一覧の行・セッションチップの上に出るものなら true
     /// @note 画面下部の帯に出るのは、これが false のもの ─ 一覧全体を相手にする
-    ///       絞り込みと、文字を打つのではない削除の確認だけ
+    ///       絞り込みと検索、そして文字を打つのではない削除の確認だけ
     bool isInline() const {
         return kind == PromptKind::Path || kind == PromptKind::Rename ||
                kind == PromptKind::NewFolder || kind == PromptKind::NewFile ||
@@ -663,7 +665,17 @@ public:
     void ReportFailure(const char* key, const std::string& detail);
 
     /// @brief フォーカス中のタブを再列挙する。
+    /// @note 検索結果を出しているタブでは、同じ問いで歩き直す ─ `F5` は «訊き直せ»
+    ///       であって «検索をやめろ» ではない
     void RefreshFocused();
+
+    /// @brief 検索についてステータス行に出す文言を返す。
+    /// @return 歩いている最中なら件数付きの「検索中」、終わっていれば結果。検索結果
+    ///         を出していなければ空
+    /// @note 期限で消えない ─ 深い木の検索は数十秒かかるので、その間ステータス行が
+    ///       黙っていると「押したのに何も起きていない」と見分けが付かない
+    ///       （実行中のファイル操作と同じ扱い）
+    std::string searchStatus() const;
 
     /// @brief 選択中の項目に対してシェルのコンテキストメニューを表示する。
     /// @param[in] screenX 表示位置の X（スクリーン座標）。負ならカーソル位置
@@ -911,6 +923,34 @@ private:
     ///       してある ─ 片方だけ `defaultView_` を更新し忘れる形の不具合を防ぐ
     void ToggleViewFlag(Tab* tab, bool ViewState::* flag);
 
+    /// @brief タブを検索結果モードにし、ワーカーに歩き始めさせる。
+    /// @param[in,out] tab 対象のタブ
+    /// @param[in] query 探す文字列。空なら «まだ何も訊かれていない» 状態にする
+    /// @note 一覧は捨てて 0 件から始める。フォルダの中身を残したまま検索欄を出すと、
+    ///       最初の 1 打鍵がファイルを消したように見える
+    /// @note 走っている列挙のトークンも落とす ─ 後から届いたフォルダの一覧が、
+    ///       集めたばかりの検索結果を上書きしてしまう
+    void StartSearch(Tab& tab, const std::string& query);
+
+    /// @brief 検索結果モードを抜ける。一覧は取り直さない。
+    /// @param[in,out] tab 対象のタブ
+    /// @note 一覧を取り直すかどうかは呼ぶ側が決める ─ 移動の途中で呼ばれることが
+    ///       あり、そこでは移動そのものが取り直しを頼む
+    void CancelSearch(Tab& tab);
+
+    /// @brief 打ち込まれた問いに合わせて、歩き直すかどうかを決める。
+    /// @param[in,out] tab 対象のタブ
+    /// @param[in] query 今そこに打たれている文字列
+    /// @note **前へ打ち足している間は歩き直さない** ─ ふるいが今の問いの部分文字列
+    ///       である限り、当たるものはすべてもう手元にある（`fs::SearchJob` の冒頭）。
+    ///       縮めたときと、当たらない向きに書き換えたときだけ歩き直す
+    void SyncSearchQuery(Tab& tab, const std::string& query);
+
+    /// @brief 届いた検索の途中経過を取り込む。
+    /// @note PumpLoader() から呼ばれる。行き先の無くなった答え ─ タブが閉じた、
+    ///       背面に回って一覧を手放した ─ を見つけたら、そこで歩きも打ち切る
+    void PumpSearch();
+
     void RequestLoad(Tab& tab, bool force = false);
     void EnsureVisibleTabsLoaded();
     void RefreshTabsShowing(const std::string& dir);
@@ -994,6 +1034,9 @@ private:
     // 終わるまでウィンドウがメッセージを 1 つも処理できない ─ 大きなコピーの間
     // 「使えなくなる」と報告された形がこれ。
     std::unique_ptr<fs::FileOpQueue> fileOps_;
+    // 再帰検索。**一度に 1 本しか歩かない** ─ 2 本走らせても同じディスクを取り合う
+    // だけで、2 本目の結果は誰も見ていない一覧へ届く（`fs::SearchJob` の冒頭）。
+    std::unique_ptr<fs::SearchJob> search_;
     std::vector<PendingFileOp> pendingOps_;
 
     std::vector<fs::Root> roots_;

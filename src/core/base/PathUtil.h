@@ -132,6 +132,17 @@ std::string Normalize(std::string_view p);
 ///       （ドロップ先の検査とファイル操作の衝突判定が同じ答えを使う）
 bool IsInside(std::string_view child, std::string_view parent);
 
+/// @brief 基準フォルダから見た相対パスを返す。
+/// @param[in] p 対象のパス
+/// @param[in] base 基準になるフォルダ
+/// @return `base` から `p` までの相対パス。同じ場所なら空文字列。`p` が `base` の
+///         下に無ければ `p` をそのまま返す
+/// @note 検索結果の行が «どこで見つかったか» を言うために使う ─ 深い木を探すと
+///       同じ名前が何行も並ぶので、フルパスを出さずに済ませる唯一の手段
+/// @note 判定は IsInside() に任せる。文字列の前方一致で書くと、`alpha` と
+///       `alpha2` が親子になる
+std::string RelativeTo(std::string_view p, std::string_view base);
+
 /// @brief 長すぎるパスを "\\\\?\\" 付きの形（拡張パス）に直す。
 /// @param[in] p 対象のパス
 /// @return 260 文字（UTF-16 換算）の制限に掛かる長さなら拡張パス、それ以外は

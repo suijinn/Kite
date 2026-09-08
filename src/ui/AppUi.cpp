@@ -25,6 +25,23 @@ std::string SortArrow(bool desc) { return desc ? "\xE2\x96\xBC" : "\xE2\x96\xB2"
 // once the text size is turned up.
 float IconCell(const Theme& theme) { return theme.rowHeight * 0.9f; }
 
+// 行が 1 つも無い一覧が、その理由を言う言葉。**4 通りある** ─ フォルダが空、
+// 絞り込みに当たらない、検索がまだ何も訊かれていない、検索して見つからなかった。
+// 1 つにまとめると、探しているのに「このフォルダーは空です」と言われることになる。
+const char* EmptyListText(const Tab& tab) {
+    if (tab.search.active) {
+        // ふるいが空 ＝ まだ 1 度も歩いていない。ここは «打ってください» と言う
+        // 場所で、見つからなかったと言う場所ではない。
+        if (tab.search.sieve.empty()) return "ui.search_hint";
+        // 歩いている最中はまだ答えが出ていない。件数と «検索中» はステータス行の
+        // 側が出しているので、ここは黙っている ─ 途中経過を「見つかりません」と
+        // 言い切ると、次の瞬間に行が現れて嘘になる。
+        if (tab.search.running()) return "";
+        return "ui.search_no_match";
+    }
+    return tab.filter.empty() ? "ui.empty" : "ui.no_match";
+}
+
 }  // namespace
 
 AppUi::AppUi(App& app) : app_(app) {}
@@ -1060,8 +1077,11 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
     const bool renaming = focused && promptKind == PromptKind::Rename;
 
     if (tab->visible.empty() && phantom < 0) {
-        r.DrawText(str.Get(tab->filter.empty() ? "ui.empty" : "ui.no_match"),
-                   body.inset(kPad, 8.0f), th.textDim, FontRole::Ui, TextAlign::Left);
+        const char* key = EmptyListText(*tab);
+        if (*key) {
+            r.DrawText(str.Format(key, { app_.DisplayName(*tab) }), body.inset(kPad, 8.0f),
+                       th.textDim, FontRole::Ui, TextAlign::Left);
+        }
         return;
     }
 
@@ -1227,7 +1247,29 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
         // spellings of the same name, one under the other, is what the bar at the
         // bottom looked like.
         const bool editingRow = renaming && isCursor;
-        if (!editingRow) r.DrawText(e.name, nameBox, nameColor, FontRole::Ui, TextAlign::Left);
+        if (!editingRow) {
+            r.DrawText(e.name, nameBox, nameColor, FontRole::Ui, TextAlign::Left);
+            // 検索結果では、その項目がどのサブフォルダに在ったのかを名前の後ろに
+            // 薄く添える。深い木を探せば同じ名前が何行も並ぶので、これが無いと
+            // 「3 つの notes.txt」がどれも同じ行に見える ─ 開くまで区別が付かない。
+            //
+            // 列は増やさない。列はウィンドウに 1 つで、通常のフォルダでは全行が
+            // 空になる «場所» の列を持ち回ることになる。
+            //
+            // 幅は名前が使い残したぶんだけ渡す ─ 1 行に 2 つ置くときの規則そのまま
+            // で、渡さないと窓を狭めた瞬間に名前と場所が重なって両方読めなくなる。
+            if (tab->search.active) {
+                const std::string where = path::RelativeTo(path::Parent(full), tab->path);
+                if (!where.empty()) {
+                    const float used = r.MeasureText(e.name, FontRole::Ui) + 10.0f;
+                    if (nameBox.w() > used) {
+                        r.DrawText(where, { nameBox.l + used, nameBox.t, nameBox.r, nameBox.b },
+                                   th.textDim.alpha(th.textDim.a * ink), FontRole::UiSmall,
+                                   TextAlign::Left);
+                    }
+                }
+            }
+        }
 
         // The other columns fade with the name. Leaving them bright would split
         // one row into two answers about whether it is going anywhere.
@@ -1284,9 +1326,12 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
     // is empty" is about to stop being true anyway.
     if (tab->ItemCount() == 0 && phantom < 0) {
         const float top = body.t + rowH;
-        r.DrawText(str.Get(tab->filter.empty() ? "ui.empty" : "ui.no_match"),
-                   { body.l + kPad, top + 8.0f, body.r - kPad, body.b }, th.textDim, FontRole::Ui,
-                   TextAlign::Left);
+        const char* key = EmptyListText(*tab);
+        if (*key) {
+            r.DrawText(str.Format(key, { app_.DisplayName(*tab) }),
+                       { body.l + kPad, top + 8.0f, body.r - kPad, body.b }, th.textDim,
+                       FontRole::Ui, TextAlign::Left);
+        }
     }
 
     // --- scrollbar ---
@@ -1317,6 +1362,7 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
     std::string right;
     const Prompt& p = app_.prompt();
     const std::string fileOp = app_.fileOpStatus();
+    const std::string searchState = app_.searchStatus();
     // 入力欄を持たない画面で変換している ─ 一覧の上での型入力ジャンプがこれ。行の
     // どれも書き換わらないので、ここで言わなければ打った文字はどこにも出ない
     // （打ちかけの文字列をステータス行に出しているのと同じ理由で、しかも変換中は
@@ -1325,6 +1371,12 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
         right = str.Format("ui.composing", { app_.composition().text });
     } else if (p.isInline() && p.kind != PromptKind::Path && !p.labelKey.empty()) {
         right = str.Get(p.labelKey);
+    } else if (!searchState.empty()) {
+        // 実行中のファイル操作と同じ扱いで、期限では消えない ─ 深い木の検索は
+        // 数十秒かかるので、その間ステータス行が黙っていると「押したのに何も
+        // 起きていない」と見分けが付かない。ファイル操作より先に出すのは、
+        // こちらが «今この一覧が何なのか» を言っている唯一の場所だから。
+        right = searchState;
     } else if (!fileOp.empty()) {
         // 実行中のファイル操作は、直前の操作の報告より «今» に近い。しかも**期限で
         // 消えない** ─ 数分かかるコピーの間、ステータス行が黙っていると、押した

@@ -65,6 +65,15 @@ const DefaultBinding kDefaults[] = {
     { Cmd::OpenInNewTab,        "Ctrl+Enter" },
     { Cmd::EditPath,            "Ctrl+L" },
     { Cmd::FocusFilter,         "Ctrl+F" },
+    // エクスプローラーの検索キーをそのまま借りる。**`Ctrl+Shift+F` にはしない** ─
+    // 絞り込み（`Ctrl+F`）に `Shift` を足す形は読み方としては素直だが、あちらは
+    // すでに `Cmd::ToggleDirsFirst` が持っている。既定を奪えば、`keys.ini` を
+    // 持っていない新しい環境でだけ «フォルダを先頭に» が消える ─ 移すのなら
+    // 移されるほうの理由が要るが、それは検索を足したこととは無関係。
+    //
+    // **`Ctrl+Alt+F` も足さない。** 多くの欧州レイアウトで `Ctrl+Alt` は `AltGr` と
+    // 同じ打鍵になるので、記号を打とうとした人の前で検索欄が開く。
+    { Cmd::Search,              "F3" },
 
     // Cursor and selection
     { Cmd::CursorUp,            "Up" },

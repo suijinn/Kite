@@ -303,3 +303,27 @@ KITE_TEST(path, is_inside_answers_no_when_either_side_is_empty) {
     KITE_EXPECT_FALSE(path::IsInside("", "C:\\home"));
     KITE_EXPECT_FALSE(path::IsInside("C:\\home", ""));
 }
+
+KITE_TEST(path, relative_to_names_the_part_below_the_base) {
+    // 検索結果の行が «どこで見つかったか» を言うために要る ─ 深い木を探すと同じ
+    // 名前が何行も並ぶので、フルパスを出さずに済ませる唯一の手段。
+    KITE_EXPECT_EQ(path::RelativeTo("C:\\home\\alpha\\nested", "C:\\home"),
+                   std::string("alpha\\nested"));
+    KITE_EXPECT_EQ(path::RelativeTo("C:\\home\\alpha", "C:\\home\\"), std::string("alpha"));
+    KITE_EXPECT_EQ(path::RelativeTo("C:\\home\\a", "C:\\"), std::string("home\\a"));
+}
+
+KITE_TEST(path, relative_to_is_empty_for_the_base_itself) {
+    // 当たりが今いるフォルダの直下なら、添える «場所» は無い。
+    KITE_EXPECT_EQ(path::RelativeTo("C:\\home", "C:\\home"), std::string(""));
+    KITE_EXPECT_EQ(path::RelativeTo("C:\\home\\", "C:\\home"), std::string(""));
+    KITE_EXPECT_EQ(path::RelativeTo("c:/HOME", "C:\\home"), std::string(""));
+}
+
+KITE_TEST(path, relative_to_hands_back_the_whole_path_when_it_is_not_below) {
+    // 判定は IsInside に任せてあるので、兄弟の接頭辞もここで正しく落ちる。
+    KITE_EXPECT_EQ(path::RelativeTo("C:\\other\\x", "C:\\home"),
+                   std::string("C:\\other\\x"));
+    KITE_EXPECT_EQ(path::RelativeTo("C:\\home2\\x", "C:\\home"),
+                   std::string("C:\\home2\\x"));
+}

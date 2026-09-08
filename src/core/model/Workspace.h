@@ -43,6 +43,27 @@ struct ViewState {
     bool grouped = false;
 };
 
+/// @brief 検索結果を出しているタブの状態。
+///
+/// **検索中の `Tab::listing` は、`Tab::path` のフォルダの中身ではない** ─ その下を
+/// 歩いて集めた «当たり» の一覧で、項目は `fs::Entry::address` に自分自身のパスを
+/// 持つ（仮想フォルダの項目と同じ手）。だから `..` の行は出さない ─ 一覧であって
+/// フォルダではないので、«1 つ上» に当たるものが無い。
+///
+/// **打ち込んだ問いは `Tab::filter` が持つ。** ここが覚えているのはワーカーに渡した
+/// «ふるい» のほうで、両者は普通ずれる ─ 前へ打ち足している間は歩き直さないため
+/// （`q` に当たるものは `qu` にも必ず当たる。`fs::SearchJob` の冒頭を参照）。
+struct SearchState {
+    bool active = false;     ///< 検索結果を出している
+    uint64_t token = 0;      ///< 実行中の検索のトークン。0 なら歩いていない
+    bool truncated = false;  ///< 上限に達して打ち切られた
+    std::string sieve;       ///< ワーカーに渡した問い。空なら 1 度も歩いていない
+
+    /// @brief まだ歩いている最中かを判定する。
+    /// @return 歩いていれば true
+    bool running() const { return token != 0; }
+};
+
 /// @brief 1 つのタブ。表示中のフォルダとその一覧・選択状態・履歴を持つ。
 class Tab {
 public:
@@ -80,6 +101,7 @@ public:
     std::vector<Group> groups;    ///< 塊の見出し。view.grouped が false なら空
 
     std::string filter;   ///< 絞り込み文字列。空なら絞り込みなし
+    SearchState search;   ///< 検索結果モード。active が false なら通常の一覧
     int cursor = 0;       ///< カーソル位置。visible への添字
     int anchor = 0;       ///< 範囲選択の起点。visible への添字
     float scroll = 0.0f;  ///< スクロール量（ピクセル）
@@ -106,6 +128,8 @@ public:
     ///       設定されていればそちらを優先し、消費する
     /// @note path に親があり、かつ列挙が成功していれば先頭に「..」行を足す。
     ///       絞り込みにも並べ替えにも掛けない ─ 移動手段であって項目ではない
+    /// @note 検索結果（`search.active`）では「..」を出さない。一覧であって
+    ///       フォルダではないので、«1 つ上» に当たるものが無い
     void Rebuild();
 
     /// @brief 先頭に「..」行があるかを判定する。

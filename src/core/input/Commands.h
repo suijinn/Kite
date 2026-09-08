@@ -61,6 +61,9 @@ enum class CmdGroup : uint8_t {
     X(OpenInNewTab,       "nav.open_new_tab",        "cmd.open_new_tab",       Navigate)         \
     X(EditPath,           "nav.edit_path",           "cmd.edit_path",          Navigate)         \
     X(FocusFilter,        "nav.filter",              "cmd.filter",             Navigate)         \
+    /* nav.search: 絞り込み（nav.filter）とは別物。あちらは今の一覧から行を減らし、 */          \
+    /* こちらはこのフォルダの下を歩いて別の一覧を作る（ROADMAP P2-3）。 */                      \
+    X(Search,             "nav.search",              "cmd.search",             Navigate)         \
     /* nav.places: 画面が «行き先» に育ったので、名前も分類もそちらに揃えてある。 */               \
     /* 旧名 bookmark.list は CommandFromName() が別名として読み続ける（Commands.cpp）。*/            \
     X(ShowPlaces,         "nav.places",              "cmd.show_places",        Navigate)         \

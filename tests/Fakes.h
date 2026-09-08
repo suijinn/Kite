@@ -777,6 +777,10 @@ inline bool PumpUntilSettled(App& app, int timeoutMs = 4000) {
             for (Pane* pane : session->Panes()) {
                 for (const std::unique_ptr<Tab>& tab : pane->tabs) {
                     if (tab->loadToken != 0) settled = false;
+                    // 検索も同じ回収路（App::PumpSearch）を通る。歩き終わりの
+                    // 合図が届くまでトークンは 0 に戻らないので、これ 1 つで
+                    // 「まだ歩いている」も「答えがまだ届いていない」も拾える。
+                    if (tab->search.token != 0) settled = false;
                 }
             }
         }

@@ -2716,3 +2716,61 @@ KITE_TEST(appui, the_reset_command_puts_every_width_back) {
     f.Paint();
     KITE_EXPECT(f.StatusTextWith(f.app.strings().Get("ui.columns_reset")) != nullptr);
 }
+
+// --- search results ---------------------------------------------------------
+
+KITE_TEST(appui, a_search_hit_says_which_subfolder_it_was_found_in) {
+    // 深い木を探せば同じ名前が何行も並ぶ。場所が添っていないと、3 つの notes.txt が
+    // どれも同じ行に見える ─ 開くまで区別が付かない。
+    Fixture f;
+    f.app.Execute(Cmd::Search);
+    for (char c : std::string("inner")) f.app.OnChar(static_cast<uint32_t>(c));
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    const test::FakeRenderer::Text* name = nullptr;
+    const test::FakeRenderer::Text* where = nullptr;
+    for (const test::FakeRenderer::Text& t : f.renderer.texts) {
+        if (t.text == "inner.md") name = &t;
+        if (t.text == "alpha") where = &t;
+    }
+    KITE_EXPECT(name != nullptr);
+    KITE_EXPECT(where != nullptr);
+    if (!name || !where) return;
+    // 名前が使い残した幅にしか置かない ─ 重なれば両方読めなくなる。
+    KITE_EXPECT_FALSE(test::FakeRenderer::Overlaps(name->ink, where->ink));
+    KITE_EXPECT(where->ink.l >= name->ink.r);
+}
+
+KITE_TEST(appui, a_hit_in_the_searched_folder_itself_gets_no_location) {
+    // 添えるものが無い ─ «ここ» と書いても行が 1 つも増えない。
+    Fixture f;
+    f.app.Execute(Cmd::Search);
+    for (char c : std::string("notes")) f.app.OnChar(static_cast<uint32_t>(c));
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    bool sawName = false;
+    for (const test::FakeRenderer::Text& t : f.renderer.texts) {
+        if (t.text == "notes.txt") sawName = true;
+        // C:\home の直下なので、相対パスは空になる。
+        KITE_EXPECT_NE(t.text, std::string("C:\\home"));
+    }
+    KITE_EXPECT(sawName);
+}
+
+KITE_TEST(appui, an_empty_search_asks_for_a_name_rather_than_saying_the_folder_is_empty) {
+    Fixture f;
+    f.app.Execute(Cmd::Search);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    const std::string hint = f.app.strings().Format("ui.search_hint", { "home" });
+    const std::string empty = f.app.strings().Get("ui.empty");
+    bool sawHint = false;
+    for (const test::FakeRenderer::Text& t : f.renderer.texts) {
+        if (t.text == hint) sawHint = true;
+        KITE_EXPECT_NE(t.text, empty);
+    }
+    KITE_EXPECT(sawHint);
+}
