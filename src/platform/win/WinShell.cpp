@@ -24,14 +24,36 @@ PIDLIST_ABSOLUTE ParsePath(const std::string& path) {
     return pidl;
 }
 
+// A launched program inherits the working directory of whoever launched it,
+// and Kite's is wherever Kite itself was started from - the desktop, another
+// shell, the folder the installer left. A .bat is the shape where that shows:
+// scripts read their own folder as "here", so double-clicking one in Downloads
+// ran it against Kite's directory instead. Explorer hands over the folder the
+// item sits in, and so does this.
+std::wstring WorkingDirFor(const std::string& path) {
+    if (vfs::IsVirtual(path)) return {};
+    const std::string parent = path::Parent(path);
+    if (parent.empty()) return {};
+    // Asked, not assumed: an item inside an archive spells its path like a file
+    // on disk ("C:\\a.zip\\notes.txt"), so its "folder" is the zip - and a
+    // working directory that is not a directory fails the launch outright,
+    // which would trade a wrong folder for nothing happening at all.
+    const DWORD attrs = ::GetFileAttributesW(ToExtendedPath(parent).c_str());
+    if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY)) return {};
+    // Plain, not extended: the shell does not take the "\\?\\" spelling.
+    return ToWide(parent);
+}
+
 bool ShellExecuteVerb(HWND hwnd, const std::string& path, const wchar_t* verb, DWORD mask) {
     const std::wstring w = ToWide(path);
+    const std::wstring dir = WorkingDirFor(path);
     SHELLEXECUTEINFOW info{};
     info.cbSize = sizeof(info);
     info.fMask = mask;
     info.hwnd = hwnd;
     info.lpVerb = verb;
     info.lpFile = w.c_str();
+    info.lpDirectory = dir.empty() ? nullptr : dir.c_str();
     info.nShow = SW_SHOWNORMAL;
     return ::ShellExecuteExW(&info) != FALSE;
 }
