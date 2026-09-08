@@ -16,6 +16,36 @@ constexpr UINT kMenuLastId = 0x7FFF;
 IContextMenu2* g_contextMenu2 = nullptr;
 IContextMenu3* g_contextMenu3 = nullptr;
 
+// The folder an item sits in, or empty when that is not a directory on disk.
+//
+// A verb invoked from here runs with this host's working directory, and the
+// host inherits Kite's - wherever Kite itself was started from. "Open" on a
+// .bat then runs the script against that folder instead of its own. Explorer
+// hands the item's folder over, so this does too.
+//
+// path::Parent is the same question, but core is not linked here (only
+// IContextMenu, the icon overlays and the namespace enumeration live in this
+// process), so the separator is found by hand. They are ASCII, so scanning
+// UTF-8 bytes cannot land inside a character.
+std::string ItemFolder(const std::string& path) {
+    size_t i = path.size();
+    while (i > 0 && path[i - 1] != '\\' && path[i - 1] != '/') --i;
+    while (i > 1 && (path[i - 1] == '\\' || path[i - 1] == '/')) --i;
+    if (i == 0) return {};
+    std::string parent = path.substr(0, i);
+    // "C:" alone is the process's current directory on that drive, not its
+    // root; the separator is what makes it a place.
+    if (parent.size() == 2 && parent[1] == ':') parent.push_back('\\');
+    // Asked, not assumed: an item inside an archive spells its path like a file
+    // on disk ("C:\\a.zip\\notes.txt") while no file sits at that spelling, so
+    // its "folder" is the zip - and a working directory that is not a directory
+    // fails the launch outright, which would trade a wrong folder for nothing
+    // happening at all.
+    const DWORD attrs = ::GetFileAttributesW(ToWide(parent).c_str());
+    if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY)) return {};
+    return parent;
+}
+
 // --- SEH guards -------------------------------------------------------------
 // These take raw pointers only, so they hold nothing that needs C++ unwinding
 // and can legally use __try / __except. A caught fault costs the menu but
@@ -333,12 +363,22 @@ shellhost::Result ShowShellContextMenu(HWND menuOwner, HWND dialogOwner,
                 // A background verb has no item to work from, only the folder it
                 // was raised in: "New > Text Document" creates its file in the
                 // working directory, and several third-party verbs read it too.
-                const std::string directory = background ? paths[0] : std::string();
+                //
+                // An item verb gets the folder that item sits in, for the same
+                // reason Explorer passes it: that is what "here" means to what
+                // the verb launches. Not for a virtual listing, though - what a
+                // row there holds is not necessarily a path anything acts on.
+                std::string directory;
+                if (background) {
+                    directory = paths[0];
+                } else if (container.empty()) {
+                    directory = ItemFolder(paths[0]);
+                }
                 const std::wstring directoryW = ToWide(directory);
                 CMINVOKECOMMANDINFOEX info{};
                 info.cbSize = sizeof(info);
                 info.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
-                if (background) {
+                if (!directory.empty()) {
                     // CMIC_MASK_UNICODE means the shell reads the wide member;
                     // the narrow one is left as UTF-8 for handlers that ignore
                     // the flag, where it is exact for every ASCII path.

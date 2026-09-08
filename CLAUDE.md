@@ -2629,6 +2629,18 @@ release.ps1  CMakeLists.txt の VERSION を書き換えて push
   引用は `QuoteArgument`（`WinPaths.cpp`）を通す ─ ドライブ直下のパスは `C:\` で終わり、
   そのまま `"` で閉じると引用符自身がエスケープされる（`Ctrl+N` のコマンドラインと同じ罠で、
   だから 2 か所から同じ関数を呼んでいる）。`cmd.exe` のほうは `lpDirectory` に従う。
+- **作業フォルダを渡さないと、起動したプログラムは Kite の作業フォルダを継ぐ。**
+  Kite のそれは「Kite が起動された場所」なので、`Downloads\test.bat` をダブルクリック
+  すると**スクリプトの言う «ここ» が Kite の展開先**になる（実際にそう報告された）。
+  エクスプローラーは項目の在るフォルダを渡すので、Kite も渡す ─ ダブルクリックは
+  `ShellExecuteVerb`（`WinShell.cpp`）、右クリックのメニューの動詞は
+  `ShowShellContextMenu`（`ShellMenu.cpp`）で、**後者はホスト側なので `kite_core` が
+  無く、親フォルダを自前で切り出している**（`ItemFolder`）。**渡す前にフォルダで
+  あることを確かめる** ─ 書庫の中の項目はパスの綴りを名乗るので «親» が `.zip` に
+  なり、フォルダでない作業フォルダは `CreateProcess` ごと失敗する（間違ったフォルダが
+  «何も起きない» に化ける）。仮想フォルダの項目には渡さない ─ 行の持つパスは操作の
+  相手とは限らない。**背景のメニューは今までどおりそのフォルダそのもの**（「新規作成」
+  の行き先）。
 - **`CMIC_MASK_UNICODE` は `<shellapi.h>` が必要**。実体は `SEE_MASK_UNICODE` で、
   `<shlobj.h>` だけでは「定義されていない識別子」になる。
 - **`MsgWaitForMultipleObjects` に `MWMO_INPUTAVAILABLE` を足すと暴走しうる**。
