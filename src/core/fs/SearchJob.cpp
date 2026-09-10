@@ -1,10 +1,10 @@
 #include "core/fs/SearchJob.h"
 
-#include <deque>
 #include <utility>
 
 #include "core/base/Platform.h"
 #include "core/base/Utf8.h"
+#include "core/fs/TreeWalk.h"
 
 namespace kite::fs {
 
@@ -70,45 +70,35 @@ void SearchJob::Publish(uint64_t token, std::vector<Entry>& batch, bool done, bo
 }
 
 void SearchJob::Walk(const Job& job) {
-    // 幅優先。深さ優先だと、最初に踏み込んだ枝が深いだけで «今いるフォルダの
-    // すぐ下» の当たりが最後まで出てこない ─ 探している側がまず見たいのは近くの
-    // ものである。
-    std::deque<std::string> queue;
-    queue.push_back(job.root);
-
+    // 歩き方そのものは `fs::WalkTree` が持つ ─ 幅優先、リンクの先へは降りない、
+    // 読めないフォルダは飛ばす、打ち切りはフォルダの切れ目。ここが足すのは
+    // «名前に当たったら集める» という訪問子だけで、フォルダのサイズを数える側
+    // （`fs::FolderSizeJob`）も同じ歩きの上に乗っている。
     std::vector<Entry> batch;
     size_t found = 0;
     uint64_t lastFlush = plat::NowMs();
+    bool truncated = false;
 
-    while (!queue.empty()) {
-        // 打ち切りが効くのはここ ─ `List()` 1 回ぶんは戻ってくるまで止められない。
-        if (active_.load(std::memory_order_relaxed) != job.token) return;
+    const auto alive = [&] { return active_.load(std::memory_order_relaxed) == job.token; };
 
-        const std::string dir = std::move(queue.front());
-        queue.pop_front();
-
+    WalkTree(fs_, job.root, alive, [&](const std::string& dir, const ListResult& result) {
         // 読めなかったフォルダは黙って飛ばす。1 つのアクセス拒否で検索そのものを
         // 失敗にすると、`C:\` からの検索は `System Volume Information` に当たった
         // 時点で必ず終わる ─ 探している人が頼んだのは «読めるところを全部» である。
-        const ListResult result = fs_.List(dir);
-        if (result.status != Status::Ok) continue;
+        if (result.status != Status::Ok) return true;
 
         for (const Entry& e : result.entries) {
-            if (utf8::ToLowerAscii(e.name).find(job.needle) != std::string::npos) {
-                Entry hit = e;
-                // 名前を親のパスに繋いでも指せない ─ 当たった項目は今いるフォルダの
-                // 直下とは限らないので、`address` に «その項目自身のパス» を入れる
-                // （仮想フォルダの項目と同じ手で、`fs::EntryPath()` がそのまま答える）。
-                hit.address = EntryPath(dir, e);
-                batch.push_back(std::move(hit));
-                if (++found >= kSearchMaxResults) {
-                    Publish(job.token, batch, true, true);
-                    return;
-                }
+            if (utf8::ToLowerAscii(e.name).find(job.needle) == std::string::npos) continue;
+            Entry hit = e;
+            // 名前を親のパスに繋いでも指せない ─ 当たった項目は今いるフォルダの
+            // 直下とは限らないので、`address` に «その項目自身のパス» を入れる
+            // （仮想フォルダの項目と同じ手で、`fs::EntryPath()` がそのまま答える）。
+            hit.address = EntryPath(dir, e);
+            batch.push_back(std::move(hit));
+            if (++found >= kSearchMaxResults) {
+                truncated = true;
+                return false;
             }
-            // **リンクの先へは降りない。** ジャンクションを辿ると
-            // `C:\Users\All Users` のような輪に入り、歩きが終わらなくなる。
-            if (e.isDir() && !Has(e.attrs, Attr::Link)) queue.push_back(EntryPath(dir, e));
         }
 
         // 隠し属性で刈らない ─ 検索が答えているのは «在るか無いか» で、隠すか
@@ -120,9 +110,14 @@ void SearchJob::Walk(const Job& job) {
             lastFlush = now;
             Publish(job.token, batch, false, false);
         }
-    }
+        return true;
+    });
 
-    if (active_.load(std::memory_order_relaxed) != job.token) return;
+    if (truncated) {
+        Publish(job.token, batch, true, true);
+        return;
+    }
+    if (!alive()) return;
     Publish(job.token, batch, true, false);
 }
 

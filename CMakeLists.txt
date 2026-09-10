@@ -136,6 +136,7 @@ add_library(kite_core STATIC
     src/core/fs/FileOpQueue.cpp
     src/core/fs/FileSystem.cpp
     src/core/fs/SearchJob.cpp
+    src/core/fs/TreeWalk.cpp
     src/core/fs/VirtualPath.cpp
     src/core/i18n/Strings.cpp
     src/core/input/Commands.cpp
