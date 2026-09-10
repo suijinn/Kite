@@ -144,6 +144,12 @@ enum class CmdGroup : uint8_t {
     X(ToggleDirsFirst,    "view.toggle_dirs_first",  "cmd.toggle_dirs_first",  View)             \
     X(ToggleGrouping,     "view.toggle_group",       "cmd.toggle_group",       View)             \
     X(ResetColumnWidths,  "view.reset_column_widths","cmd.reset_column_widths",View)             \
+    /* view.folder_size*: 一覧のサイズ列はフォルダに対して何も言わない ─ 知るには */             \
+    /* その木を歩くしかない（ROADMAP P3-14）。自動で数える設定でも、歩き始めるのは */            \
+    /* ローカルの固定ディスクだけなので、共有や USB にはこの入口が要る。 */                      \
+    X(CountFolderSize,    "view.folder_size",        "cmd.folder_size",        View)             \
+    X(CountFolderSizes,   "view.folder_sizes",       "cmd.folder_sizes",       View)             \
+    X(StopFolderSizes,    "view.folder_sizes_stop",  "cmd.folder_sizes_stop",  View)             \
     X(FontLarger,         "view.font_larger",        "cmd.font_larger",        View)             \
     X(FontSmaller,        "view.font_smaller",       "cmd.font_smaller",       View)             \
     X(FontReset,          "view.font_reset",         "cmd.font_reset",         View)             \

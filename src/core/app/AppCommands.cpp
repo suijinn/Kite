@@ -538,9 +538,64 @@ void App::Execute(Cmd cmd) {
             defaultView_.sort = tab->view.sort;
             defaultView_.sortDesc = tab->view.sortDesc;
             RebuildFocused();
+            // サイズで並べると、値が要るのは画面に出ている行だけではなくなる ─
+            // 数えていないフォルダは 0 として並ぶので、見えている行だけ数えても
+            // 順序は整わない。
+            SyncFolderSizesForSort(*tab);
             dirty_ = true;
             break;
         }
+        case Cmd::CountFolderSize:
+        case Cmd::CountFolderSizes: {
+            if (!tab) break;
+            if (folderSizeMode_ == FolderSizeMode::Off) {
+                // 「効かないキー」に見せない ─ 断る理由と、どこで変えられるかを言う。
+                SetStatus(strings_.Format("ui.folder_size_disabled",
+                                          { keymap_.ChordText(Cmd::ShowSettings) }));
+                break;
+            }
+            // 仮想フォルダと書庫の中は、列挙がシェルのホスト 1 本を通る ─ 再帰的に
+            // 占有すれば他のフォルダが 1 つも開けなくなる（検索と同じ理由）。
+            if (vfs::IsVirtual(tab->path)) {
+                SetStatus(strings_.Get("ui.folder_size_unsupported"));
+                break;
+            }
+            if (cmd == Cmd::CountFolderSizes) {
+                // 頼まれたのだから、自動では歩かない場所（共有・USB）でも歩くし、
+                // 数え終わっているものも数え直す。
+                RequestFolderSizesIn(*tab, true);
+                host_.Invalidate();
+                break;
+            }
+            // 選んであればそれ、無ければカーソル行。削除や名前の変更と同じ読み方。
+            std::vector<std::string> targets;
+            for (size_t i = 0; i < tab->listing.entries.size(); ++i) {
+                const fs::Entry& e = tab->listing.entries[i];
+                if (i >= tab->marked.size() || !tab->marked[i]) continue;
+                if (!e.isDir() || fs::Has(e.attrs, fs::Attr::Link)) continue;
+                targets.push_back(fs::EntryPath(tab->path, e));
+            }
+            if (targets.empty()) {
+                const fs::Entry* e = tab->CursorEntry();
+                if (e && e->isDir() && !fs::Has(e->attrs, fs::Attr::Link)) {
+                    targets.push_back(fs::EntryPath(tab->path, *e));
+                }
+            }
+            if (targets.empty()) {
+                SetStatus(strings_.Get("ui.folder_size_no_folder"));
+                break;
+            }
+            for (const std::string& target : targets) RequestFolderSize(target, true);
+            host_.Invalidate();
+            break;
+        }
+        case Cmd::StopFolderSizes:
+            StopFolderSizes();
+            // 何も走っていなくても答える ─ 何も起きない操作は「効かないキー」と
+            // 見分けが付かない（列幅を戻したときと同じ）。
+            SetStatus(strings_.Get("ui.folder_size_stopped"));
+            host_.Invalidate();
+            break;
         case Cmd::ToggleSortOrder:
             ToggleViewFlag(tab, &ViewState::sortDesc);
             break;

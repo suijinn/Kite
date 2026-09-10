@@ -121,6 +121,9 @@ public:
     uint64_t totalBytes = 1000;
 
     fs::ListResult List(const std::string& dir) override {
+        // 列挙もゲートに掛かる ─ フォルダのサイズを数えるワーカーが «歩いている
+        // 最中» に止まれるのはここだけ（あちらは書き込みを 1 つもしない）。
+        WaitIfGated({ dir });
         std::lock_guard<std::recursive_mutex> lock(mutex);
         ++listCalls;
         fs::ListResult result;
@@ -772,7 +775,11 @@ inline bool PumpUntilSettled(App& app, int timeoutMs = 4000) {
         // that types and then checks the offer has to wait for that too.
         // Deletes and copies come back the same way: what they leave on the disk
         // is not there yet at the moment the command returns.
-        bool settled = !app.pathComplete().wantsListing() && !app.fileOpsBusy();
+        // フォルダのサイズも同じワーカーの作り。数え終わりが届くまでは «まだ» と
+        // 見なす ─ 届いた答えを取り込むのは PumpLoader なので、ここで止めると
+        // 数えた値がテストから見えない。
+        bool settled = !app.pathComplete().wantsListing() && !app.fileOpsBusy() &&
+                       !app.folderSizesBusy();
         if (Session* session = app.workspace().activeSession()) {
             for (Pane* pane : session->Panes()) {
                 for (const std::unique_ptr<Tab>& tab : pane->tabs) {

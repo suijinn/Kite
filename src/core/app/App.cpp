@@ -233,6 +233,7 @@ bool App::Init(const std::vector<std::string>& startPaths) {
     loader_ = std::make_unique<fs::DirectoryLoader>(fs_, host_, 2);
     fileOps_ = std::make_unique<fs::FileOpQueue>(fs_, host_);
     search_ = std::make_unique<fs::SearchJob>(fs_, host_);
+    sizeJob_ = std::make_unique<fs::FolderSizeJob>(fs_, host_);
     RefreshRoots();
     LoadWorkspace(startPaths);
     EnsureVisibleTabsLoaded();
@@ -261,11 +262,189 @@ void App::Shutdown() {
     // 検索は途中で捨ててよい ─ 歩くだけで何も書き換えないので、待つ理由が無い。
     // デストラクタが «次のフォルダの切れ目で抜けろ» と言ってから join する。
     search_.reset();
+    // フォルダのサイズも同じ ─ 数えているだけなので、途中で畳んで構わない。
+    sizeJob_.reset();
 }
 
 uint32_t App::IconFor(const std::string& path) {
     if (!icons_ || !shellIcons_) return 0;
     return icons_->IconFor(path);
+}
+
+// ---------------------------------------------------------------------------
+// Folder sizes
+//
+// サイズ列がフォルダについて何か言えるのは、その木を歩いた後だけ。歩くのは
+// `fs::FolderSizeJob`（検索とまったく同じ `fs::WalkTree` の上）で、覚えるのは
+// `sizes_` ─ **表が正で、`fs::Entry::size` に書き戻すのは並べ替えのための写し**。
+//
+// 自動で頼むのは画面に出ている行だけ（`FolderSizeFor` が描画から呼ばれる）で、
+// シェルアイコンとまったく同じ形になっている ─ 1 万件のフォルダでも頼むのは
+// 数十件で済む。例外はサイズで並べ替えているときで、そこは値が要るのが画面に
+// 出ている行だけではない（`SyncFolderSizesForSort`）。
+// ---------------------------------------------------------------------------
+
+fs::FolderSize App::FolderSizeFor(const std::string& dir, const fs::Entry& entry) {
+    if (folderSizeMode_ == FolderSizeMode::Off || !entry.isDir()) return {};
+    // 歩きはリンクの先へ降りないので、リンクの中身は誰も数えていない。ここで
+    // «数えた» 顔をすると、同じ木を 2 度数えた合計を出すことになる。
+    if (fs::Has(entry.attrs, fs::Attr::Link)) return {};
+
+    const std::string full = fs::EntryPath(dir, entry);
+    const fs::FolderSize known = sizes_.Get(full);
+    if (known.state != fs::SizeState::Unknown) return known;
+    if (folderSizeMode_ != FolderSizeMode::Auto) return {};
+    // クラウドにしか実体が無いフォルダは、歩くだけで OS が中身を取りに行きうる。
+    // 頼まれたときだけ歩く。
+    if (fs::Has(entry.attrs, fs::Attr::Placeholder) || fs::Has(entry.attrs, fs::Attr::Offline)) {
+        return {};
+    }
+    if (!AutoCountEligible(full)) return {};
+
+    RequestFolderSize(full);
+    return sizes_.Get(full);
+}
+
+void App::RequestFolderSize(const std::string& path, bool force) {
+    if (!sizeJob_ || path.empty()) return;
+    // 仮想フォルダの列挙は kite_shellhost.exe 1 本を直列に通る ─ 再帰的に占有すると、
+    // 他のフォルダが 1 つも開けなくなる（検索を断っているのと同じ理由）。
+    if (vfs::IsVirtual(path)) return;
+    if (sizes_.Request(path, force)) sizeJob_->Request(path);
+}
+
+void App::RequestFolderSizesIn(Tab& tab, bool force) {
+    if (vfs::IsVirtual(tab.path)) return;
+    for (const fs::Entry& e : tab.listing.entries) {
+        if (!e.isDir() || fs::Has(e.attrs, fs::Attr::Link)) continue;
+        RequestFolderSize(fs::EntryPath(tab.path, e), force);
+    }
+}
+
+void App::SyncFolderSizesForSort(Tab& tab) {
+    if (folderSizeMode_ != FolderSizeMode::Auto) return;
+    if (tab.view.sort != SortKey::Size || tab.search.active) return;
+    if (!AutoCountEligible(tab.path)) return;
+    RequestFolderSizesIn(tab);
+}
+
+bool App::AutoCountEligible(const std::string& p) const {
+    if (p.empty() || vfs::IsVirtual(p)) return false;
+    // ネットワークは共有 1 つで分単位になりうる。「待たせて空を返す機能は無い機能
+    // より悪い」と同じ判断で、黙って歩き始めない ─ 頼まれれば歩く。
+    if (path::UncServerLength(p) > 0) return false;
+    for (const fs::Root& r : roots_) {
+        if (r.kind != fs::RootKind::Fixed) continue;
+        if (utf8::EqualsIgnoreCaseAscii(p, r.path) || path::IsInside(p, r.path)) return true;
+    }
+    // どのドライブの下か分からないものは «固定ディスクだと分かっている» に入らない。
+    return false;
+}
+
+bool App::ApplyFolderSizes(Tab& tab) {
+    bool changed = false;
+    for (fs::Entry& e : tab.listing.entries) {
+        if (!e.isDir()) continue;
+        const fs::FolderSize value = sizes_.Get(fs::EntryPath(tab.path, e));
+        // 写すのは数え終わったものだけ ─ 途中経過を並べ替えに載せると、数えて
+        // いる間ずっと行が動いて目で追えなくなる。
+        if (!value.settled() || e.size == value.bytes) continue;
+        e.size = value.bytes;
+        changed = true;
+    }
+    return changed;
+}
+
+void App::PumpFolderSizes() {
+    if (!sizeJob_) return;
+    std::vector<fs::FolderSizeUpdate> updates;
+    sizeJob_->Drain(updates);
+
+    const uint64_t epoch = sizeJob_->epoch();
+    bool touched = false;
+    bool settledAny = false;
+    for (const fs::FolderSizeUpdate& u : updates) {
+        // やめた後に届いた «前の代» の答え。取り込めば、止めたはずの値が
+        // 数え終わった顔で表に戻る。
+        if (u.epoch != epoch) continue;
+        if (!sizes_.Apply(u)) continue;
+        touched = true;
+        if (u.done) settledAny = true;
+    }
+
+    // 写すのは確定が届いたときだけ。途中経過ごとに全項目を引き当て直すと、
+    // 10 万件のフォルダで毎回その代金を払うことになる。
+    if (settledAny) {
+        for (const std::unique_ptr<Session>& s : workspace_.sessions) {
+            for (Pane* pane : s->Panes()) {
+                for (std::unique_ptr<Tab>& t : pane->tabs) {
+                    if (!ApplyFolderSizes(*t)) continue;
+                    if (t->view.sort == SortKey::Size) resortSizes_ = true;
+                }
+            }
+        }
+    }
+
+    // **並べ直すのは、数えるものが無くなってから 1 回だけ。** 1 件確定するたびに
+    // 並べ替えると、数えている間ずっと行が動いて目で追えない ─ 途中経過は
+    // «表示» のもので、並べ替えは «確定した値» のもの。
+    if (resortSizes_ && !sizeJob_->busy()) {
+        resortSizes_ = false;
+        for (const std::unique_ptr<Session>& s : workspace_.sessions) {
+            for (Pane* pane : s->Panes()) {
+                for (std::unique_ptr<Tab>& t : pane->tabs) {
+                    if (t->view.sort == SortKey::Size) t->Rebuild();
+                }
+            }
+        }
+        EnsureCursorVisible();
+        touched = true;
+    }
+
+    if (touched) host_.Invalidate();
+}
+
+void App::StopFolderSizes() {
+    if (sizeJob_) sizeJob_->CancelAll();
+    sizes_.ResetInFlight();
+    resortSizes_ = false;
+}
+
+bool App::folderSizesBusy() const {
+    return (sizeJob_ && sizeJob_->busy()) || sizes_.countingCount() > 0;
+}
+
+std::string App::folderSizeStatus() const {
+    const size_t counting = sizes_.countingCount();
+    if (counting == 0) return {};
+    return strings_.Format("ui.folder_size_counting", { std::to_string(counting) });
+}
+
+std::string App::folderSizeDetail() const {
+    // フォーカス中のタブ。`focusedTab()` には const 版が無いので、検索の状態行と
+    // 同じ道（セッション → フォーカスされたペイン）で辿る。
+    const Session* session = workspace_.activeSession();
+    if (!session || !session->focus) return {};
+    const Tab* t = session->focus->activeTab();
+    if (!t) return {};
+    const fs::Entry* e = t->CursorEntry();
+    if (!e || !e->isDir()) return {};
+
+    const fs::FolderSize value = sizes_.Get(fs::EntryPath(t->path, *e));
+    // そのフォルダ自体を読めなかった。列は `<DIR>` のままなので、理由を言えるのは
+    // ここしかない。
+    if (value.state == fs::SizeState::Failed) return strings_.Get("ui.err_generic");
+    if (!value.known()) return {};
+
+    // **ファイル数とフォルダ数を言うのはここだけ。** 列を増やすと、通常のフォルダ
+    // では全行が埋まるとは限らない列をウィンドウ中で持ち回ることになる。
+    std::string text = strings_.Format("ui.folder_size_detail",
+                                       { std::to_string(value.files),
+                                         std::to_string(value.dirs) });
+    // 読めない枝があったことも列には出さない ─ 数字の隣に印を足すと、同じ列が
+    // 2 通りの綴りを持つことになる。
+    if (value.incomplete) text += " " + strings_.Get("ui.folder_size_incomplete");
+    return text;
 }
 
 void App::RefreshRoots() {
@@ -428,6 +607,11 @@ void App::PumpLoader() {
         std::vector<fs::ChangeEvent> changes;
         watcher_->Drain(changes);
         for (const fs::ChangeEvent& change : changes) {
+            // 中身が変われば合計も変わる ─ その木と、その上の合計を捨てる。
+            // 数え直すのは、次にその行が画面に出たとき（または F5）。
+            // **数えたばかりの値は残す** ─ 通知は書き込みのたびに届くので、
+            // 1 つごとに歩き直すと、見ているだけでディスクを舐め続ける。
+            sizes_.ForgetChanged(change.path, plat::NowMs(), fs::kFolderSizeRecountMs);
             for (const std::unique_ptr<Session>& s : workspace_.sessions) {
                 for (Pane* p : s->Panes()) {
                     Tab* t = p->activeTab();
@@ -450,6 +634,8 @@ void App::PumpLoader() {
     PumpFileOps();
     // 検索の途中経過も同じ起こされ方で届く。
     PumpSearch();
+    // フォルダのサイズも同じ ─ 数え終わったぶんがここで表に入る。
+    PumpFolderSizes();
 
     if (!loader_) return;
     std::vector<fs::LoadedListing> done;
@@ -473,7 +659,13 @@ void App::PumpLoader() {
                     t->loadToken = 0;
                     t->loaded = true;
                     t->marked.assign(t->listing.entries.size(), 0);
+                    // 数え終わっている値があれば、並べ替えの前に写す ─ 一覧は
+                    // 作り直されるが、数えた値の寿命はそれより長い。
+                    ApplyFolderSizes(*t);
                     t->Rebuild();
+                    // サイズで並べているタブは、画面に出ている行だけでは順序が
+                    // 整わない（数えていないフォルダは 0 として並ぶ）。
+                    SyncFolderSizesForSort(*t);
                     // "Access denied" on a share is usually not a verdict but a
                     // question that has not been asked yet. The listing itself
                     // cannot ask it - a credential dialog raised from a worker
@@ -940,6 +1132,9 @@ void App::RefreshFocused() {
             return;
         }
         RequestLoad(*t, true);
+        // «訊き直せ» はフォルダのサイズにも掛かる。監視はこのフォルダ 1 階層しか
+        // 見ていないので、下で起きた変更を知る道は F5 のほかに無い。
+        sizes_.ForgetRelated(t->path);
         // Overlays show a file's state (committed, synced, locked), and every
         // caller here has just changed something - including the shell menu,
         // which is where a commit or a sync is started from. Nothing tells us
@@ -2584,7 +2779,12 @@ void App::FinishFileOp(const fs::FileOpDone& done, const PendingFileOp& plan) {
         }
     }
 
-    for (const std::string& dir : plan.refresh) RefreshTabsShowing(dir);
+    for (const std::string& dir : plan.refresh) {
+        // 自分で起こした変更は、監視の通知を待たずにここで無効にする ─ 貼り付けた
+        // 直後の画面が古い合計を主張しないため。
+        sizes_.ForgetRelated(dir);
+        RefreshTabsShowing(dir);
+    }
     // 一覧を取り直したのだから、オーバーレイにも訊き直す（RefreshFocused と同じ
     // 理由 ─ たった今変えたものの状態を映しているのはそちら）。
     if (icons_ && shellIcons_) icons_->Invalidate();

@@ -162,6 +162,11 @@ const DefaultBinding kDefaults[] = {
     // ない** ─ あの列は Windows がキーボードレイアウトの切り替えに予約していて、
     // 追加レイアウトのある実機では Kite まで届かなかった（下の「すでに踏んだ罠」）。
     { Cmd::ResetColumnWidths,   "Ctrl+Alt+0" },
+    // 「サイズ」の S。Ctrl+S はワークスペースの保存が持っているので Shift を足す。
+    // **«やめる» と «一覧を全部数える» には既定を与えていない** ─ 前者は自動で数える
+    // 設定なら押す場面が無く、後者はサイズで並べ替えれば自分で走る。どちらもコマンド
+    // パレットから引けるので、一度きりの操作に和音を割かない（列の幅と同じ割り切り）。
+    { Cmd::CountFolderSize,     "Ctrl+Shift+S" },
     // The browser row, and for the same reason: this is the one setting people
     // reach for without wanting to know where the settings live. Ctrl+Plus is
     // VK_OEM_PLUS, which is "=" on a US layout and ";" on a JIS one - both are
