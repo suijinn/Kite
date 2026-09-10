@@ -16,6 +16,21 @@ namespace {
 // 列の縁を掴める幅（DIP、縁の左右それぞれ）。細すぎると狙えず、太くすると見出しを
 // 押したつもりが幅の変更になる。
 constexpr float kColumnGrab = 3.0f;
+
+// 数え終わっていないフォルダの合計を薄くする率。
+//
+// **«数え終わったか» は列を見た瞬間に分かってほしい。** 末尾の「…」は 1 行を読めば
+// 分かるが、20 行を見渡して «どれが確定したのか» を言うのは明度のほう ─ 一覧を
+// 眺める目に先に届く。確定した値はファイルのサイズとまったく同じ顔になる（それが
+// 狙いで、フォルダの合計がファイルと同じ意味で読めるということ）。
+//
+// **文字（「…」）も残す。** 薄いかどうかは «隣に濃いものが在る» ときにしか読めない
+// ─ 1 つだけ数えている一覧では比べる相手がいない。形と明度の 2 つで言う。
+constexpr float kCountingInk = 0.5f;
+
+// 隠し属性の行を薄くする率。名前にも右の列にも同じだけ掛ける ─ 片方が明るいまま
+// だと、1 行が 2 つの答えを持っているように見える（切り取られた行と同じ規則）。
+constexpr float kHiddenInk = 0.55f;
 // 縦置きタブバーの縁を掴める幅。列の縁と違って «内側» にしか取れないので、
 // 片側 3 px ではなく 5 px ─ 掴める帯の広さは同じになる。
 constexpr float kTabBarGrab = 5.0f;
@@ -1229,7 +1244,7 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
             for (const PlacedColumn& column : placed) {
                 if (column.id != SortKey::Size) continue;
                 r.DrawText(str.Get("ui.dir_marker"), { column.l, row.t, column.r - 6.0f, row.b },
-                           th.textDim, FontRole::UiSmall, TextAlign::Right);
+                           th.text, FontRole::UiSmall, TextAlign::Right);
             }
             Add(row, Hit::ListRow, i, pane);
             continue;
@@ -1239,7 +1254,7 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
         Color nameColor = marked ? th.rowSelectedText : (e.isDir() ? th.textFolder : th.text);
         const bool ghost = fs::Has(e.attrs, fs::Attr::Placeholder) ||
                            fs::Has(e.attrs, fs::Attr::Offline);
-        if (e.isHidden()) nameColor = nameColor.alpha(0.55f);
+        if (e.isHidden()) nameColor = nameColor.alpha(kHiddenInk);
 
         // Cut, and waiting for a paste. Explorer says this by fading the whole
         // row, and it is the only place the clipboard's contents are visible at
@@ -1294,8 +1309,23 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
 
         // The other columns fade with the name. Leaving them bright would split
         // one row into two answers about whether it is going anywhere.
-        Color detail = marked ? th.rowSelectedText : th.textDim;
-        if (ink < 1.0f) detail = detail.alpha(detail.a * ink);
+        //
+        // **明るさは名前と同じ。** 右の列に並んでいるのも «その項目についての値» で、
+        // 名前の隣で一段暗い灰色になっている理由が無い（`th.textDim` だった頃は、
+        // 日付とサイズだけが読みにくかった）。分類を «見出しは暗く、値は明るく» に
+        // 揃えるということでもある ─ 暗いほうは列の見出しがすでに使っている。
+        Color detail = marked ? th.rowSelectedText : th.text;
+        // 数え終わっていないフォルダの合計だけは、今までどおり薄い側を土台にする
+        // （下の SortKey::Size）。確定した値と «まだ» を明度で見分ける、が崩れる。
+        Color pending = marked ? th.rowSelectedText : th.textDim;
+        if (e.isHidden()) {
+            detail = detail.alpha(detail.a * kHiddenInk);
+            pending = pending.alpha(pending.a * kHiddenInk);
+        }
+        if (ink < 1.0f) {
+            detail = detail.alpha(detail.a * ink);
+            pending = pending.alpha(pending.a * ink);
+        }
         for (const PlacedColumn& column : placed) {
             switch (column.id) {
                 case SortKey::Ext: {
@@ -1305,9 +1335,35 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
                     break;
                 }
                 case SortKey::Size: {
-                    const std::string sizeText =
-                        e.isDir() ? str.Get("ui.dir_marker") : FormatSize(e.size);
-                    r.DrawText(sizeText, { column.l, row.t, column.r - 6.0f, row.b }, detail,
+                    std::string sizeText;
+                    // 数え終わっていない値だけ薄い側で描く（`pending` × kCountingInk）。
+                    // 行そのものの薄さ（切り取り・隠し）はどちらにも掛かっている ─
+                    // どれも «この行の話» なので、片方だけを見せる理由が無い。
+                    bool counting = false;
+                    if (!e.isDir()) {
+                        sizeText = FormatSize(e.size);
+                    } else {
+                        // フォルダの合計は木を歩かないと分からない。訊くのはこの
+                        // 1 行だけなので、自動で数えるのも画面に出ている行だけに
+                        // なる（シェルアイコンとまったく同じ形）。
+                        const fs::FolderSize folder = app_.FolderSizeFor(tab->path, e);
+                        if (folder.state == fs::SizeState::Counting) {
+                            // 増えていく途中の数。確定した値と同じ顔で出すと、
+                            // まだ歩いている最中の合計がその答えに見える。
+                            sizeText = str.Format("ui.size_counting",
+                                                  { FormatSize(folder.bytes) });
+                            counting = true;
+                        } else if (folder.settled()) {
+                            sizeText = FormatSize(folder.bytes);
+                        } else {
+                            // 数えていない、切ってある、そのフォルダを読めなかった。
+                            // 読めなかったことはステータス行が言う ─ 数字の隣に印を
+                            // 足すと、同じ列が 2 通りの綴りを持つ。
+                            sizeText = str.Get("ui.dir_marker");
+                        }
+                    }
+                    r.DrawText(sizeText, { column.l, row.t, column.r - 6.0f, row.b },
+                               counting ? pending.alpha(pending.a * kCountingInk) : detail,
                                FontRole::UiSmall, TextAlign::Right);
                     break;
                 }
@@ -1384,6 +1440,7 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
     const Prompt& p = app_.prompt();
     const std::string fileOp = app_.fileOpStatus();
     const std::string searchState = app_.searchStatus();
+    const std::string counting = app_.folderSizeStatus();
     // 入力欄を持たない画面で変換している ─ 一覧の上での型入力ジャンプがこれ。行の
     // どれも書き換わらないので、ここで言わなければ打った文字はどこにも出ない
     // （打ちかけの文字列をステータス行に出しているのと同じ理由で、しかも変換中は
@@ -1406,6 +1463,12 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
         right = fileOp;
     } else if (!app_.statusMessage().empty() && !app_.statusExpired()) {
         right = app_.statusMessage();
+    } else if (!counting.empty()) {
+        // 数えている間ずっと出る、いちばん後ろの合図。**直前の操作の報告より後**
+        // ─ 深い木を数えている数十秒の間に「コピーしました」が一度も出ないので
+        // あれば、その報告は無いのと変わらない。あちらは期限で消えるので、消えた
+        // ところでここが答える。
+        right = counting;
     }
     // カーソル行の名前を最後の控えに置いていたが、やめた ─ その名前は行そのものに
     // 書いてあり、しかもカーソルの枠がどの行かをすでに言っている。同じことを
@@ -1413,6 +1476,7 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
 
     Tab* tab = app_.workspace().focusedTab();
     std::string left;
+    std::string detail;
     std::string tail;
     if (tab) {
         left = str.Format("ui.status_items", { std::to_string(tab->ItemCount()) });
@@ -1422,6 +1486,11 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
                                        { std::to_string(marked), FormatSize(tab->MarkedBytes()) });
         }
         if (!tab->filter.empty()) left += "   [" + tab->filter + "]";
+        // カーソル行がフォルダで、数えてあれば内訳。**ファイル数とフォルダ数を
+        // 言うのはここだけ** ─ 列にすると、通常のフォルダでは埋まらない列を
+        // ウィンドウ中で持ち回ることになる。名前は書かない（どの行かはカーソルの
+        // 枠がすでに言っている ─ 帯が行の名前を出さないのと同じ理由）。
+        detail = app_.folderSizeDetail();
         // 容量は列挙が持ち帰った値（fs::ListResult）。訊く先が OS で冷えた共有では
         // 数秒返ってこないので、描くたびに訊ける値ではない。
         //
@@ -1444,9 +1513,13 @@ void AppUi::PaintStatusBar(Renderer& r, const RectF& area) {
     // いつも同じ顔でいる背景。
     const float rightWidth = right.empty() ? 0.0f : r.MeasureText(right, FontRole::UiSmall);
     const float leftLimit = area.r - kPad - (right.empty() ? 0.0f : rightWidth + kPad * 2.0f);
-    if (!tail.empty()) {
-        const std::string full = left.empty() ? tail : left + "   " + tail;
-        if (area.l + kPad + r.MeasureText(full, FontRole::UiSmall) <= leftLimit) left = full;
+    // 落とす順は «来た目的から遠いほう» から。容量はいつも同じ顔でいる背景なので
+    // 最初に落ち、カーソル行の内訳がその次。件数と選択は最後まで残す。
+    for (const std::string* extra : { &detail, &tail }) {
+        if (extra->empty()) continue;
+        const std::string full = left.empty() ? *extra : left + "   " + *extra;
+        if (area.l + kPad + r.MeasureText(full, FontRole::UiSmall) > leftLimit) break;
+        left = full;
     }
     r.DrawText(left, { area.l + kPad, area.t, std::max(area.l + kPad, leftLimit), area.b },
                th.textDim, FontRole::UiSmall, TextAlign::Left);

@@ -33,6 +33,17 @@ enum class TabBarPosition : uint8_t {
     Left,  ///< 一覧の左。縦に積み、収まらなければスクロールする
 };
 
+/// @brief フォルダの合計サイズを数えるかどうか。
+///
+/// 数えるにはその木を歩くしかない（`fs::FolderSizeJob`）ので、«いつ歩き始めるか»
+/// が代金そのものになる。既定は `Auto` ─ ただし自動で歩くのはローカルの固定
+/// ディスクだけで、ネットワーク共有や仮想フォルダは頼まれたときだけ歩く。
+enum class FolderSizeMode : uint8_t {
+    Off,     ///< 数えない。サイズ列は今までどおり `<DIR>`
+    Manual,  ///< 頼まれたときだけ数える（`Cmd::CountFolderSize`）
+    Auto,    ///< 画面に出ているフォルダの行を自動で数える
+};
+
 /// @brief 設定画面が扱う項目。
 ///
 /// @note 並び順がそのまま画面の並び順になる。SettingGroupOf() が区画を返すので、
@@ -47,6 +58,7 @@ enum class SettingId : uint8_t {
     TabBarPos,        ///< タブバーを置く場所（上＝横並び／左＝縦並び）
     NewTabPos,        ///< 新しいタブを作る位置
     OpenArchives,     ///< ZIP をフォルダとして開くか
+    FolderSizes,      ///< フォルダの合計サイズを数えるか（切／手動／自動）
     ColumnExt,        ///< 拡張子の列を出すか
     ColumnSize,       ///< サイズの列を出すか
     ColumnDate,       ///< 更新日時の列を出すか

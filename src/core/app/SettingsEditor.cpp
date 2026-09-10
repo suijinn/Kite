@@ -37,6 +37,8 @@ const char* const kTheme[] = { "settings.theme.dark", "settings.theme.light" };
 const char* const kLanguage[] = { "settings.language.auto", "settings.language.en",
                                   "settings.language.ja" };
 const char* const kNewTabPos[] = { "settings.new_tab_pos.end", "settings.new_tab_pos.after" };
+const char* const kFolderSizes[] = { "settings.folder_sizes.off", "settings.folder_sizes.manual",
+                                     "settings.folder_sizes.auto" };
 const char* const kTabBarPos[] = { "settings.tab_bar_pos.top", "settings.tab_bar_pos.left" };
 
 // 既定の文字サイズの刻み。1 DIP きざみで、これがそのまま `[ui] font_size` の
@@ -69,6 +71,10 @@ const Info kSettings[] = {
     { SettingId::TabBarPos, SettingGroup::Tabs, "settings.tab_bar_pos", 2, kTabBarPos, nullptr },
     { SettingId::NewTabPos, SettingGroup::Tabs, "settings.new_tab_pos", 2, kNewTabPos, nullptr },
     { SettingId::OpenArchives, SettingGroup::Files, "settings.open_archives", 2, kOnOff, nullptr },
+    // 切り替えたことがその場で目で確かめられる ─ サイズ列が数え始める（あるいは
+    // `<DIR>` に戻る）。行が «状態» ではなく «動作» を決める、設定画面の基準どおりの項目。
+    { SettingId::FolderSizes, SettingGroup::Files, "settings.folder_sizes", 3, kFolderSizes,
+      nullptr },
     // 幅と並びはこの画面に持ち込まない ─ 見出しをつまんで決めるものなので、
     // 数字の列を並べても «その場で目で確かめられる» にならない（設定画面に
     // 出すものの基準そのまま）。ここが答えるのは出すか出さないかだけ。

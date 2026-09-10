@@ -277,6 +277,41 @@ KITE_TEST(appui, a_click_on_a_marked_row_drops_the_rest_of_the_selection) {
     KITE_EXPECT_EQ(f.tab()->cursor, 1);
 }
 
+// 右の列に並んでいるのも «その項目についての値» なので、名前の隣で一段暗い灰色に
+// なっている理由が無い（`th.textDim` だった頃は、日付とサイズだけが読みにくかった）。
+// 暗いほうは列の見出しがすでに使っている ─ 見出しは暗く、値は明るく。
+KITE_TEST(appui, the_value_columns_are_as_bright_as_the_name) {
+    Fixture f;
+    f.Paint();
+    const Theme& th = f.app.theme();
+
+    const test::FakeRenderer::Text* name = f.TextNamed("notes.txt");
+    const test::FakeRenderer::Text* size = f.TextNamed(FormatSize(120));
+    KITE_EXPECT(name != nullptr);
+    KITE_EXPECT(size != nullptr);
+    if (name && size) {
+        KITE_EXPECT(test::FakeRenderer::SameColor(name->color, th.text));
+        KITE_EXPECT(test::FakeRenderer::SameColor(size->color, th.text));
+    }
+
+    // 薄くするときは行ごと。片方が明るいままだと、1 行が 2 つの答えを持って
+    // いるように見える。
+    for (int i = 0; i < static_cast<int>(f.tab()->visible.size()); ++i) {
+        const fs::Entry* e = f.tab()->EntryAt(i);
+        if (e && e->name == "notes.txt") f.tab()->cursor = i;
+    }
+    f.app.Execute(Cmd::Cut);
+    f.Paint();
+    const test::FakeRenderer::Text* cutName = f.TextNamed("notes.txt");
+    const test::FakeRenderer::Text* cutSize = f.TextNamed(FormatSize(120));
+    KITE_EXPECT(cutName != nullptr);
+    KITE_EXPECT(cutSize != nullptr);
+    if (cutName && cutSize) {
+        KITE_EXPECT(cutName->color.a < th.text.a);
+        KITE_EXPECT_NEAR(cutSize->color.a, cutName->color.a, 0.01f);
+    }
+}
+
 // Ctrl+X changes nothing else on screen, so the fade is the only lasting sign
 // that the clipboard is holding a move.
 KITE_TEST(appui, a_cut_row_is_drawn_faded) {
