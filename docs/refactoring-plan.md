@@ -566,12 +566,12 @@ A-2 の `JobQueue` が「最初の `Request` でワーカーを起動する」�
 | Phase | 項目 | 規模 | 依存 | 状態 |
 | --- | --- | --- | --- | --- |
 | 0 | §6 の計測基盤と基準値 | S | ─ | 部分（§8。`KITE_PROFILE` は入れていない ─ 下記） |
-| 1 | B-1（`Rebuild`）、A-8（`Strings`）、B-6（Theme コピー）、B-4（`Region`）、B-3（F1 / `ChordsFor`）、B-5（期限タイマー）、C-2、B-8、A-6、A-7、A-5 | 各 S | 互いに独立 | **完了**（11 コミット） |
-| 2 | A-2（`JobQueue`）→ C-1（遅延起動） | M | ─ | 未着手 |
-| 3 | A-3（`Invalidate` 一本化） | M | A-1 の前に済ませる（部品に散らないように） | 未着手 |
-| 4 | A-1（`App` 分割。`FolderSizes` → `Searching` → `Pickers` → `FileOps` → `Prompting`） | L（5 PR） | A-2, A-3, A-6 | 未着手 |
-| 5 | A-4（ドラッグ状態の variant） | M | ─（Phase 1 の後ならいつでも） | 未着手 |
-| 6 | B-2 (b)（`Skipped`）、B-2 (a)、B-7 の整形 | S | A-1 | 未着手 |
+| 1 | B-1（`Rebuild`）、A-8（`Strings`）、B-6（Theme コピー）、B-4（`Region`）、B-3（F1 / `ChordsFor`）、B-5（期限タイマー）、C-2、B-8、A-6、A-7、A-5 | 各 S | 互いに独立 | **完了** |
+| 2 | A-2（`JobQueue`）→ C-1（遅延起動） | M | ─ | **完了**（`WinIconProvider` を除く。下記） |
+| 3 | A-3（`Invalidate` 一本化） | M | A-1 の前に済ませる（部品に散らないように） | **完了** |
+| 4 | A-1（`App` 分割） | L（5 PR） | A-2, A-3, A-6 | **`FolderSizes` / `Searching` のみ。** 残り 3 つは見送り（下記） |
+| 5 | A-4（ドラッグ状態の variant） | M | ─（Phase 1 の後ならいつでも） | **完了** |
+| 6 | B-2 (b)（`Skipped`）、B-2 (a) | S | A-1 | **完了**（B-7 は下記） |
 | 別 | B-2 (c)（拡張子列の綴り。見た目が変わる） | S | 変更として告知 | 未着手 |
 
 **Phase 0 について**: `KITE_PROFILE` の計測基盤は入れていない。1 フレームの所要時間も
@@ -606,9 +606,12 @@ Phase 1 完了時点（開発機、Release、`build/Release`）。
 | --- | --- | --- | --- |
 | `Rebuild` 10 万件（拡張子順 + 絞り込み 1 語） | 505 ms | 280 ms | `kite_tests --filter tab.rebuilds_a_large` を 3 回、2 回目以降の中央値 |
 | アイドル 20 秒の CPU 時間 | ─ | 0 ms | `(Get-Process kite).TotalProcessorTime` の差分（起動から 30 秒置いてから） |
-| `App.h` / `App.cpp` | 1,236 / 2,820 行 | 1,274 / 2,834 行 | Phase 4（A-1）で減る。Phase 1 では `keyHelpLines` のぶん微増 |
-| `host_.Invalidate()`（`core/app`） | 100 か所 | 101 か所 | Phase 3（A-3）で減らす |
-| テスト | 25 スイート・686 ケース | 29 スイート・877 ケース | ─ |
+| 起動直後のスレッド数（ランタイム込み） | 20 本 | 15 本 | `(Get-Process kite).Threads.Count`。消えるのはファイル操作 4 + 検索 1 |
+| `host_.Invalidate()`（`core/app`） | 100 か所 | 10 か所 | `git grep -c "Invalidate()" src/core/app` |
+| `AppUi::OnMouse` | 620 行・ドラッグのフィールド約 30 個 | 39 行・`drag_` と `pendingUnmark_` の 2 つ | ─ |
+| ワーカー 4 クラスの `.cpp` 合計 | 731 行 | 542 行 | `JobQueue.h` は 252 行（うち約 120 行が説明） |
+| `App.h` / `App.cpp` | 1,236 / 2,820 行 | 1,220 / 2,549 行 | 目標未達。理由は §8 の «A-1 の残り 3 つ» |
+| テスト | 25 スイート・686 ケース | 30 スイート・886 ケース | ─ |
 
 1 フレームの所要時間と割り当て回数は測っていない（Phase 0 の項を参照）。Phase 1 が
 実際に消したのは、数えられる形では次の 4 つ:
@@ -627,6 +630,44 @@ Phase 1 完了時点（開発機、Release、`build/Release`）。
 | B-3 | `byCommand_` と `order_` を両方維持する | `order_` を落とす | `ChordsFor` が `order_` の唯一の読み手だった。`ToIni` も F1 も設定画面もコマンド表を順に舐めて 1 コマンドずつ訊くので、表示順は «コマンドの中の割り当て順» だけで足りる。§9 の «表示順に要る» は `ChordsFor` が `order_` を読んでいた頃の話で、索引 1 本にすれば食い違いようが無い |
 | A-7 | `DisplayName(const Tab&)` を `listing.title` と `DisplayNameOf` に畳む | 畳まない | 畳むと `vfs::LabelKey` の判定が `listing.title` の後ろに回り、英語 Windows の「PC」がシェルの言語で出る（CLAUDE.md「名前は Kite の言語で呼ぶ」）。重なっているのは vfs の末尾名とパス表示名の 2 段だけ |
 | A-7 | `workspace() const` / `HasBookmark() const` を足す | すでに在った | `AppUi` が持つのは `App&` なので `const_cast` は最初から何も外していなかった。3 つとも削除しただけ |
+| A-2 | `Request` の戻り値でトークンを配る | 配らない（`void`） | 検索はワーカーが走り出す **前** に `active_` を立てる必要があり、積んでから受け取るのでは間に合わない。フォルダのサイズは «代» で、そもそもトークンを使わない ─ 何で依頼を識別するかはクラスごとに違うので、採番も各クラスに残した |
+| A-2 | `WinIconProvider` も骨格に乗せる | 乗せない | あちらはバッチ単位（1 依頼 = 64 件）で、しかも «ホストが入れ替わったら、まだ UI が回収していない結果ごと捨てる» という後始末がある。骨格には «積んだ結果を捨てる» 口が無く、それを 1 か所のために足すのは骨格を歪める ─ 遅延起動（C-1）はもともとあちらが先にやっていたことでもある |
+| A-1 | `Pickers` / `FileOps` / `Prompting` も切り出す | 切り出さない | 下記 |
+| B-7 | 各部品が `status()` を返す形に揃える | `FolderSizes` / `Searching` のみ | 切り出した 2 つはそうなった。残り 3 つを切り出さない以上、そこだけ揃える意味が無い |
+
+---
+
+### A-1 の残り 3 つを見送った理由
+
+`FolderSizes` と `Searching` は素直に外れた ─ どちらも **葉**で、外から見た口が
+«表 1 つ・ワーカー 1 つ・文言 1 つ» に収まる。受け取る依存もファイルシステムと
+表示文字列（と、サイズはドライブ一覧）だけで、`App&` を持たずに済んだ。
+
+残り 3 つはそうではない。実際に数えた back-call は:
+
+| 部品 | `App` へ戻る必要があるもの |
+| --- | --- |
+| `Pickers` | `DisplayName` / `DisplayNameOf`（行の表示名）、`SetStatus`、`CloseAllOverlays`、`FocusPane`、`OpenPath`、`Execute` |
+| `FileOps` | `SetStatus`、`ReportFailure`、`BeginPrompt`（削除の確認）、`RefreshTabsShowing`、`ClearCutMarks`、`FolderSizes::cache()`、`IIconProvider::Invalidate` |
+| `Prompting` | `ApplyPrompt` の分岐ぜんぶ（移動・名前変更・作成・削除）、`SetStatus`、`EnsureCursorVisible`、`SyncSearchQuery` |
+
+これを «`App&` を持たない部品» にするには、6 本前後の `std::function` を構築時に
+渡すことになる。**それは大きなクラスを、大きなクラス + コールバックの網に
+置き換えただけ**で、読みやすさは下がる ─ `FinishFileOp` が «ステータス行に言う»
+のか «どこかへ飛ぶ» のかが、渡された関数の中身を追わないと分からなくなる。
+
+しかも計画自身の言葉で、そこに残っているものは配線である:
+「`App` は「所有・配線・`Execute`・入力の振り分け」だけを持ち」。
+`OpenPlacePicker` も `QueueFileOp` も `ApplyPrompt` も、判断そのものは
+`PlacePicker` / `fs::FileOpQueue` / `TextField` という別のクラスがすでに持っていて、
+`App` に在るのはそれらを繋ぐ部分だけだった。
+
+**正しく切るには、ステータス行と失敗の報告と一覧の取り直しを «出来事» として
+受け取る口を先に作ることになる** ─ それは「変えるのはコードの形だけ」（§1）の
+外側にある設計変更なので、この文書の範囲では行わない。
+
+そのため **§0 の `App.h` ≤ 600 行 / `App.cpp` ≤ 1,200 行は達成していない**
+（1,220 / 2,549 行）。見積もりのほうが、切れる前提で立っていた。
 
 ---
 
