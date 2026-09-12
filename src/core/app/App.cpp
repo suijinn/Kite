@@ -1377,6 +1377,12 @@ void App::ReportFailure(const char* key, const std::string& detail) {
 
 bool App::statusExpired() const { return plat::NowMs() > statusUntilMs_; }
 
+uint64_t App::statusRemainingMs() const {
+    if (statusMessage_.empty()) return 0;
+    const uint64_t now = plat::NowMs();
+    return now >= statusUntilMs_ ? 0 : statusUntilMs_ - now;
+}
+
 // ---------------------------------------------------------------------------
 // Bookmarks
 // ---------------------------------------------------------------------------

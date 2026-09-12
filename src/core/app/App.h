@@ -561,6 +561,14 @@ public:
     /// @return 期限切れなら true
     bool statusExpired() const;
 
+    /// @brief ステータスメッセージの表示期限までの残り時間を返す。
+    /// @return 残りミリ秒。期限切れ、またはメッセージが無ければ 0
+    /// @note 期限を検出するには、そのとき 1 フレーム描かれる必要がある ─ 描画を
+    ///       要求するのはプラットフォーム側のタイマーなので、いつ起こせばよいかを
+    ///       ここが答える。500 ms おきに起きて «まだか» と訊いていたころは、
+    ///       4 秒のメッセージ 1 本につき全面再描画が 8 回走っていた
+    uint64_t statusRemainingMs() const;
+
     /// @brief ドライブ一覧を返す。
     /// @return ルート項目の一覧
     const std::vector<fs::Root>& roots() const { return roots_; }
