@@ -472,6 +472,18 @@ int App::SidebarItemCount(SidebarSection section) const {
     }
 }
 
+const std::string& App::SidebarPath(SidebarSection section, int index) const {
+    static const std::string kNone;
+    if (index < 0 || index >= SidebarItemCount(section)) return kNone;
+    const size_t at = static_cast<size_t>(index);
+    switch (section) {
+        case SidebarSection::QuickAccess: return quickAccess_[at].path;
+        case SidebarSection::Bookmarks: return workspace_.bookmarks[at].path;
+        case SidebarSection::Drives: return roots_[at].path;
+        default: return kNone;
+    }
+}
+
 bool App::MoveSidebarItem(SidebarSection section, int from, int to) {
     bool moved = false;
     switch (section) {

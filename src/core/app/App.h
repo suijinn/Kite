@@ -553,6 +553,15 @@ public:
     /// @return 項目数。SidebarSection::Count では 0
     int SidebarItemCount(SidebarSection section) const;
 
+    /// @brief サイドバーの 1 行が指すパスを返す。
+    /// @param[in] section 対象の区画
+    /// @param[in] index 区画の中での添字
+    /// @return 行のパス。範囲外、または SidebarSection::Count では空文字列
+    /// @note 行そのものは «区画 + 添字» で指す ─ 当たり判定の側にパスの写しを
+    ///       持たせると、サイドバーを描くたびに行数ぶんの std::string を作る
+    ///       ことになる（描画は毎フレーム全部を組み直す）
+    const std::string& SidebarPath(SidebarSection section, int index) const;
+
     /// @brief ステータスバーに出すメッセージを返す。
     /// @return メッセージ。無ければ空文字列
     const std::string& statusMessage() const { return statusMessage_; }

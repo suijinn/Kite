@@ -467,8 +467,9 @@ std::string AppUi::DropTargetIn(const Region* region) const {
 
     // The sidebar is a legitimate destination - dropping onto a bookmark or a
     // quick-access folder is often faster than navigating there.
-    if (region->kind == Hit::SidebarItem) return region->path;
-    if (region->kind == Hit::Crumb) return region->path;
+    if (region->kind == Hit::SidebarItem || region->kind == Hit::Crumb) {
+        return PathIn(region);
+    }
     if (!region->pane) return {};
 
     const Tab* tab = region->pane->activeTab();
@@ -936,7 +937,7 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             if (e.button != 0) {
                 // Only the left button can start a reorder, so the middle click
                 // has nothing to wait for.
-                app_.OpenPath(region->path, newTab);
+                app_.OpenPath(PathIn(region), newTab);
                 return true;
             }
             // Arm a possible reorder. The folder opens on the release, not here:
@@ -947,7 +948,7 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             dragSidebarIndex_ = region->index;
             dropSidebarIndex_ = -1;
             dropSidebarMarker_ = {};
-            pendingSidebarPath_ = region->path;
+            pendingSidebarPath_ = PathIn(region);
             pendingSidebarNewTab_ = newTab;
             dragStartX_ = e.x;
             dragStartY_ = e.y;
@@ -998,7 +999,7 @@ bool AppUi::OnMouse(const MouseEvent& e) {
 
         case Hit::Crumb:
             app_.FocusPane(region->pane);
-            app_.OpenPath(region->path, (e.mods & kModCtrl) != 0);
+            app_.OpenPath(PathIn(region), (e.mods & kModCtrl) != 0);
             return true;
 
         case Hit::ColumnHeader: {

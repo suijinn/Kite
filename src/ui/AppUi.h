@@ -157,6 +157,9 @@ private:
         TabBarWidth,     // dragging the vertical tab bar's edge
     };
 
+    /// 当たり判定 1 つぶん。**文字列を持たない** ─ 毎フレーム全部を積み直すので、
+    /// 行ごとにパスを写すとサイドバーやパンくずの行数ぶんの割り当てが乗る。
+    /// パスの要る 2 種（サイドバーの行・パンくず）は添字から引き直す（PathIn）。
     struct Region {
         RectF rect;
         Hit kind = Hit::None;
@@ -164,14 +167,21 @@ private:
         SplitNode* node = nullptr;
         int index = 0;
         SidebarSection section = SidebarSection::Count;  ///< サイドバーの行のみ
-        std::string path;
     };
 
     void Add(const RectF& r, Hit kind, int index = 0, Pane* pane = nullptr,
-             SplitNode* node = nullptr, std::string path = {});
-    void AddSidebar(const RectF& r, Hit kind, SidebarSection section, int index,
-                    std::string path = {});
+             SplitNode* node = nullptr);
+    void AddSidebar(const RectF& r, Hit kind, SidebarSection section, int index);
     const Region* Pick(float x, float y) const;
+
+    // The path a region points at, for the two kinds that point at one. Looked
+    // up from the index rather than carried, so Region stays a POD. By value:
+    // this is asked once per click, never per row per frame.
+    std::string PathIn(const Region* region) const;
+
+    // The breadcrumb trail of a tab, deepest last - the paths only. PaintPathBar
+    // labels them; a click resolves the one it hit back through this.
+    static std::vector<std::string> CrumbPaths(const Tab& tab);
 
     bool PointerOver(const RectF& box) const;
     bool OutsideWindow(float x, float y) const;

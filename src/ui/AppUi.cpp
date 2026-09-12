@@ -64,14 +64,44 @@ const char* EmptyListText(const Tab& tab) {
 
 AppUi::AppUi(App& app) : app_(app) {}
 
-void AppUi::Add(const RectF& r, Hit kind, int index, Pane* pane, SplitNode* node,
-                std::string path) {
-    regions_.push_back({ r, kind, pane, node, index, SidebarSection::Count, std::move(path) });
+void AppUi::Add(const RectF& r, Hit kind, int index, Pane* pane, SplitNode* node) {
+    regions_.push_back({ r, kind, pane, node, index, SidebarSection::Count });
 }
 
-void AppUi::AddSidebar(const RectF& r, Hit kind, SidebarSection section, int index,
-                       std::string path) {
-    regions_.push_back({ r, kind, nullptr, nullptr, index, section, std::move(path) });
+void AppUi::AddSidebar(const RectF& r, Hit kind, SidebarSection section, int index) {
+    regions_.push_back({ r, kind, nullptr, nullptr, index, section });
+}
+
+std::vector<std::string> AppUi::CrumbPaths(const Tab& tab) {
+    std::vector<std::string> out;
+    std::string p = tab.path;
+    while (!p.empty()) {
+        out.push_back(p);
+        const std::string up = vfs::ParentOf(p);
+        if (up == p) break;
+        p = up;
+    }
+    std::reverse(out.begin(), out.end());
+    return out;
+}
+
+std::string AppUi::PathIn(const Region* region) const {
+    if (!region) return {};
+    if (region->kind == Hit::SidebarItem) {
+        return app_.SidebarPath(region->section, region->index);
+    }
+    if (region->kind == Hit::Crumb && region->pane) {
+        // Rebuilt rather than remembered: the trail is a function of the tab's
+        // path, and this is asked once per click - not per row per frame, which
+        // is what carrying it in Region amounted to.
+        if (const Tab* tab = region->pane->activeTab()) {
+            const std::vector<std::string> crumbs = CrumbPaths(*tab);
+            if (region->index >= 0 && region->index < static_cast<int>(crumbs.size())) {
+                return crumbs[static_cast<size_t>(region->index)];
+            }
+        }
+    }
+    return {};
 }
 
 const AppUi::Region* AppUi::Pick(float x, float y) const {
@@ -524,7 +554,7 @@ void AppUi::PaintSidebar(Renderer& r, const RectF& area) {
             r.DrawText(label, { icon.r + 6.0f, row.t, row.r - 6.0f, row.b },
                        carried ? textColor.alpha(textColor.a * 0.45f) : textColor, FontRole::Ui,
                        TextAlign::Left);
-            AddSidebar(row, Hit::SidebarItem, id, index, fullPath);
+            AddSidebar(row, Hit::SidebarItem, id, index);
         }
         y += rowH;
     };
@@ -922,8 +952,9 @@ void AppUi::PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area, b
     // "PC", which is a place the crumbs can now take you to.
     std::vector<std::pair<std::string, std::string>> crumbs;  // label, full path
     {
-        std::string p = tab->path;
-        while (!p.empty()) {
+        // The same trail a click resolves against, so the two cannot disagree
+        // about which crumb index is which folder.
+        for (std::string& p : CrumbPaths(*tab)) {
             std::string label;
             if (const char* key = vfs::LabelKey(p)) {
                 label = app_.strings().Get(key);
@@ -936,12 +967,8 @@ void AppUi::PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area, b
             } else {
                 label = path::DisplayName(p);
             }
-            crumbs.push_back({ std::move(label), p });
-            const std::string up = vfs::ParentOf(p);
-            if (up == p) break;
-            p = up;
+            crumbs.push_back({ std::move(label), std::move(p) });
         }
-        std::reverse(crumbs.begin(), crumbs.end());
     }
 
     float x = area.l + kPad;
@@ -958,7 +985,7 @@ void AppUi::PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area, b
         if (Hovered(box)) r.FillRoundRect(box.inset(0.0f, 1.0f), 3.0f, th.rowHover);
         r.DrawText(crumbs[i].first, box, last ? th.text : th.textDim, FontRole::Ui,
                    TextAlign::Center);
-        Add(box, Hit::Crumb, 0, pane, nullptr, crumbs[i].second);
+        Add(box, Hit::Crumb, static_cast<int>(i), pane);
         x = box.r;
 
         if (!last) {
