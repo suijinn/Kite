@@ -453,7 +453,7 @@ void AppUi::PaintSidebar(Renderer& r, const RectF& area) {
     const float iconCell = IconCell(th);
     const float top = area.t + 4.0f;
     float y = top - sidebarScroll_;
-    const Tab* current = const_cast<App&>(app_).workspace().focusedTab();
+    const Tab* current = app_.workspace().focusedTab();
     const std::string currentPath = current ? current->path : std::string();
 
     // A section is greyed out while it is the one being carried, heading and
@@ -547,8 +547,7 @@ void AppUi::PaintSidebar(Renderer& r, const RectF& area) {
 
             case SidebarSection::Bookmarks:
                 if (section("ui.bookmarks", SidebarSection::Bookmarks)) {
-                    const std::vector<Bookmark>& marks =
-                        const_cast<App&>(app_).workspace().bookmarks;
+                    const std::vector<Bookmark>& marks = app_.workspace().bookmarks;
                     for (size_t i = 0; i < marks.size(); ++i) {
                         // A bookmark is a folder, so it falls back to one - the
                         // same placeholder quick access uses, for the same reason.
@@ -969,7 +968,7 @@ void AppUi::PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area, b
         }
     }
 
-    if (const_cast<App&>(app_).HasBookmark(tab->path)) {
+    if (app_.HasBookmark(tab->path)) {
         glyph::Star(r, { area.r - 22.0f, area.t + 4.0f, area.r - 6.0f, area.b - 4.0f }, th.accent);
     }
     r.FillRect({ area.l, area.b - 1.0f, area.r, area.b }, th.border);
