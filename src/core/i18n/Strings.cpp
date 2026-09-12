@@ -731,7 +731,7 @@ void Strings::ApplyOverrides(const Ini& ini) {
 }
 
 const std::string& Strings::Get(std::string_view key) const {
-    auto it = map_.find(std::string(key));
+    auto it = map_.find(key);
     if (it != map_.end()) return it->second;
 
     // Cache the key itself so we can return a stable reference.
@@ -741,7 +741,7 @@ const std::string& Strings::Get(std::string_view key) const {
 }
 
 std::string Strings::Label(std::string_view key) const {
-    auto it = map_.find(std::string(key));
+    auto it = map_.find(key);
     if (it != map_.end()) return it->second;
 
     // "cmd.goto_tab_3" -> "cmd.goto_tab_n" with {n} = 3
@@ -763,9 +763,15 @@ std::string Strings::Label(std::string_view key) const {
 std::string Strings::Format(std::string_view key,
                             std::initializer_list<std::string_view> args) const {
     std::string out = Get(key);
-    int index = 0;
+    // The tokens are a fixed table: Format() is called from every painted row,
+    // and building "{0}" out of to_string() there is an allocation per argument
+    // per frame for a string that never changes.
+    static constexpr std::string_view kTokens[] = { "{0}", "{1}", "{2}", "{3}", "{4}",
+                                                    "{5}", "{6}", "{7}", "{8}", "{9}" };
+    size_t index = 0;
     for (std::string_view a : args) {
-        const std::string token = "{" + std::to_string(index++) + "}";
+        if (index >= std::size(kTokens)) break;
+        const std::string_view token = kTokens[index++];
         for (size_t at = out.find(token); at != std::string::npos; at = out.find(token, at)) {
             out.replace(at, token.size(), a);
             at += a.size();
