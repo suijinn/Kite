@@ -41,7 +41,6 @@ std::string KeySettingsHint(const Strings& str, const KeyMap& keys, const char* 
 void AppUi::PaintKeyHelp(Renderer& r, const RectF& area) {
     const Theme& th = app_.theme();
     const Strings& str = app_.strings();
-    const KeyMap& km = app_.keys();
 
     r.FillRect(area, th.overlayScrim);
 

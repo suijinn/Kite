@@ -20,17 +20,14 @@
 #pragma once
 
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
-#include "core/fs/DirectoryLoader.h"
 #include "core/fs/FileSystem.h"
+#include "core/fs/JobQueue.h"
 
 namespace kite::fs {
 
@@ -212,13 +209,13 @@ private:
 /// から ─ 子ごとに歩けば、1 つずつ «確定» が増えていく。
 class FolderSizeJob {
 public:
-    /// @brief ワーカースレッドを起動する。
+    /// @brief 数えるワーカーを用意する。**スレッドは最初の依頼まで作らない。**
     /// @param[in] fsys 列挙に使うファイルシステム。本オブジェクトより長生きすること
     /// @param[in] wake 完了通知先。本オブジェクトより長生きすること
     /// @param[in] workers ワーカースレッド数。1 未満を渡した場合は 1 に丸める
     FolderSizeJob(IFileSystem& fsys, IWakeSink& wake, int workers = kFolderSizeWorkers);
 
-    /// @brief ワーカースレッドの停止を待って破棄する。
+    /// @brief 歩きを打ち切らせてからワーカーを止め、破棄する。
     ~FolderSizeJob();
 
     FolderSizeJob(const FolderSizeJob&) = delete;
@@ -247,7 +244,7 @@ public:
 
     /// @brief 数えているもの・待っているものがあるかを返す。
     /// @return あれば true
-    bool busy() const { return pending_.load(std::memory_order_relaxed) > 0; }
+    bool busy() const { return queue_.busy(); }
 
 private:
     struct Job {
@@ -255,24 +252,21 @@ private:
         std::string path;
     };
 
-    void WorkerMain();
-    void Count(const Job& job);
-    void Publish(FolderSizeUpdate update);
+    using Queue = JobQueue<Job, FolderSizeUpdate>;
+
+    void Count(const Job& job, const Queue::Emit& emit);
 
     IFileSystem& fs_;
-    IWakeSink& wake_;
 
-    std::mutex mutex_;
-    std::condition_variable cv_;
-    std::deque<Job> queue_;
     // 待ち行列と «今歩いているもの» の両方。同じパスを 2 度歩かないためだけに持つ。
+    // 骨格の待ち行列とは別の錠で守る ─ 骨格が守るのは «依頼» で、こちらが守るのは
+    // «その場所はもう誰かが数えている» という約束で、寿命が違う（歩き終わった後に
+    // 外れる）。
+    mutable std::mutex claimMutex_;
     std::vector<std::string> claimed_;
-    std::vector<FolderSizeUpdate> done_;
-    bool stop_ = false;
 
     std::atomic<uint64_t> epoch_{ 1 };
-    std::atomic<int> pending_{ 0 };
-    std::vector<std::thread> threads_;
+    Queue queue_;
 };
 
 }  // namespace kite::fs

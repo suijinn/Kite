@@ -91,54 +91,29 @@ bool FileOpsConflict(const std::vector<FileOpTouch>& a, const std::vector<FileOp
 }
 
 FileOpQueue::FileOpQueue(IFileSystem& fsys, IWakeSink& wake, int workers)
-    : fs_(fsys), wake_(wake) {
-    if (workers < 1) workers = 1;
-    threads_.reserve(static_cast<size_t>(workers));
-    for (int i = 0; i < workers; ++i) {
-        threads_.emplace_back([this] { WorkerMain(); });
-    }
-}
-
-FileOpQueue::~FileOpQueue() {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stop_ = true;
-        // Only what has not been started. The ones in flight are the shell's
-        // now, and there is no asking for them back.
-        queue_.clear();
-    }
-    cv_.notify_all();
-    for (std::thread& t : threads_) {
-        if (t.joinable()) t.join();
-    }
-}
+    : fs_(fsys),
+      queue_(
+          wake, workers,
+          [this](const Job& job, const Queue::Emit& emit) { emit(Run(job)); }, &FindRunnable,
+          // 走り「始めた」ことも画面の答えを変える ─ 待機中だったものが実行中に
+          // 変わっても、誰も再描画を頼まなければ古い件数が出たままになる。
+          true) {}
 
 uint64_t FileOpQueue::Request(FileOpRequest request) {
     const uint64_t token = nextToken_.fetch_add(1, std::memory_order_relaxed);
     // Worked out here rather than on the worker: the answer decides whether the
     // job may start at all, so it has to exist before it goes in the queue.
     std::vector<FileOpTouch> touches = FileOpTouches(request);
-    pending_.fetch_add(1, std::memory_order_relaxed);
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        queue_.push_back({ token, std::move(request), std::move(touches) });
-    }
-    cv_.notify_one();
+    queue_.Request(Job{ token, std::move(request), std::move(touches) });
     return token;
 }
 
-void FileOpQueue::Drain(std::vector<FileOpDone>& out) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (done_.empty()) return;
-    for (FileOpDone& d : done_) out.push_back(std::move(d));
-    done_.clear();
-}
-
-size_t FileOpQueue::FindRunnable() const {
-    for (size_t i = 0; i < queue_.size(); ++i) {
+size_t FileOpQueue::FindRunnable(const std::deque<Job>& queue,
+                                 const std::vector<const Job*>& running) {
+    for (size_t i = 0; i < queue.size(); ++i) {
         bool blocked = false;
-        for (const auto& active : active_) {
-            if (FileOpsConflict(queue_[i].touches, active.second)) {
+        for (const Job* active : running) {
+            if (FileOpsConflict(queue[i].touches, active->touches)) {
                 blocked = true;
                 break;
             }
@@ -147,11 +122,11 @@ size_t FileOpQueue::FindRunnable() const {
         // this a later request could overtake the one it depends on, and the
         // pair would apply in the wrong order.
         for (size_t j = 0; !blocked && j < i; ++j) {
-            if (FileOpsConflict(queue_[i].touches, queue_[j].touches)) blocked = true;
+            if (FileOpsConflict(queue[i].touches, queue[j].touches)) blocked = true;
         }
         if (!blocked) return i;
     }
-    return queue_.size();
+    return queue.size();
 }
 
 FileOpDone FileOpQueue::Run(const Job& job) {
@@ -205,50 +180,6 @@ FileOpDone FileOpQueue::Run(const Job& job) {
     // reach for a source that was never moved.
     if (!req.move) out.origins.clear();
     return out;
-}
-
-void FileOpQueue::WorkerMain() {
-    for (;;) {
-        Job job;
-        {
-            std::unique_lock<std::mutex> lock(mutex_);
-            size_t index = 0;
-            cv_.wait(lock, [this, &index] {
-                if (stop_) return true;
-                index = FindRunnable();
-                return index < queue_.size();
-            });
-            if (stop_) return;
-            job = std::move(queue_[index]);
-            queue_.erase(queue_.begin() + static_cast<ptrdiff_t>(index));
-            active_.push_back({ job.token, job.touches });
-            running_.fetch_add(1, std::memory_order_relaxed);
-        }
-
-        // 走り「始めた」ことも画面の答えを変える ─ 待機中だったものが実行中に
-        // 変わっても、誰も再描画を頼まなければ古い件数が出たままになる。
-        wake_.Wake();
-
-        FileOpDone result = Run(job);
-
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            done_.push_back(std::move(result));
-            for (size_t i = 0; i < active_.size(); ++i) {
-                if (active_[i].first != job.token) continue;
-                active_.erase(active_.begin() + static_cast<ptrdiff_t>(i));
-                break;
-            }
-            // Counted down while the place is being given up, so that "how many
-            // are running" and "which places are taken" cannot disagree.
-            running_.fetch_sub(1, std::memory_order_relaxed);
-            pending_.fetch_sub(1, std::memory_order_relaxed);
-        }
-        // Everyone, not one: the place this request was holding can be what
-        // several of the waiting ones were blocked on.
-        cv_.notify_all();
-        wake_.Wake();
-    }
 }
 
 }  // namespace kite::fs

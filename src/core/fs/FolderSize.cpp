@@ -129,70 +129,46 @@ void FolderSizeCache::EvictIfNeeded() {
 // ---------------------------------------------------------------------------
 
 FolderSizeJob::FolderSizeJob(IFileSystem& fsys, IWakeSink& wake, int workers)
-    : fs_(fsys), wake_(wake) {
-    const int count = std::max(1, workers);
-    threads_.reserve(static_cast<size_t>(count));
-    for (int i = 0; i < count; ++i) threads_.emplace_back([this] { WorkerMain(); });
-}
+    : fs_(fsys), queue_(wake, workers, [this](const Job& job, const Queue::Emit& emit) {
+          Count(job, emit);
+          // 歩き終わった «場所» の予約を外すのは、結果を出した後。先に外すと、
+          // 同じフレームの描画がもう一度同じ木を頼める。
+          std::lock_guard<std::mutex> lock(claimMutex_);
+          auto it = std::find(claimed_.begin(), claimed_.end(), job.path);
+          if (it != claimed_.end()) claimed_.erase(it);
+      }) {}
 
 FolderSizeJob::~FolderSizeJob() {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stop_ = true;
-        queue_.clear();
-    }
     // 歩いている最中なら、次のフォルダの切れ目で自分から抜ける ─ 数えるだけで
-    // 何も書き換えないので、待つ理由が無い（検索と同じ）。
+    // 何も書き換えないので、待つ理由が無い（検索と同じ）。join する前に立てる。
     epoch_.fetch_add(1, std::memory_order_relaxed);
-    cv_.notify_all();
-    for (std::thread& t : threads_) {
-        if (t.joinable()) t.join();
-    }
 }
 
 void FolderSizeJob::Request(const std::string& path) {
     if (path.empty()) return;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> lock(claimMutex_);
         if (std::find(claimed_.begin(), claimed_.end(), path) != claimed_.end()) return;
         claimed_.push_back(path);
-        queue_.push_back(Job{ epoch_.load(std::memory_order_relaxed), path });
     }
-    pending_.fetch_add(1, std::memory_order_relaxed);
-    cv_.notify_one();
+    queue_.Request(Job{ epoch_.load(std::memory_order_relaxed), path });
 }
 
 void FolderSizeJob::CancelAll() {
-    int dropped = 0;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        dropped = static_cast<int>(queue_.size());
-        queue_.clear();
+        std::lock_guard<std::mutex> lock(claimMutex_);
         // 歩いている最中のものは自分で抜ける。その «場所» の予約だけ先に外して
         // おくと、やめた直後の描画がもう一度頼めるようになる。
         claimed_.clear();
     }
     // 先に増やす ─ 走っているワーカーはフォルダの切れ目でこれを見て抜ける。
     epoch_.fetch_add(1, std::memory_order_relaxed);
-    if (dropped > 0) pending_.fetch_sub(dropped, std::memory_order_relaxed);
+    queue_.Clear();
 }
 
-void FolderSizeJob::Drain(std::vector<FolderSizeUpdate>& out) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (done_.empty()) return;
-    for (FolderSizeUpdate& u : done_) out.push_back(std::move(u));
-    done_.clear();
-}
+void FolderSizeJob::Drain(std::vector<FolderSizeUpdate>& out) { queue_.Drain(out); }
 
-void FolderSizeJob::Publish(FolderSizeUpdate update) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        done_.push_back(std::move(update));
-    }
-    wake_.Wake();
-}
-
-void FolderSizeJob::Count(const Job& job) {
+void FolderSizeJob::Count(const Job& job, const Queue::Emit& emit) {
     FolderSizeUpdate acc;
     acc.epoch = job.epoch;
     acc.path = job.path;
@@ -229,7 +205,7 @@ void FolderSizeJob::Count(const Job& job) {
         const uint64_t now = plat::NowMs();
         if (now - lastFlush >= kFolderSizeFlushMs) {
             lastFlush = now;
-            Publish(acc);
+            emit(acc);
         }
         return true;
     });
@@ -241,29 +217,7 @@ void FolderSizeJob::Count(const Job& job) {
     acc.done = true;
     acc.atMs = plat::NowMs();
     acc.failed = rootUnreadable;
-    Publish(std::move(acc));
-}
-
-void FolderSizeJob::WorkerMain() {
-    for (;;) {
-        Job job;
-        {
-            std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this] { return stop_ || !queue_.empty(); });
-            if (stop_) return;
-            job = std::move(queue_.front());
-            queue_.pop_front();
-        }
-
-        Count(job);
-
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            auto it = std::find(claimed_.begin(), claimed_.end(), job.path);
-            if (it != claimed_.end()) claimed_.erase(it);
-        }
-        pending_.fetch_sub(1, std::memory_order_relaxed);
-    }
+    emit(std::move(acc));
 }
 
 }  // namespace kite::fs
