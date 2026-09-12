@@ -124,6 +124,7 @@ add_library(kite_core STATIC
     src/core/app/PlacePicker.cpp
     src/core/app/CommandPalette.cpp
     src/core/app/ConfigDir.cpp
+    src/core/app/FolderSizes.cpp
     src/core/app/IconProvider.cpp
     src/core/app/PickerList.cpp
     src/core/app/SettingsEditor.cpp

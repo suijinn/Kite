@@ -514,14 +514,14 @@ void App::Execute(Cmd cmd) {
             // サイズで並べると、値が要るのは画面に出ている行だけではなくなる ─
             // 数えていないフォルダは 0 として並ぶので、見えている行だけ数えても
             // 順序は整わない。
-            SyncFolderSizesForSort(*tab);
+            folderSizes_.SyncForSort(*tab);
             dirty_ = true;
             break;
         }
         case Cmd::CountFolderSize:
         case Cmd::CountFolderSizes: {
             if (!tab) break;
-            if (folderSizeMode_ == FolderSizeMode::Off) {
+            if (folderSizes_.mode() == FolderSizeMode::Off) {
                 // 「効かないキー」に見せない ─ 断る理由と、どこで変えられるかを言う。
                 SetStatus(strings_.Format("ui.folder_size_disabled",
                                           { keymap_.ChordText(Cmd::ShowSettings) }));
@@ -536,7 +536,7 @@ void App::Execute(Cmd cmd) {
             if (cmd == Cmd::CountFolderSizes) {
                 // 頼まれたのだから、自動では歩かない場所（共有・USB）でも歩くし、
                 // 数え終わっているものも数え直す。
-                RequestFolderSizesIn(*tab, true);
+                folderSizes_.RequestAllIn(*tab, true);
                 break;
             }
             // 選んであればそれ、無ければカーソル行。削除や名前の変更と同じ読み方。
@@ -557,11 +557,11 @@ void App::Execute(Cmd cmd) {
                 SetStatus(strings_.Get("ui.folder_size_no_folder"));
                 break;
             }
-            for (const std::string& target : targets) RequestFolderSize(target, true);
+            for (const std::string& target : targets) folderSizes_.Request(target, true);
             break;
         }
         case Cmd::StopFolderSizes:
-            StopFolderSizes();
+            folderSizes_.Stop();
             // 何も走っていなくても答える ─ 何も起きない操作は「効かないキー」と
             // 見分けが付かない（列幅を戻したときと同じ）。
             SetStatus(strings_.Get("ui.folder_size_stopped"));

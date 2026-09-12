@@ -246,7 +246,7 @@ void App::LoadConfig() {
     // 既定は «自動»。off にすると、この機能が在ること自体が設定画面を開くまで
     // 誰にも伝わらない（書庫を開く既定と同じ判断）。自動でも歩き始めるのは
     // 画面に出ている行と、ローカルの固定ディスクだけ。
-    folderSizeMode_ = FolderSizeModeFromName(settings_.GetStr("ui", "folder_sizes", "auto"));
+    folderSizes_.SetMode(FolderSizeModeFromName(settings_.GetStr("ui", "folder_sizes", "auto")));
 
     defaultView_.showHidden = settings_.GetBool("view", "show_hidden", false);
     defaultView_.dirsFirst = settings_.GetBool("view", "dirs_first", true);
@@ -493,7 +493,7 @@ SettingsValues App::CollectSettings() const {
     v.Set(SettingId::Sidebar, sidebarVisible_ ? 1 : 0);
     v.Set(SettingId::ShellIcons, shellIcons_ ? 1 : 0);
     v.Set(SettingId::OpenArchives, openArchives_ ? 1 : 0);
-    v.Set(SettingId::FolderSizes, static_cast<int>(folderSizeMode_));
+    v.Set(SettingId::FolderSizes, static_cast<int>(folderSizes_.mode()));
     v.Set(SettingId::TabBarPos, tabBarPosition_ == TabBarPosition::Left ? 1 : 0);
     v.Set(SettingId::NewTabPos, newTabPosition_ == NewTabPosition::AfterCurrent ? 1 : 0);
     v.Set(SettingId::NewTabHidden, defaultView_.showHidden ? 1 : 0);
@@ -547,15 +547,15 @@ void App::ApplySetting(SettingId id, const SettingsValues& values) {
             openArchives_ = (index != 0);
             break;
         case SettingId::FolderSizes:
-            folderSizeMode_ = static_cast<FolderSizeMode>(
-                std::clamp(index, 0, static_cast<int>(FolderSizeMode::Auto)));
+            folderSizes_.SetMode(static_cast<FolderSizeMode>(
+                std::clamp(index, 0, static_cast<int>(FolderSizeMode::Auto))));
             // 切ったなら覚えている値も捨てる ─ 残しておくと、数えない設定なのに
             // 数えた値が並ぶ（そして二度と新しくならない）。
-            if (folderSizeMode_ == FolderSizeMode::Off) {
-                StopFolderSizes();
-                sizes_.Clear();
+            if (folderSizes_.mode() == FolderSizeMode::Off) {
+                folderSizes_.Stop();
+                folderSizes_.cache().Clear();
             } else if (Tab* t = workspace_.focusedTab()) {
-                SyncFolderSizesForSort(*t);
+                folderSizes_.SyncForSort(*t);
             }
             break;
         case SettingId::TabBarPos:
@@ -640,7 +640,7 @@ bool App::SaveSettings() {
     settings_.SetFloat("ui", "font_scale", fontScale_);
     settings_.SetBool("ui", "shell_icons", shellIcons_);
     settings_.SetBool("ui", "open_archives", openArchives_);
-    settings_.Set("ui", "folder_sizes", FolderSizeModeName(folderSizeMode_));
+    settings_.Set("ui", "folder_sizes", FolderSizeModeName(folderSizes_.mode()));
     settings_.Set("ui", "new_tab_position", NewTabPositionName(newTabPosition_));
     settings_.Set("ui", "tab_bar_position", TabBarPositionName(tabBarPosition_));
     settings_.SetFloat("ui", "tab_bar_width", tabBarWidth_);
