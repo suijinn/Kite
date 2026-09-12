@@ -445,7 +445,6 @@ bool AppUi::HandleSettingsClick(const MouseEvent& e) {
     // or nudged another row underneath would leave the pending Yes belonging to
     // a question nobody can see any more.
     if (app_.prompt().isConfirm()) {
-        app_.host().Invalidate();
         return true;
     }
     const Region* region = Pick(e.x, e.y);
@@ -466,11 +465,9 @@ bool AppUi::HandleSettingsClick(const MouseEvent& e) {
             }
             app_.ApplyPendingSetting();
         }
-        app_.host().Invalidate();
         return true;
     }
     if (region && region->kind == Hit::SettingsPanel) {
-        app_.host().Invalidate();
         return true;
     }
     // Outside the panel: same as pressing Escape.
@@ -695,11 +692,9 @@ bool AppUi::HandlePlaceClick(const MouseEvent& e) {
         // for a first click to disambiguate, and someone who pressed a bookmark
         // has already decided. Ctrl reads as it does in the listing - a new tab.
         if (e.button == 0) app_.ChoosePlace((e.mods & kModCtrl) != 0);
-        app_.host().Invalidate();
         return true;
     }
     if (region && region->kind == Hit::PlacePanel) {
-        app_.host().Invalidate();
         return true;
     }
     // Outside the panel: same as pressing Escape.
@@ -839,11 +834,9 @@ bool AppUi::HandlePaletteClick(const MouseEvent& e) {
         // nothing here for a first click to disambiguate, and someone who pressed
         // a command has already decided.
         if (e.button == 0) app_.RunPaletteCommand();
-        app_.host().Invalidate();
         return true;
     }
     if (region && region->kind == Hit::PalettePanel) {
-        app_.host().Invalidate();
         return true;
     }
     // Outside the panel: same as pressing Escape.

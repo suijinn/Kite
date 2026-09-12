@@ -360,7 +360,6 @@ bool App::SetColumnWidth(int index, float width) {
     if (!columns_.SetWidth(index, factor > 0.0f ? width / factor : width)) return false;
     RebuildColumns();
     dirty_ = true;
-    host_.Invalidate();
     return true;
 }
 
@@ -383,7 +382,6 @@ bool App::SetTabBarWidth(float width) {
     tabBarWidth_ = wanted;
     ApplyTheme();
     dirty_ = true;
-    host_.Invalidate();
     return true;
 }
 
@@ -402,7 +400,6 @@ bool App::MoveColumn(int from, int to) {
     if (!columns_.Move(from, to)) return false;
     RebuildColumns();
     dirty_ = true;
-    host_.Invalidate();
     return true;
 }
 
@@ -410,7 +407,6 @@ void App::SetColumnVisible(SortKey id, bool visible) {
     if (!columns_.SetVisible(id, visible)) return;
     RebuildColumns();
     dirty_ = true;
-    host_.Invalidate();
 }
 
 void App::SetFontScale(float scale) {
@@ -426,7 +422,6 @@ void App::SetFontScale(float scale) {
     SetStatus(strings_.Format("ui.font_scale",
                               { std::to_string(static_cast<int>(fontScale_ * 100.0f + 0.5f)) }));
     dirty_ = true;
-    host_.Invalidate();
 }
 
 bool App::sidebarCollapsed(SidebarSection section) const {
@@ -439,7 +434,6 @@ void App::ToggleSidebarSection(SidebarSection section) {
     bool& collapsed = sidebarCollapsed_[static_cast<size_t>(section)];
     collapsed = !collapsed;
     dirty_ = true;
-    host_.Invalidate();
 }
 
 // Written out the moment anything changes rather than when the screen closes: a
@@ -455,7 +449,6 @@ void App::SaveKeysIfChanged() {
 void App::RemoveKeyBinding(int index) {
     keyEditor_.RemoveChord(index, keymap_, strings_);
     SaveKeysIfChanged();
-    host_.Invalidate();
 }
 
 bool App::WriteKeysFile() {
@@ -594,7 +587,6 @@ void App::ApplySetting(SettingId id, const SettingsValues& values) {
             return;
     }
     dirty_ = true;
-    host_.Invalidate();
 }
 
 void App::ApplyPendingSetting() {

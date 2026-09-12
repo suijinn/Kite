@@ -41,7 +41,6 @@ void App::Execute(Cmd cmd) {
         case Cmd::ReloadConfig: {
             LoadConfig();
             SetStatus(strings_.Get("ui.config_reloaded"));
-            host_.Invalidate();
             break;
         }
         case Cmd::OpenConfigFolder:
@@ -51,13 +50,11 @@ void App::Execute(Cmd cmd) {
             darkTheme_ = !darkTheme_;
             ApplyTheme();
             dirty_ = true;
-            host_.Invalidate();
             break;
         case Cmd::ToggleLanguage: {
             language_ = (strings_.code() == "ja") ? "en" : "ja";
             LoadLanguage();
             dirty_ = true;
-            host_.Invalidate();
             break;
         }
         case Cmd::ShowKeyHelp: {
@@ -67,7 +64,6 @@ void App::Execute(Cmd cmd) {
             // every other overlay, since they all swallow the keyboard whole.
             CloseAllOverlays();
             keyHelp_ = show;
-            host_.Invalidate();
             break;
         }
         case Cmd::ShowKeySettings:
@@ -77,7 +73,6 @@ void App::Execute(Cmd cmd) {
                 CloseAllOverlays();
                 keyEditor_.Open(strings_, keymap_);
             }
-            host_.Invalidate();
             break;
         case Cmd::ShowSettings:
             if (settingsEditor_.visible()) {
@@ -89,7 +84,6 @@ void App::Execute(Cmd cmd) {
                 settingsEditor_.Open(strings_, CollectSettings());
                 if (standalone_) SetStatus(strings_.Get("ui.settings_no_save"));
             }
-            host_.Invalidate();
             break;
         case Cmd::ShowCommandPalette:
             if (commandPalette_.visible()) {
@@ -97,7 +91,6 @@ void App::Execute(Cmd cmd) {
             } else {
                 OpenCommandPalette();
             }
-            host_.Invalidate();
             break;
         case Cmd::CancelOverlay:
             if (commandPalette_.visible()) {
@@ -125,7 +118,6 @@ void App::Execute(Cmd cmd) {
                     tab->Rebuild();
                 }
             }
-            host_.Invalidate();
             break;
 
         // --- navigation ------------------------------------------------------
@@ -144,7 +136,6 @@ void App::Execute(Cmd cmd) {
             from.pop_back();
             to.push_back(tab->path);
             RetargetTab(*tab, target);
-            host_.Invalidate();
             break;
         }
         case Cmd::GoHome:
@@ -230,7 +221,6 @@ void App::Execute(Cmd cmd) {
             if (tab->cursor + 1 < static_cast<int>(tab->visible.size())) tab->cursor++;
             tab->ResetAnchor();
             EnsureCursorVisible();
-            host_.Invalidate();
             break;
         }
         case Cmd::SelectAll:
@@ -239,7 +229,6 @@ void App::Execute(Cmd cmd) {
                 // Whatever range was being dragged out with Shift is over; the
                 // next extension has to build on what is on screen now.
                 tab->ResetAnchor();
-                host_.Invalidate();
             }
             break;
         case Cmd::SelectNone:
@@ -249,7 +238,6 @@ void App::Execute(Cmd cmd) {
             // anywhere.
             ClearCutMarks();
             if (tab) tab->ClearMarks();
-            host_.Invalidate();
             break;
         case Cmd::InvertSelection:
             if (tab) {
@@ -258,7 +246,6 @@ void App::Execute(Cmd cmd) {
                     tab->marked[index] = tab->marked[index] ? 0 : 1;
                 }
                 tab->ResetAnchor();
-                host_.Invalidate();
             }
             break;
 
@@ -267,7 +254,6 @@ void App::Execute(Cmd cmd) {
             if (!pane) break;
             OpenTabIn(*pane, tab ? tab->path : fs_.HomeDir(), NewTabAt(*pane), defaultView_);
             dirty_ = true;
-            host_.Invalidate();
             break;
         }
         case Cmd::CloseTab: {
@@ -290,7 +276,6 @@ void App::Execute(Cmd cmd) {
                     if (Tab* t = pane->activeTab()) workspace_.closedTabs.push_back(t->path);
                     session->ClosePane(pane);
                     dirty_ = true;
-                    host_.Invalidate();
                     break;
                 }
                 host_.Close();
@@ -302,7 +287,6 @@ void App::Execute(Cmd cmd) {
                 if (Tab* t = pane->activeTab()) RequestLoad(*t);
                 dirty_ = true;
             }
-            host_.Invalidate();
             break;
         }
         case Cmd::DuplicateTab: {
@@ -311,7 +295,6 @@ void App::Execute(Cmd cmd) {
             // that is not a placement preference, it is what duplicating means.
             OpenTabIn(*pane, tab->path, pane->active + 1, tab->view);
             dirty_ = true;
-            host_.Invalidate();
             break;
         }
         case Cmd::ReopenTab: {
@@ -319,7 +302,6 @@ void App::Execute(Cmd cmd) {
             const std::string p = workspace_.closedTabs.back();
             workspace_.closedTabs.pop_back();
             OpenTabIn(*pane, p, NewTabAt(*pane), defaultView_);
-            host_.Invalidate();
             break;
         }
         case Cmd::NextTab:
@@ -343,7 +325,6 @@ void App::Execute(Cmd cmd) {
             std::swap(pane->tabs[pane->active], pane->tabs[to]);
             pane->active = to;
             dirty_ = true;
-            host_.Invalidate();
             break;
         }
         case Cmd::Tab1: GotoTab(0); break;
@@ -371,7 +352,6 @@ void App::Execute(Cmd cmd) {
                 session->focus = created;
                 dirty_ = true;
             }
-            host_.Invalidate();
             break;
         }
         case Cmd::ClosePane:
@@ -381,7 +361,6 @@ void App::Execute(Cmd cmd) {
                 } else {
                     dirty_ = true;
                 }
-                host_.Invalidate();
             }
             break;
         case Cmd::FocusNextPane:
@@ -426,7 +405,6 @@ void App::Execute(Cmd cmd) {
             }
             if (!other) break;
             if (Tab* ot = other->activeTab()) RetargetTab(*ot, target);
-            host_.Invalidate();
             break;
         }
         case Cmd::SyncOtherPane: {
@@ -435,14 +413,12 @@ void App::Execute(Cmd cmd) {
                 if (&p == pane) return;
                 if (Tab* ot = p.activeTab()) RetargetTab(*ot, tab->path);
             });
-            host_.Invalidate();
             break;
         }
         case Cmd::SwapPanes:
             if (session && pane) {
                 session->SwapWithSibling(pane);
                 dirty_ = true;
-                host_.Invalidate();
             }
             break;
 
@@ -456,14 +432,12 @@ void App::Execute(Cmd cmd) {
             });
             EnsureVisibleTabsLoaded();
             dirty_ = true;
-            host_.Invalidate();
             break;
         }
         case Cmd::CloseSession:
             workspace_.CloseSession(workspace_.active);
             EnsureVisibleTabsLoaded();
             dirty_ = true;
-            host_.Invalidate();
             break;
         case Cmd::RenameSession:
             if (session) BeginPrompt(PromptKind::SessionName, "ui.session_name_label", session->name);
@@ -515,7 +489,6 @@ void App::Execute(Cmd cmd) {
         case Cmd::ToggleSidebar:
             sidebarVisible_ = !sidebarVisible_;
             dirty_ = true;
-            host_.Invalidate();
             break;
         case Cmd::SortByName:
         case Cmd::SortByExt:
@@ -564,7 +537,6 @@ void App::Execute(Cmd cmd) {
                 // 頼まれたのだから、自動では歩かない場所（共有・USB）でも歩くし、
                 // 数え終わっているものも数え直す。
                 RequestFolderSizesIn(*tab, true);
-                host_.Invalidate();
                 break;
             }
             // 選んであればそれ、無ければカーソル行。削除や名前の変更と同じ読み方。
@@ -586,7 +558,6 @@ void App::Execute(Cmd cmd) {
                 break;
             }
             for (const std::string& target : targets) RequestFolderSize(target, true);
-            host_.Invalidate();
             break;
         }
         case Cmd::StopFolderSizes:
@@ -594,7 +565,6 @@ void App::Execute(Cmd cmd) {
             // 何も走っていなくても答える ─ 何も起きない操作は「効かないキー」と
             // 見分けが付かない（列幅を戻したときと同じ）。
             SetStatus(strings_.Get("ui.folder_size_stopped"));
-            host_.Invalidate();
             break;
         case Cmd::ToggleSortOrder:
             ToggleViewFlag(tab, &ViewState::sortDesc);
@@ -638,7 +608,6 @@ void App::Execute(Cmd cmd) {
             } else {
                 OpenPlacePicker();
             }
-            host_.Invalidate();
             break;
         case Cmd::Bookmark1: GotoBookmark(0); break;
         case Cmd::Bookmark2: GotoBookmark(1); break;

@@ -30,7 +30,6 @@ void AppUi::ScrollPane(Pane* pane, float deltaPixels) {
     const float maxScroll = std::max(
         0.0f, static_cast<float>(tab->visible.size()) * pane->viewport.rowHeight - pane->viewport.listHeight);
     tab->scroll = std::clamp(tab->scroll, 0.0f, maxScroll);
-    app_.host().Invalidate();
 }
 
 bool AppUi::HandleListClick(const Region& region, const MouseEvent& e) {
@@ -61,7 +60,6 @@ bool AppUi::HandleListClick(const Region& region, const MouseEvent& e) {
         tab->cursor = tab->SkipGroupRows(index, 1);
         tab->ResetAnchor();
         app_.EnsureCursorVisible();
-        app_.host().Invalidate();
         return true;
     }
     if (e.mods & kModCtrl) {
@@ -90,7 +88,6 @@ bool AppUi::HandleListClick(const Region& region, const MouseEvent& e) {
         tab->ResetAnchor();
     }
     app_.EnsureCursorVisible();
-    app_.host().Invalidate();
     return true;
 }
 
@@ -139,7 +136,6 @@ void AppUi::UpdateMarquee(float x, float y) {
     // than write them onto whatever is there now.
     if (!tab || tab != marqueeTab_ || tab->marked.size() != marqueeBase_.size()) {
         CancelDrag();
-        app_.host().Invalidate();
         return;
     }
 
@@ -169,7 +165,6 @@ void AppUi::UpdateMarquee(float x, float y) {
         tab->ResetAnchor();
     }
 
-    app_.host().Invalidate();
 }
 
 // Clicks while the shortcut editor is up. Nothing behind it is reachable: the
@@ -183,7 +178,6 @@ bool AppUi::HandleKeySettingsClick(const MouseEvent& e) {
             app_.keyEditor().SelectRow(region->index);
             app_.keyEditor().BeginCapture(true);
         }
-        app_.host().Invalidate();
         return true;
     }
     if (region && region->kind == Hit::KeyChord) {
@@ -197,7 +191,6 @@ bool AppUi::HandleKeySettingsClick(const MouseEvent& e) {
                 app_.keyEditor().SelectChord(region->index, app_.strings());
             }
         }
-        app_.host().Invalidate();
         return true;
     }
     if (region && region->kind == Hit::KeyRow) {
@@ -205,11 +198,9 @@ bool AppUi::HandleKeySettingsClick(const MouseEvent& e) {
         // The second click is the one that arms capture, so a single click can
         // still just move the selection around.
         if (e.button == 0 && e.clicks >= 2) app_.keyEditor().BeginCapture(false);
-        app_.host().Invalidate();
         return true;
     }
     if (region && region->kind == Hit::KeyPanel) {
-        app_.host().Invalidate();
         return true;
     }
     // Outside the panel: same as pressing Escape.
@@ -248,7 +239,6 @@ void AppUi::FinishTabDrag() {
         // App may close the pane out from under us, so let go of it first.
         CancelDrag();
         app_.DetachTabToNewWindow(from, index);
-        app_.host().Invalidate();
         return;
     }
 
@@ -272,7 +262,6 @@ void AppUi::FinishTabDrag() {
         }
     }
     CancelDrag();
-    app_.host().Invalidate();
 }
 
 // Which slot in the session bar a carried chip is asking for, plus the boundary
@@ -318,7 +307,6 @@ void AppUi::FinishColumnDrag() {
         app_.MoveColumn(dragColumnIndex_, LiftedTarget(dragColumnIndex_, dropColumnIndex_));
     }
     CancelDrag();
-    app_.host().Invalidate();
 }
 
 // 見出しを押しただけのときの答え。列の識別子は並べ替えの基準そのものなので、
@@ -336,7 +324,6 @@ void AppUi::FinishSessionDrag() {
         app_.MoveSession(dragSessionIndex_, LiftedTarget(dragSessionIndex_, dropSessionIndex_));
     }
     CancelDrag();
-    app_.host().Invalidate();
 }
 
 // Which slot in the section being dragged the pointer is asking for, plus the
@@ -371,7 +358,6 @@ void AppUi::FinishSidebarDrag() {
                              LiftedTarget(dragSidebarIndex_, dropSidebarIndex_));
     }
     CancelDrag();
-    app_.host().Invalidate();
 }
 
 // The rectangle a whole section occupies: its heading plus every row under it.
@@ -423,7 +409,6 @@ void AppUi::FinishSectionDrag() {
                                 LiftedTarget(dragSectionIndex_, dropSectionIndex_));
     }
     CancelDrag();
-    app_.host().Invalidate();
 }
 
 void AppUi::CancelDrag() {
@@ -527,6 +512,13 @@ void AppUi::ClearDropFeedback() {
 }
 
 bool AppUi::OnMouse(const MouseEvent& e) {
+    // 入口で 1 回（App::OnKey と同じ）。ドラッグの提案も、押した先で走った
+    // コマンドも、もう自分では頼まない。
+    //
+    // **降りるのは «何も変わらなかった» ときだけ** ─ 1 ピクセルごとに頼むと、
+    // 動かしている間ずっと全面再描画になる。
+    Redraw redraw(app_.host());
+
     if (e.type == MouseEvent::Type::Leave) {
         // The pointer went to another window: whatever was lit under it is not
         // under anything any more.
@@ -534,7 +526,8 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             mouseInside_ = false;
             hoverKind_ = Hit::None;
             hoverRect_ = {};
-            app_.host().Invalidate();
+        } else {
+            redraw.cancel();
         }
         return false;
     }
@@ -553,7 +546,6 @@ bool AppUi::OnMouse(const MouseEvent& e) {
                                                                        : (e.y - dragOrigin_);
             if (span > 1.0f) {
                 n->ratio = std::clamp(dragRatio_ + delta / span, 0.08f, 0.92f);
-                app_.host().Invalidate();
             }
             return true;
         }
@@ -620,7 +612,6 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             CancelDrag();
             if (!paths.empty()) {
                 app_.host().BeginFileDrag(paths);
-                app_.host().Invalidate();
             }
             return true;
         }
@@ -657,7 +648,6 @@ bool AppUi::OnMouse(const MouseEvent& e) {
                     }
                 }
             }
-            app_.host().Invalidate();
             return true;
         }
 
@@ -671,7 +661,6 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             const bool found = (this->*resolve)(e.x, e.y, &slot, &edge);
             index = found ? slot : -1;
             marker = found ? edge : RectF{};
-            app_.host().Invalidate();
         };
 
         if (drag_ == Drag::Session) {
@@ -714,7 +703,8 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             rect.r != hoverRect_.r || rect.b != hoverRect_.b) {
             hoverKind_ = kind;
             hoverRect_ = rect;
-            app_.host().Invalidate();
+        } else {
+            redraw.cancel();
         }
         return false;
     }
@@ -770,11 +760,9 @@ bool AppUi::OnMouse(const MouseEvent& e) {
         CancelDrag();
         if (unmark) {
             if (Tab* t = app_.workspace().focusedTab()) t->ClearMarks();
-            app_.host().Invalidate();
             return true;
         }
         if (wasMarquee) {
-            app_.host().Invalidate();
             return true;
         }
         return false;
@@ -786,17 +774,14 @@ bool AppUi::OnMouse(const MouseEvent& e) {
         if (app_.settingsEditor().visible()) return true;
         if (app_.placePicker().visible()) {
             app_.placePicker().Scroll(static_cast<int>(-e.wheel * 3.0f));
-            app_.host().Invalidate();
             return true;
         }
         if (app_.commandPalette().visible()) {
             app_.commandPalette().Scroll(static_cast<int>(-e.wheel * 3.0f));
-            app_.host().Invalidate();
             return true;
         }
         if (app_.keyEditor().visible()) {
             app_.keyEditor().Scroll(static_cast<int>(-e.wheel * 3.0f));
-            app_.host().Invalidate();
             return true;
         }
         if (app_.keyHelpVisible()) {
@@ -804,13 +789,11 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             // bound belongs to the paint, which is the only place that knows how
             // many rows a column ended up with.
             keyHelpScroll_ = std::max(0, keyHelpScroll_ - static_cast<int>(e.wheel * 3.0f));
-            app_.host().Invalidate();
             return true;
         }
         if (region && sidebarRect_.contains(e.x, e.y)) {
             const float maxScroll = std::max(0.0f, sidebarContent_ - sidebarRect_.h());
             sidebarScroll_ = std::clamp(sidebarScroll_ - e.wheel * 60.0f, 0.0f, maxScroll);
-            app_.host().Invalidate();
             return true;
         }
         // Over the tab bar, and the bar has rows it is not showing: the wheel
@@ -829,7 +812,6 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             // The wheel is an answer to "show me somewhere else", so it takes
             // over from the active tab until that changes again.
             pane.tabScrollFor = pane.active;
-            app_.host().Invalidate();
             return true;
         }
         if (region && region->pane) {
@@ -1065,7 +1047,6 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             tab->cursor = tab->SkipGroupRows(region->index, 1);
             tab->ResetAnchor();
             app_.EnsureCursorVisible();
-            app_.host().Invalidate();
             // 右ボタンは行と同じ ─ 選んだ相手についてのメニューが、選んだ直後に出る。
             if (e.button == 1) {
                 app_.ShowContextMenuAt(e.screenX, e.screenY, (e.mods & kModShift) != 0);
@@ -1141,7 +1122,6 @@ bool AppUi::OnMouse(const MouseEvent& e) {
                 // every file manager that has ever offered it.
                 app_.Execute(Cmd::GoUp);
             }
-            app_.host().Invalidate();
             return true;
 
         default:

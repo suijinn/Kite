@@ -2336,14 +2336,15 @@ KITE_TEST(app, a_settings_file_that_names_only_one_section_still_shows_all_three
                    static_cast<int>(SidebarSection::Bookmarks));
 }
 
-KITE_TEST(app, folding_a_sidebar_section_is_a_toggle_and_asks_for_a_repaint) {
+// The repaint is not asked for here: it is asked for once, by the entry point
+// the click arrives through (ui::Redraw in AppUi::OnMouse), which is the only
+// production caller. test_appui watches that end of it.
+KITE_TEST(app, folding_a_sidebar_section_is_a_toggle) {
     Harness h;
     KITE_EXPECT_FALSE(h.app.sidebarCollapsed(SidebarSection::Bookmarks));
-    const int before = h.host.invalidateCount;
 
     h.app.ToggleSidebarSection(SidebarSection::Bookmarks);
     KITE_EXPECT(h.app.sidebarCollapsed(SidebarSection::Bookmarks));
-    KITE_EXPECT_EQ(h.host.invalidateCount, before + 1);
     // One section at a time: the others are untouched.
     KITE_EXPECT_FALSE(h.app.sidebarCollapsed(SidebarSection::QuickAccess));
 

@@ -489,8 +489,12 @@ KITE_TEST(appui, clicking_a_sidebar_heading_folds_the_section_and_clicking_it_ag
     f.Press(60.0f, heading);
     KITE_EXPECT_FALSE(f.app.sidebarCollapsed(SidebarSection::QuickAccess));
 
+    const int before = f.host.invalidateCount;
     f.Release(60.0f, heading);
     KITE_EXPECT(f.app.sidebarCollapsed(SidebarSection::QuickAccess));
+    // The fold is asked for through the mouse, and the mouse is one of the four
+    // entry points that ask for the repaint - so nothing deeper has to remember.
+    KITE_EXPECT(f.host.invalidateCount > before);
 
     f.Paint();
     f.Click(60.0f, heading);

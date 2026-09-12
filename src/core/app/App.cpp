@@ -361,14 +361,12 @@ void App::PumpFolderSizes() {
     sizeJob_->Drain(updates);
 
     const uint64_t epoch = sizeJob_->epoch();
-    bool touched = false;
     bool settledAny = false;
     for (const fs::FolderSizeUpdate& u : updates) {
         // やめた後に届いた «前の代» の答え。取り込めば、止めたはずの値が
         // 数え終わった顔で表に戻る。
         if (u.epoch != epoch) continue;
         if (!sizes_.Apply(u)) continue;
-        touched = true;
         if (u.done) settledAny = true;
     }
 
@@ -390,10 +388,7 @@ void App::PumpFolderSizes() {
             if (t.view.sort == SortKey::Size) t.Rebuild();
         });
         EnsureCursorVisible();
-        touched = true;
     }
-
-    if (touched) host_.Invalidate();
 }
 
 void App::StopFolderSizes() {
@@ -459,7 +454,6 @@ void App::RefreshRoots() {
 bool App::MoveSidebarSection(int from, int to) {
     if (!MoveInVector(sidebarSections_, from, to)) return false;
     dirty_ = true;
-    host_.Invalidate();
     return true;
 }
 
@@ -505,7 +499,6 @@ bool App::MoveSidebarItem(SidebarSection section, int from, int to) {
     }
     if (!moved) return false;
     dirty_ = true;
-    host_.Invalidate();
     return true;
 }
 
@@ -598,6 +591,11 @@ void App::SyncWatches() {
 }
 
 void App::PumpLoader() {
+    // ワーカーが何かを持ち帰ったから起こされている ─ 結果を回収した以上、画面は
+    // 変わったとみなしてよい。深いほうで «届いたのはサイズだったか、検索だったか»
+    // を数えて回る形にすると、1 か所抜けた日にその種類だけ画面に出なくなる。
+    const Redraw redraw(host_);
+
     // Filesystem notifications arrive on the same wake-up as finished listings.
     if (watcher_) {
         std::vector<fs::ChangeEvent> changes;
@@ -676,7 +674,6 @@ void App::PumpLoader() {
     RequestCompletion();
     EnsureCursorVisible();
     UpdateTitle();
-    host_.Invalidate();
 }
 
 // ---------------------------------------------------------------------------
@@ -792,7 +789,6 @@ void App::PumpSearch() {
 
     if (!touched) return;
     EnsureCursorVisible();
-    host_.Invalidate();
 }
 
 std::string App::searchStatus() const {
@@ -838,7 +834,6 @@ void App::FocusPane(Pane* pane) {
     s->focus = pane;
     if (Tab* t = pane->activeTab()) RequestLoad(*t);
     SyncWatches();
-    host_.Invalidate();
 }
 
 // Pulling a tab out of the bar and letting go outside the window.
@@ -857,7 +852,6 @@ bool App::DetachTabToNewWindow(Pane* pane, int index) {
     const bool lastInPane = pane->tabs.size() <= 1;
     if (lastInPane && session->Panes().size() <= 1) {
         SetStatus(strings_.Get("ui.cannot_detach_last"));
-        host_.Invalidate();
         return false;
     }
 
@@ -865,7 +859,6 @@ bool App::DetachTabToNewWindow(Pane* pane, int index) {
     if (!host_.OpenNewWindow(path)) {
         // Drop nothing when the window never opened - the tab is all there is.
         SetStatus(strings_.Get("ui.new_window_failed"));
-        host_.Invalidate();
         return false;
     }
 
@@ -880,7 +873,6 @@ bool App::DetachTabToNewWindow(Pane* pane, int index) {
     dirty_ = true;
     SyncWatches();
     UpdateTitle();
-    host_.Invalidate();
     return true;
 }
 
@@ -924,7 +916,6 @@ void App::NavigateFocused(const std::string& raw) {
     RequestLoad(*t, true);
     SyncWatches();
     dirty_ = true;
-    host_.Invalidate();
 }
 
 void App::OpenPath(const std::string& p, bool newTab) {
@@ -933,7 +924,6 @@ void App::OpenPath(const std::string& p, bool newTab) {
     if (newTab) {
         OpenTabIn(*pane, ArchiveTarget(path::Normalize(p)), NewTabAt(*pane), defaultView_);
         dirty_ = true;
-        host_.Invalidate();
     } else {
         NavigateFocused(p);
     }
@@ -1220,7 +1210,6 @@ void App::RebuildFocused() {
     if (Tab* t = workspace_.focusedTab()) {
         t->Rebuild();
         EnsureCursorVisible();
-        host_.Invalidate();
     }
 }
 
@@ -1277,7 +1266,6 @@ void App::MoveCursor(int delta, bool extend, bool absolute) {
         t->ResetAnchor();
     }
     EnsureCursorVisible();
-    host_.Invalidate();
 }
 
 // ---------------------------------------------------------------------------
@@ -1381,13 +1369,11 @@ void App::ToggleBookmark(const std::string& p) {
         if (utf8::EqualsIgnoreCaseAscii(workspace_.bookmarks[i].path, p)) {
             workspace_.bookmarks.erase(workspace_.bookmarks.begin() + i);
             dirty_ = true;
-            host_.Invalidate();
             return;
         }
     }
     workspace_.bookmarks.push_back({ path::DisplayName(p), p });
     dirty_ = true;
-    host_.Invalidate();
 }
 
 // ---------------------------------------------------------------------------
@@ -1491,7 +1477,6 @@ void App::ConfirmDefaultManager(bool on) {
 // if nothing happened.
 void App::SyncDefaultManagerRow() {
     if (settingsEditor_.visible()) settingsEditor_.SetValues(CollectSettings(), strings_);
-    host_.Invalidate();
 }
 
 // The state is read first so that the answer to a question already settled is a
@@ -1589,7 +1574,6 @@ void App::BeginPrompt(PromptKind kind, const char* labelKey, const std::string& 
     // screen, and listing its children before a single key is pressed would put
     // a menu over the list for a question nobody asked.
     if (kind == PromptKind::Path) complete_.SetInput(initial);
-    host_.Invalidate();
 }
 
 void App::CancelPrompt() {
@@ -1616,7 +1600,6 @@ void App::CancelPrompt() {
     complete_.Reset();
     completeToken_ = 0;
     completeRequested_.clear();
-    host_.Invalidate();
 }
 
 // ---------------------------------------------------------------------------
@@ -1702,7 +1685,6 @@ bool App::MoveCompletion(int delta) {
     if (!complete_.Move(delta)) return false;
     prompt_.text = complete_.text();
     prompt_.SetCaret(prompt_.text.size());
-    host_.Invalidate();
     return true;
 }
 
@@ -1855,7 +1837,6 @@ void App::ApplyPrompt() {
         case PromptKind::None:
             break;
     }
-    host_.Invalidate();
 }
 
 bool App::HandlePromptKey(const Chord& chord) {
@@ -1895,14 +1876,12 @@ bool App::HandlePromptKey(const Chord& chord) {
             syncFilter();
             SyncCompletion(true);
         }
-        host_.Invalidate();
     };
 
     auto pasteField = [&] {
         if (!PasteIntoField(shell_, prompt_)) return;
         syncFilter();
         SyncCompletion(true);
-        host_.Invalidate();
     };
 
     switch (chord.key) {
@@ -1911,7 +1890,6 @@ bool App::HandlePromptKey(const Chord& chord) {
             // without losing what has been typed so far.
             if (complete_.open()) {
                 complete_.Close();
-                host_.Invalidate();
                 return true;
             }
             CancelPrompt();
@@ -1969,11 +1947,9 @@ bool App::HandlePromptKey(const Chord& chord) {
             case TextField::Edit::Changed:
                 syncFilter();
                 SyncCompletion(true);
-                host_.Invalidate();
                 return true;
             case TextField::Edit::Moved:
                 SyncCompletion(false);
-                host_.Invalidate();
                 return true;
             case TextField::Edit::None:
                 break;
@@ -1985,6 +1961,10 @@ bool App::HandlePromptKey(const Chord& chord) {
 }
 
 bool App::OnChar(uint32_t cp) {
+    // 入口で 1 回。消費しなかった（false を返す）ときも頼んでよい ─ 要求は
+    // 合成されるので、無駄になるのは «何も変わらなかった 1 打鍵» のぶんだけ。
+    const Redraw redraw(host_);
+
     // 設定画面は絞り込みを持たないが、打鍵は残らず飲み込む ─ 出しっぱなしの
     // 画面の裏でプロンプトが文字を受け取っては困る。
     if (settingsEditor_.visible()) return true;
@@ -1993,14 +1973,12 @@ bool App::OnChar(uint32_t cp) {
     const auto typeIntoPicker = [&](auto& picker) {
         if (!picker.HandleChar(cp)) return false;
         SyncPickerMode();
-        host_.Invalidate();
         return true;
     };
     if (placePicker_.visible()) return typeIntoPicker(placePicker_);
     if (commandPalette_.visible()) return typeIntoPicker(commandPalette_);
     if (keyEditor_.visible()) {
         if (!keyEditor_.HandleChar(cp, strings_, keymap_)) return false;
-        host_.Invalidate();
         return true;
     }
     if (!prompt_.active()) {
@@ -2031,7 +2009,6 @@ bool App::OnChar(uint32_t cp) {
         if (Tab* t = workspace_.focusedTab()) SyncSearchQuery(*t, prompt_.text);
     }
     SyncCompletion(true);
-    host_.Invalidate();
     return true;
 }
 
@@ -2061,6 +2038,10 @@ bool App::TypeAheadChar(uint32_t cp) {
 }
 
 bool App::OnKey(const Chord& chord) {
+    // 入口で 1 回（OnChar と同じ）。この下にある Execute の 134 の case も、
+    // 入力欄も、チューザも、もう自分で頼まない。
+    const Redraw redraw(host_);
+
     // Whether a name is being typed right now has to be read before anything
     // below gets the chance to clear it.
     const bool typing = typeAhead_.active(plat::NowMs());
@@ -2071,7 +2052,6 @@ bool App::OnKey(const Chord& chord) {
         // waiting on the answer, and an arrow key that moved the cursor underneath
         // would leave the Yes applying to whichever row it landed on.
         if (prompt_.isConfirm() && HandlePromptKey(chord)) {
-            host_.Invalidate();
             return true;
         }
         // 開いたキーがそのまま閉じるキーになる。ショートカットの設定へ抜ける道も
@@ -2083,7 +2063,6 @@ bool App::OnKey(const Chord& chord) {
         }
         const bool consumed = settingsEditor_.HandleKey(chord, strings_);
         ApplyPendingSetting();
-        host_.Invalidate();
         return consumed;
     }
     if (keyEditor_.visible()) {
@@ -2100,7 +2079,6 @@ bool App::OnKey(const Chord& chord) {
         // Escape closes the screen from the inside; take the same exit as the
         // command would have, so the confirmation is not lost.
         if (!keyEditor_.visible()) CloseKeyEditor();
-        host_.Invalidate();
         return consumed;
     }
     if (placePicker_.visible()) {
@@ -2120,7 +2098,6 @@ bool App::OnKey(const Chord& chord) {
         if (PickerClipboardKey(shell_, placePicker_, chord)) {
             // A pasted ">" counts the same as a typed one.
             SyncPickerMode();
-            host_.Invalidate();
             return true;
         }
         switch (placePicker_.HandleKey(chord)) {
@@ -2131,7 +2108,6 @@ bool App::OnKey(const Chord& chord) {
         }
         // Everything reaching here was swallowed: picking a folder is not a state
         // to fire unrelated shortcuts from.
-        host_.Invalidate();
         return true;
     }
     if (commandPalette_.visible()) {
@@ -2145,7 +2121,6 @@ bool App::OnKey(const Chord& chord) {
         }
         if (PickerClipboardKey(shell_, commandPalette_, chord)) {
             SyncPickerMode();
-            host_.Invalidate();
             return true;
         }
         switch (commandPalette_.HandleKey(chord)) {
@@ -2156,7 +2131,6 @@ bool App::OnKey(const Chord& chord) {
         }
         // Swallowed like the bookmark list: a chord reaching the keymap from here
         // would run one command while another is being picked.
-        host_.Invalidate();
         return true;
     }
     if (keyHelp_) {
@@ -2164,7 +2138,6 @@ bool App::OnKey(const Chord& chord) {
         const Cmd c = keymap_.Lookup(chord);
         if (c == Cmd::ShowKeyHelp) return true;
         keyHelp_ = false;
-        host_.Invalidate();
         // The key that closed the sheet is spent on closing it: its character
         // must not fall through and move the cursor in the list behind.
         swallowChar_ = ProducesChar(chord);
@@ -2218,7 +2191,6 @@ void App::GotoTab(int index) {
     if (index >= static_cast<int>(p->tabs.size())) return;
     p->Activate(index);
     if (Tab* t = p->activeTab()) RequestLoad(*t);
-    host_.Invalidate();
 }
 
 void App::GotoSession(int index) {
@@ -2226,13 +2198,11 @@ void App::GotoSession(int index) {
     workspace_.ActivateSession(index);
     EnsureVisibleTabsLoaded();
     dirty_ = true;
-    host_.Invalidate();
 }
 
 bool App::MoveSession(int from, int to) {
     if (!workspace_.ReorderSession(from, to)) return false;
     dirty_ = true;
-    host_.Invalidate();
     return true;
 }
 
@@ -2376,7 +2346,6 @@ void App::SyncPickerMode() {
         OpenCommandPalette();
         commandPalette_.filterField() = carried;
         commandPalette_.FilterEdited();
-        host_.Invalidate();
         return;
     }
 
@@ -2387,12 +2356,10 @@ void App::SyncPickerMode() {
     // Nowhere to go: the places list says so and stays shut rather than coming up
     // empty. Closed is the honest answer, and the status line carries the reason.
     if (!OpenPlacePicker()) {
-        host_.Invalidate();
         return;
     }
     placePicker_.filterField() = carried;
     placePicker_.FilterEdited();
-    host_.Invalidate();
 }
 
 void App::ChoosePlace(bool newTab) {
@@ -2407,7 +2374,6 @@ void App::ChoosePlace(bool newTab) {
     // has already finished asking.
     placePicker_.Close();
     if (!hasRow) {
-        host_.Invalidate();
         return;
     }
 
@@ -2421,12 +2387,10 @@ void App::ChoosePlace(bool newTab) {
             pane->Activate(row.tab);
             FocusPane(pane);
         }
-        host_.Invalidate();
         return;
     }
 
     if (!row.path.empty()) OpenPath(row.path, newTab);
-    host_.Invalidate();
 }
 
 void App::RunPaletteCommand() {
@@ -2437,7 +2401,6 @@ void App::RunPaletteCommand() {
     // command is not in the list, so this cannot loop back in here.
     commandPalette_.Close();
     if (cmd != Cmd::None) Execute(cmd);
-    host_.Invalidate();
 }
 
 void App::DoDelete(bool permanent) {
@@ -2713,7 +2676,6 @@ void App::DoUndo() {
     } else {
         ReportFailure("ui.undo_failed", err);
     }
-    host_.Invalidate();
 }
 
 // ---------------------------------------------------------------------------
@@ -2735,7 +2697,6 @@ void App::QueueFileOp(fs::FileOpRequest request, PendingFileOp plan) {
     if (!fileOps_) return;
     plan.token = fileOps_->Request(std::move(request));
     pendingOps_.push_back(std::move(plan));
-    host_.Invalidate();
 }
 
 void App::PumpFileOps() {
@@ -2802,7 +2763,6 @@ void App::FinishFileOp(const fs::FileOpDone& done, const PendingFileOp& plan) {
     // 一覧を取り直したのだから、オーバーレイにも訊き直す（RefreshFocused と同じ
     // 理由 ─ たった今変えたものの状態を映しているのはそちら）。
     if (icons_ && shellIcons_) icons_->Invalidate();
-    host_.Invalidate();
 }
 
 std::string App::fileOpStatus() const {
