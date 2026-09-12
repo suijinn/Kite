@@ -406,11 +406,17 @@ void D2DRenderer::DrawText(std::string_view utf8, const RectF& r, const Color& c
 float D2DRenderer::MeasureText(std::string_view utf8, ui::FontRole role) {
     if (utf8.empty()) return 0.0f;
     const size_t index = FormatIndex(role);
-    std::unordered_map<std::string, float>& cache = measureCache_[index];
+    MeasureCache& cache = measureCache_[index];
 
     const std::string key(utf8);
-    auto it = cache.find(key);
-    if (it != cache.end()) return it->second;
+    if (auto it = cache.fresh.find(key); it != cache.fresh.end()) return it->second;
+    // Found in the older half: it is in use again, so it moves back across.
+    if (auto it = cache.stale.find(key); it != cache.stale.end()) {
+        const float width = it->second;
+        cache.stale.erase(it);
+        cache.fresh.emplace(key, width);
+        return width;
+    }
 
     float width = 0.0f;
     if (IDWriteTextFormat* format = FormatFor(role)) {
@@ -428,8 +434,13 @@ float D2DRenderer::MeasureText(std::string_view utf8, ui::FontRole role) {
     }
 
     // Bounded so a folder full of pathological names cannot grow this forever.
-    if (cache.size() > 4096) cache.clear();
-    cache.emplace(key, width);
+    // The full half is retired rather than thrown away, so nothing on screen is
+    // ever measured twice in a row just because the cache happened to fill.
+    if (cache.fresh.size() > 4096) {
+        cache.stale = std::move(cache.fresh);
+        cache.fresh.clear();
+    }
+    cache.fresh.emplace(key, width);
     return width;
 }
 

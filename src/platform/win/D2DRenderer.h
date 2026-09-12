@@ -165,7 +165,23 @@ private:
     bool drawing_ = false;
     bool iconsLost_ = false;
 
-    std::unordered_map<std::string, float> measureCache_[4];
+    /// 測った幅の写し。書式（FontRole）ごとに 2 世代持つ。
+    ///
+    /// 上限で丸ごと捨てていたころは、10 万件のフォルダをスクロールし続けると
+    /// 4,096 行ごとに «画面に出ている行を全部測り直す» 1 フレームが挟まった ─
+    /// そこだけ IDWriteTextLayout の生成が数十回走る。古い側へ退かせておけば、
+    /// いつでも直近の 4,096〜8,192 件が残る。
+    struct MeasureCache {
+        std::unordered_map<std::string, float> fresh;
+        std::unordered_map<std::string, float> stale;
+
+        void clear() {
+            fresh.clear();
+            stale.clear();
+        }
+    };
+
+    MeasureCache measureCache_[4];
     std::unordered_map<uint32_t, ID2D1Bitmap1*> icons_;
 };
 
