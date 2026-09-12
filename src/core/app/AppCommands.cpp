@@ -431,10 +431,10 @@ void App::Execute(Cmd cmd) {
         }
         case Cmd::SyncOtherPane: {
             if (!session || !pane || !tab) break;
-            for (Pane* p : session->Panes()) {
-                if (p == pane) continue;
-                if (Tab* ot = p->activeTab()) RetargetTab(*ot, tab->path);
-            }
+            session->ForEachPane([&](Pane& p) {
+                if (&p == pane) return;
+                if (Tab* ot = p.activeTab()) RetargetTab(*ot, tab->path);
+            });
             host_.Invalidate();
             break;
         }
@@ -451,9 +451,9 @@ void App::Execute(Cmd cmd) {
             const std::string name = strings_.Format(
                 "ui.new_session", { std::to_string(workspace_.sessions.size() + 1) });
             Session* s = workspace_.AddSession(name, tab ? tab->path : fs_.HomeDir());
-            for (Pane* p : s->Panes()) {
-                for (std::unique_ptr<Tab>& t : p->tabs) t->view = defaultView_;
-            }
+            s->ForEachPane([&](Pane& p) {
+                for (std::unique_ptr<Tab>& t : p.tabs) t->view = defaultView_;
+            });
             EnsureVisibleTabsLoaded();
             dirty_ = true;
             host_.Invalidate();

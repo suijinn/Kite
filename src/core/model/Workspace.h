@@ -348,7 +348,18 @@ public:
 
     /// @brief すべてのペインを表示順に返す。
     /// @return ペインへのポインタ列。所有権は移らない
+    /// @note 並びそのものが要る場所（添字で指す、隣を探す）のためにある。
+    ///       ただ舐めるだけなら ForEachPane() ─ そちらは vector を作らない
     std::vector<Pane*> Panes() const;
+
+    /// @brief すべてのペインを表示順にたどる。
+    /// @param[in] f ペインごとに呼ぶもの。`void(Pane&)`
+    /// @note Panes() と違って中間の vector を作らない。1 フレームに何度も通る
+    ///       経路（列挙の回収、監視の張り直し）はこちらを使う
+    template <class F>
+    void ForEachPane(F&& f) const {
+        WalkPanes(root.get(), f);
+    }
 
     /// @brief ペインを保持している葉ノードを探す。
     /// @param[in] p 探すペイン
@@ -388,6 +399,20 @@ public:
     /// @param[in] text Serialize() が出力した文字列
     /// @return 復元したセッション。書式が壊れている場合は nullptr
     static std::unique_ptr<Session> Deserialize(const std::string& name, const std::string& text);
+
+private:
+    // The depth-first walk Panes() is built on, written once so the order the
+    // two of them report cannot drift apart.
+    template <class F>
+    static void WalkPanes(SplitNode* node, F& f) {
+        if (!node) return;
+        if (node->leaf()) {
+            if (node->pane) f(*node->pane);
+            return;
+        }
+        WalkPanes(node->a.get(), f);
+        WalkPanes(node->b.get(), f);
+    }
 };
 
 /// @brief 登録されたブックマーク 1 件。
@@ -435,6 +460,36 @@ public:
     /// @param[in] index アクティブにするセッションの添字。範囲外はクランプする
     /// @note 切り替え時、離れるセッションの非アクティブタブは一覧を解放する
     void ActivateSession(int index);
+
+    /// @brief すべてのセッションのすべてのペインをたどる。
+    /// @param[in] f ペインごとに呼ぶもの。`void(Pane&)`
+    template <class F>
+    void ForEachPane(F&& f) const {
+        for (const std::unique_ptr<Session>& s : sessions) s->ForEachPane(f);
+    }
+
+    /// @brief すべてのセッションのすべてのタブをたどる。
+    /// @param[in] f タブごとに呼ぶもの。`void(Tab&)`
+    /// @note 背面のセッションのタブも含む ─ 一覧を手放していても、トークンも
+    ///       表示設定もそこに在る
+    template <class F>
+    void ForEachTab(F&& f) const {
+        ForEachPane([&f](Pane& pane) {
+            for (const std::unique_ptr<Tab>& t : pane.tabs) f(*t);
+        });
+    }
+
+    /// @brief 実行中の列挙リクエストのトークンでタブを探す。
+    /// @param[in] token 探すトークン。0 は誰とも一致しない
+    /// @return 対応するタブ。見つからなければ nullptr
+    /// @note 届いた一覧の行き先を決めるのはこれ 1 つ。トークンの持ち主が
+    ///       居なければ、その答えは黙って捨ててよい
+    Tab* FindTabByLoadToken(uint64_t token) const;
+
+    /// @brief 画面に出ているタブを返す。
+    /// @return アクティブなセッションの各ペインのアクティブタブ。表示順
+    /// @note 背面のセッションのペインは画面に出ていないので入らない
+    std::vector<Tab*> VisibleTabs() const;
 
     /// @brief セッションの並び順を変える。
     /// @param[in] fromIndex 動かすセッションの添字

@@ -734,11 +734,7 @@ void App::LoadWorkspace(const std::vector<std::string>& startPaths) {
                                    static_cast<int>(workspace_.sessions.size()) - 1);
 
     // Seed every tab's view state from the saved defaults.
-    for (const std::unique_ptr<Session>& s : workspace_.sessions) {
-        for (Pane* p : s->Panes()) {
-            for (std::unique_ptr<Tab>& t : p->tabs) t->view = defaultView_;
-        }
-    }
+    workspace_.ForEachTab([&](Tab& t) { t.view = defaultView_; });
 
     // Command-line paths open as extra tabs in the focused pane.
     if (firstExtra < startPaths.size()) {

@@ -484,16 +484,6 @@ void Pane::AttachTab(std::unique_ptr<Tab> tab, int at) {
 
 namespace {
 
-void CollectPanes(SplitNode* node, std::vector<Pane*>& out) {
-    if (!node) return;
-    if (node->leaf()) {
-        if (node->pane) out.push_back(node->pane.get());
-        return;
-    }
-    CollectPanes(node->a.get(), out);
-    CollectPanes(node->b.get(), out);
-}
-
 SplitNode* FindLeafFor(SplitNode* node, const Pane* p) {
     if (!node) return nullptr;
     if (node->leaf()) return node->pane.get() == p ? node : nullptr;
@@ -521,7 +511,26 @@ std::unique_ptr<Session> Session::Create(const std::string& name, const std::str
 
 std::vector<Pane*> Session::Panes() const {
     std::vector<Pane*> out;
-    CollectPanes(root.get(), out);
+    ForEachPane([&out](Pane& pane) { out.push_back(&pane); });
+    return out;
+}
+
+Tab* Workspace::FindTabByLoadToken(uint64_t token) const {
+    if (token == 0) return nullptr;
+    Tab* found = nullptr;
+    ForEachTab([&](Tab& t) {
+        if (t.loadToken == token) found = &t;
+    });
+    return found;
+}
+
+std::vector<Tab*> Workspace::VisibleTabs() const {
+    std::vector<Tab*> out;
+    const Session* s = activeSession();
+    if (!s) return out;
+    s->ForEachPane([&out](Pane& pane) {
+        if (Tab* t = pane.activeTab()) out.push_back(t);
+    });
     return out;
 }
 
@@ -777,11 +786,11 @@ void Workspace::ActivateSession(int index) {
     // Release listings held by the session we are leaving; they are cheap to
     // rebuild and this keeps resident memory proportional to what is on screen.
     if (Session* prev = activeSession()) {
-        for (Pane* p : prev->Panes()) {
-            for (std::unique_ptr<Tab>& t : p->tabs) {
-                if (t.get() != p->activeTab()) t->DropListing();
+        prev->ForEachPane([](Pane& pane) {
+            for (std::unique_ptr<Tab>& t : pane.tabs) {
+                if (t.get() != pane.activeTab()) t->DropListing();
             }
-        }
+        });
     }
     active = next;
 }

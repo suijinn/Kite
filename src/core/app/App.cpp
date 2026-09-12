@@ -375,14 +375,10 @@ void App::PumpFolderSizes() {
     // 写すのは確定が届いたときだけ。途中経過ごとに全項目を引き当て直すと、
     // 10 万件のフォルダで毎回その代金を払うことになる。
     if (settledAny) {
-        for (const std::unique_ptr<Session>& s : workspace_.sessions) {
-            for (Pane* pane : s->Panes()) {
-                for (std::unique_ptr<Tab>& t : pane->tabs) {
-                    if (!ApplyFolderSizes(*t)) continue;
-                    if (t->view.sort == SortKey::Size) resortSizes_ = true;
-                }
-            }
-        }
+        workspace_.ForEachTab([&](Tab& t) {
+            if (!ApplyFolderSizes(t)) return;
+            if (t.view.sort == SortKey::Size) resortSizes_ = true;
+        });
     }
 
     // **並べ直すのは、数えるものが無くなってから 1 回だけ。** 1 件確定するたびに
@@ -390,13 +386,9 @@ void App::PumpFolderSizes() {
     // «表示» のもので、並べ替えは «確定した値» のもの。
     if (resortSizes_ && !sizeJob_->busy()) {
         resortSizes_ = false;
-        for (const std::unique_ptr<Session>& s : workspace_.sessions) {
-            for (Pane* pane : s->Panes()) {
-                for (std::unique_ptr<Tab>& t : pane->tabs) {
-                    if (t->view.sort == SortKey::Size) t->Rebuild();
-                }
-            }
-        }
+        workspace_.ForEachTab([](Tab& t) {
+            if (t.view.sort == SortKey::Size) t.Rebuild();
+        });
         EnsureCursorVisible();
         touched = true;
     }
@@ -552,11 +544,7 @@ void App::RequestLoad(Tab& tab, bool force) {
 }
 
 void App::EnsureVisibleTabsLoaded() {
-    Session* s = workspace_.activeSession();
-    if (!s) return;
-    for (Pane* p : s->Panes()) {
-        if (Tab* t = p->activeTab()) RequestLoad(*t);
-    }
+    for (Tab* t : workspace_.VisibleTabs()) RequestLoad(*t);
     SyncWatches();
 }
 
@@ -568,20 +556,16 @@ void App::SyncWatches() {
     std::unordered_map<uint64_t, std::string> desired;
     std::vector<Tab*> newlyWatched;
 
-    if (Session* s = workspace_.activeSession()) {
-        for (Pane* p : s->Panes()) {
-            Tab* t = p->activeTab();
-            if (!t) continue;
-            // Nothing to hang a notification on: the shell namespace has no
-            // directory handle. F5 is how these are refreshed.
-            if (vfs::IsVirtual(t->path)) continue;
-            if (t->watchId == 0) t->watchId = NextWatchId();
-            desired[t->watchId] = t->path;
+    for (Tab* t : workspace_.VisibleTabs()) {
+        // Nothing to hang a notification on: the shell namespace has no
+        // directory handle. F5 is how these are refreshed.
+        if (vfs::IsVirtual(t->path)) continue;
+        if (t->watchId == 0) t->watchId = NextWatchId();
+        desired[t->watchId] = t->path;
 
-            auto previous = watched_.find(t->watchId);
-            if (previous == watched_.end() || previous->second != t->path) {
-                newlyWatched.push_back(t);
-            }
+        auto previous = watched_.find(t->watchId);
+        if (previous == watched_.end() || previous->second != t->path) {
+            newlyWatched.push_back(t);
         }
     }
 
@@ -612,20 +596,18 @@ void App::PumpLoader() {
             // **数えたばかりの値は残す** ─ 通知は書き込みのたびに届くので、
             // 1 つごとに歩き直すと、見ているだけでディスクを舐め続ける。
             sizes_.ForgetChanged(change.path, plat::NowMs(), fs::kFolderSizeRecountMs);
-            for (const std::unique_ptr<Session>& s : workspace_.sessions) {
-                for (Pane* p : s->Panes()) {
-                    Tab* t = p->activeTab();
-                    // Re-list only if the tab is still showing the folder that
-                    // changed; it may have navigated away in the meantime.
-                    // 検索結果を出している間は取り直さない。届くのはフォルダの
-                    // 中身で、画面に出ているのはその下から集めたもの ─ 通すと、
-                    // 通知 1 つで検索結果が消える。
-                    if (t && !t->search.active && t->watchId == change.watchId &&
-                        t->path == change.path) {
-                        RequestLoad(*t, true);
-                    }
+            workspace_.ForEachPane([&](Pane& pane) {
+                Tab* t = pane.activeTab();
+                // Re-list only if the tab is still showing the folder that
+                // changed; it may have navigated away in the meantime.
+                // 検索結果を出している間は取り直さない。届くのはフォルダの
+                // 中身で、画面に出ているのはその下から集めたもの ─ 通すと、
+                // 通知 1 つで検索結果が消える。
+                if (t && !t->search.active && t->watchId == change.watchId &&
+                    t->path == change.path) {
+                    RequestLoad(*t, true);
                 }
-            }
+            });
         }
     }
 
@@ -651,34 +633,30 @@ void App::PumpLoader() {
             complete_.SetListing(l.path, l.result.entries);
             continue;
         }
-        for (const std::unique_ptr<Session>& s : workspace_.sessions) {
-            for (Pane* p : s->Panes()) {
-                for (std::unique_ptr<Tab>& t : p->tabs) {
-                    if (t->loadToken != l.token) continue;
-                    t->listing = std::move(l.result);
-                    t->loadToken = 0;
-                    t->loaded = true;
-                    t->marked.assign(t->listing.entries.size(), 0);
-                    // 数え終わっている値があれば、並べ替えの前に写す ─ 一覧は
-                    // 作り直されるが、数えた値の寿命はそれより長い。
-                    ApplyFolderSizes(*t);
-                    t->Rebuild();
-                    // サイズで並べているタブは、画面に出ている行だけでは順序が
-                    // 整わない（数えていないフォルダは 0 として並ぶ）。
-                    SyncFolderSizesForSort(*t);
-                    // "Access denied" on a share is usually not a verdict but a
-                    // question that has not been asked yet. The listing itself
-                    // cannot ask it - a credential dialog raised from a worker
-                    // thread would also fire while the address bar is being
-                    // typed into - so name the key that does.
-                    if (t.get() == workspace_.focusedTab() &&
-                        t->listing.status == fs::Status::AccessDenied &&
-                        !path::UncRoot(t->path).empty()) {
-                        SetStatus(strings_.Format("ui.network_auth_hint",
-                                                  { keymap_.ChordText(Cmd::ConnectNetwork) }));
-                    }
-                }
-            }
+        // 行き先が無ければ黙って捨てる ─ トークンの持ち主が閉じた、あるいは
+        // 別のフォルダへ移って新しいトークンを持っている。
+        Tab* t = workspace_.FindTabByLoadToken(l.token);
+        if (!t) continue;
+
+        t->listing = std::move(l.result);
+        t->loadToken = 0;
+        t->loaded = true;
+        t->marked.assign(t->listing.entries.size(), 0);
+        // 数え終わっている値があれば、並べ替えの前に写す ─ 一覧は作り直されるが、
+        // 数えた値の寿命はそれより長い。
+        ApplyFolderSizes(*t);
+        t->Rebuild();
+        // サイズで並べているタブは、画面に出ている行だけでは順序が整わない
+        // （数えていないフォルダは 0 として並ぶ）。
+        SyncFolderSizesForSort(*t);
+        // "Access denied" on a share is usually not a verdict but a question
+        // that has not been asked yet. The listing itself cannot ask it - a
+        // credential dialog raised from a worker thread would also fire while
+        // the address bar is being typed into - so name the key that does.
+        if (t == workspace_.focusedTab() && t->listing.status == fs::Status::AccessDenied &&
+            !path::UncRoot(t->path).empty()) {
+            SetStatus(
+                strings_.Format("ui.network_auth_hint", { keymap_.ChordText(Cmd::ConnectNetwork) }));
         }
     }
     // The answer that just arrived may already be for the wrong folder - the
@@ -776,13 +754,9 @@ void App::PumpSearch() {
     bool touched = false;
     for (fs::SearchBatch& batch : batches) {
         Tab* target = nullptr;
-        for (const std::unique_ptr<Session>& s : workspace_.sessions) {
-            for (Pane* p : s->Panes()) {
-                for (std::unique_ptr<Tab>& t : p->tabs) {
-                    if (t->search.token != 0 && t->search.token == batch.token) target = t.get();
-                }
-            }
-        }
+        workspace_.ForEachTab([&](Tab& t) {
+            if (t.search.token != 0 && t.search.token == batch.token) target = &t;
+        });
         if (!target) {
             // 行き先が無い ─ タブが閉じた、または背面に回って一覧を手放した
             // （`Tab::DropListing`）。歩き続ける理由がもう無いので、ここで畳む。
@@ -1220,15 +1194,11 @@ bool App::PerformDrop(const std::vector<std::string>& paths, const std::string& 
 
 void App::RefreshTabsShowing(const std::string& dir) {
     if (dir.empty()) return;
-    Session* s = workspace_.activeSession();
-    if (!s) return;
-    for (Pane* p : s->Panes()) {
-        if (Tab* t = p->activeTab()) {
-            // 検索結果を出しているタブは取り直さない ─ 届くのはフォルダの
-            // 中身で、画面に出ているのはその下から集めたもの（監視の通知と同じ話）。
-            if (t->search.active) continue;
-            if (utf8::EqualsIgnoreCaseAscii(t->path, dir)) RequestLoad(*t, true);
-        }
+    for (Tab* t : workspace_.VisibleTabs()) {
+        // 検索結果を出しているタブは取り直さない ─ 届くのはフォルダの
+        // 中身で、画面に出ているのはその下から集めたもの（監視の通知と同じ話）。
+        if (t->search.active) continue;
+        if (utf8::EqualsIgnoreCaseAscii(t->path, dir)) RequestLoad(*t, true);
     }
 }
 
