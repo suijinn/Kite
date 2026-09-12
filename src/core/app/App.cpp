@@ -219,7 +219,7 @@ void ApplySavedOrder(std::vector<fs::Root>& roots, const std::vector<std::string
 App::App(fs::IFileSystem& filesystem, IShellIntegration& shell, IHost& host,
          fs::IDirectoryWatcher* watcher)
     : fs_(filesystem), shell_(shell), host_(host), watcher_(watcher),
-      folderSizes_(filesystem, strings_, roots_) {
+      folderSizes_(filesystem, strings_, roots_), searching_(filesystem, strings_) {
     theme_ = Theme::Dark();
 }
 
@@ -233,7 +233,7 @@ bool App::Init(const std::vector<std::string>& startPaths) {
     LoadConfig();
     loader_ = std::make_unique<fs::DirectoryLoader>(fs_, host_, 2);
     fileOps_ = std::make_unique<fs::FileOpQueue>(fs_, host_);
-    search_ = std::make_unique<fs::SearchJob>(fs_, host_);
+    searching_.Start(host_);
     folderSizes_.Start(host_);
     RefreshRoots();
     LoadWorkspace(startPaths);
@@ -262,7 +262,7 @@ void App::Shutdown() {
     fileOps_.reset();
     // 検索は途中で捨ててよい ─ 歩くだけで何も書き換えないので、待つ理由が無い。
     // デストラクタが «次のフォルダの切れ目で抜けろ» と言ってから join する。
-    search_.reset();
+    searching_.Shutdown();
     // フォルダのサイズも同じ ─ 数えているだけなので、途中で畳んで構わない。
     folderSizes_.Shutdown();
 }
@@ -535,134 +535,30 @@ void App::PumpLoader() {
 // ---------------------------------------------------------------------------
 // Search
 //
-// 絞り込み（Ctrl+F）とは別の機能。あちらは今の一覧から行を減らすだけで、こちらは
-// このフォルダの下を歩いて **別の一覧を作る** ─ 並ぶ項目はどのサブフォルダのもの
-// でもよく、`fs::Entry::address` が自分自身のパスを持つ（仮想フォルダと同じ手）。
-//
-// 打ち込まれた問いは `Tab::filter` が持ち、`Tab::Rebuild()` がそのまま絞り込みに
-// 使う ─ 検索のためだけの絞り込みをもう 1 つ書かない。ワーカーに渡した «ふるい»
-// （`Tab::search.sieve`）とは普通ずれていて、そのずれこそが「前へ打ち足している
-// 間は歩き直さない」という約束の中身になる（`fs::SearchJob` の冒頭）。
+// 判断はすべて `Searching`（`core/app/Searching.h`）が持つ。ここに残るのは、
+// あちらが持っていない «今フォーカスされているのはどのタブか» と、カーソルを
+// 画面内へ引き戻す後始末だけ。
 // ---------------------------------------------------------------------------
 
-void App::StartSearch(Tab& tab, const std::string& query) {
-    if (!search_) return;
-    if (tab.search.token) search_->Cancel(tab.search.token);
+void App::StartSearch(Tab& tab, const std::string& query) { searching_.Begin(tab, query); }
 
-    tab.search.active = true;
-    tab.search.truncated = false;
-    tab.search.sieve = query;
-    tab.filter = query;
-
-    // 0 件から始める。フォルダの中身を残したまま検索欄を出すと、最初の 1 打鍵が
-    // それを消したように見える ─ 検索欄の下に並ぶ行は検索結果でなければならない。
-    // 場所そのものについての値（表示名・容量）は残す。タブはまだそこに立っている。
-    tab.listing.entries.clear();
-    tab.listing.status = fs::Status::Ok;
-    tab.listing.message.clear();
-    tab.marked.clear();
-    tab.groups.clear();
-    tab.cursor = 0;
-    tab.anchor = 0;
-    tab.scroll = 0.0f;
-    tab.loaded = true;
-    // 走っている列挙のトークンを落とす。残したままだと、後から届いたフォルダの
-    // 一覧が、集めたばかりの検索結果を黙って上書きする（PumpLoader はトークンで
-    // 突き合わせるので、0 にしておけばその答えはどのタブのものでもなくなる）。
-    tab.loadToken = 0;
-    tab.search.token = search_->Start(tab.path, query);
-    tab.Rebuild();
-}
-
-void App::CancelSearch(Tab& tab) {
-    if (!tab.search.active) return;
-    if (search_ && tab.search.token) search_->Cancel(tab.search.token);
-    tab.search = SearchState{};
-    // 問いも一緒に捨てる。検索を抜けた先の一覧はこのフォルダの中身で、そこに
-    // 検索語が絞り込みとして残っていると、フォルダが空に見える。
-    tab.filter.clear();
-}
+void App::CancelSearch(Tab& tab) { searching_.Cancel(tab); }
 
 void App::SyncSearchQuery(Tab& tab, const std::string& query) {
-    tab.filter = query;
-    const std::string sieve = utf8::ToLowerAscii(tab.search.sieve);
-    const std::string asked = utf8::ToLowerAscii(query);
-    // ふるいが今の問いの部分文字列である限り、«今の問いに当たるもの» はすべて
-    // «ふるいに当たるもの» でもある ─ つまり、もう手元にある。前へ打ち足している
-    // 限り歩き直しが起きないのはこれが理由で、縮めたときだけディスクを歩き直す。
-    //
-    // **ただし «全部» を持ち帰った歩きに限る。** 条件は 2 つ:
-    //
-    // - **まだ歩いている最中なら歩き直す。** そうしないと、ふるいは «最初の 1 文字»
-    //   のまま固まる ─ 打ち始めた瞬間に走り出した歩きが、以後どれだけ打ち足しても
-    //   «全部持っている» と主張し続けるので、`C:\` から `report` を探すつもりが
-    //   «r を含むもの» を集める歩きになる。捨てるのは途中まで集めたものだけで、
-    //   同じものは狭い問いで拾い直せる。
-    // - **上限で打ち切られた歩きも歩き直す。** あれは «当たりの一部» なので、
-    //   絞り込んだ答えが完全である保証がない。広すぎる問いはたいてい歩き始めて
-    //   すぐ上限に届くので、歩き直す代金もそこで頭打ちになる。
-    const bool complete = !tab.search.running() && !tab.search.truncated;
-    if (complete && !sieve.empty() && asked.find(sieve) != std::string::npos) {
-        tab.Rebuild();
-        EnsureCursorVisible();
-        return;
-    }
-    StartSearch(tab, query);
+    // 歩き直さずに済んだときだけカーソルを引き戻す ─ 歩き直したほうは一覧が
+    // 空から始まるので、引き戻す先がまだ無い。
+    if (searching_.SyncQuery(tab, query)) EnsureCursorVisible();
 }
 
 void App::PumpSearch() {
-    if (!search_) return;
-    std::vector<fs::SearchBatch> batches;
-    search_->Drain(batches);
-    if (batches.empty()) return;
-
-    bool touched = false;
-    for (fs::SearchBatch& batch : batches) {
-        Tab* target = nullptr;
-        workspace_.ForEachTab([&](Tab& t) {
-            if (t.search.token != 0 && t.search.token == batch.token) target = &t;
-        });
-        if (!target) {
-            // 行き先が無い ─ タブが閉じた、または背面に回って一覧を手放した
-            // （`Tab::DropListing`）。歩き続ける理由がもう無いので、ここで畳む。
-            search_->Cancel(batch.token);
-            continue;
-        }
-
-        // まだ動かしていないカーソルは先頭に留める。Rebuild() は «同じ項目の上に
-        // 留まる» を約束するので、放っておくと最初に見つかった 1 件を追いかけて
-        // 一覧の中を下がっていく ─ 誰も指していないものを指し続けることになる。
-        const bool atTop = target->cursor == 0;
-
-        for (fs::Entry& e : batch.entries) target->listing.entries.push_back(std::move(e));
-        target->marked.resize(target->listing.entries.size(), 0);
-        if (batch.truncated) target->search.truncated = true;
-        if (batch.done) target->search.token = 0;
-        target->Rebuild();
-        if (atTop) target->cursor = target->SkipGroupRows(0, 1);
-        touched = true;
-    }
-
-    if (!touched) return;
-    EnsureCursorVisible();
+    if (searching_.Pump(workspace_)) EnsureCursorVisible();
 }
 
 std::string App::searchStatus() const {
     const Session* s = workspace_.activeSession();
     if (!s || !s->focus) return {};
     const Tab* t = s->focus->activeTab();
-    if (!t || !t->search.active) return {};
-    // まだ何も訊かれていない。案内はここではなく一覧の側が出す ─ 帯の右は
-    // «今何が起きたか» で、まだ何も起きていない。
-    if (t->search.sieve.empty()) return {};
-
-    const std::string count = strings_.Format("ui.status_items", { std::to_string(t->ItemCount()) });
-    if (t->search.running()) return strings_.Format("ui.search_running", { count });
-    if (t->search.truncated) {
-        return strings_.Format("ui.search_truncated",
-                               { count, std::to_string(fs::kSearchMaxResults) });
-    }
-    return strings_.Format("ui.search_done", { count });
+    return t ? searching_.status(*t) : std::string();
 }
 
 void App::UpdateTitle() {

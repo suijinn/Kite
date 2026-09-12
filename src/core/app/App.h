@@ -16,6 +16,7 @@
 #include "core/app/CommandPalette.h"
 #include "core/app/FolderSizes.h"
 #include "core/app/Host.h"
+#include "core/app/Searching.h"
 #include "core/app/IconProvider.h"
 #include "core/app/SettingsEditor.h"
 #include "core/app/UndoStack.h"
@@ -1131,9 +1132,6 @@ private:
     // 終わるまでウィンドウがメッセージを 1 つも処理できない ─ 大きなコピーの間
     // 「使えなくなる」と報告された形がこれ。
     std::unique_ptr<fs::FileOpQueue> fileOps_;
-    // 再帰検索。**一度に 1 本しか歩かない** ─ 2 本走らせても同じディスクを取り合う
-    // だけで、2 本目の結果は誰も見ていない一覧へ届く（`fs::SearchJob` の冒頭）。
-    std::unique_ptr<fs::SearchJob> search_;
     std::vector<PendingFileOp> pendingOps_;
 
     std::vector<fs::Root> roots_;
@@ -1147,6 +1145,10 @@ private:
     // 持つと、同じフォルダを 2 枚のペインで見ているだけで 2 回歩くことになる。
     // **roots_ の後に置くこと** ─ «自動で歩いてよい場所か» をそこへの参照で見る。
     FolderSizes folderSizes_;
+
+    // 再帰検索。**一度に 1 本しか歩かない** ─ 2 本走らせても同じディスクを取り合う
+    // だけで、2 本目の結果は誰も見ていない一覧へ届く（`fs::SearchJob` の冒頭）。
+    Searching searching_;
 
     UndoStack undo_;
 
