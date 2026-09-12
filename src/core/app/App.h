@@ -342,6 +342,21 @@ public:
     /// @return 表示中なら true
     bool keyHelpVisible() const { return keyHelp_; }
 
+    /// @brief ショートカット一覧（F1）の 1 行。
+    struct KeyHelpLine {
+        bool header = false;     ///< 分類の見出しか
+        bool spacer = false;     ///< 分類の間の空行か
+        std::string label;       ///< 見出しまたはコマンドのラベル
+        std::string chord;       ///< 割り当てられた和音すべて。無ければ空
+    };
+
+    /// @brief ショートカット一覧に並べる行を返す。
+    /// @return コマンド表の定義順に並んだ行。分類ごとに見出しと空行が挟まる
+    /// @note 割り当てと言語が変わるまで同じ列を返す ─ 134 行ぶんのラベルと和音を
+    ///       毎フレーム組み直すと、表示中ずっと 1 フレームに数百回の割り当てが乗る。
+    ///       折り返しと空行の取捨は窓の大きさで決まるので、そちらは描く側の仕事
+    const std::vector<KeyHelpLine>& keyHelpLines() const;
+
     /// @brief ショートカットキー設定画面の状態を返す。
     /// @return 設定画面への参照
     const KeyEditor& keyEditor() const { return keyEditor_; }
@@ -1183,6 +1198,12 @@ private:
     std::string completeRequested_;
     bool keyHelp_ = false;
     bool keysChanged_ = false;
+    // The F1 sheet, built from the command table. Rebuilt when the bindings move
+    // (the key map counts its own changes) or the language is reloaded, which is
+    // the one funnel every string change goes through.
+    mutable std::vector<KeyHelpLine> keyHelpLines_;
+    mutable uint64_t keyHelpKeysRevision_ = 0;
+    mutable bool keyHelpStale_ = true;
     bool sidebarVisible_ = true;
     std::vector<SidebarSection> sidebarSections_ = { SidebarSection::QuickAccess,
                                                      SidebarSection::Bookmarks,

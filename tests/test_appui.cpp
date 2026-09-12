@@ -1872,6 +1872,53 @@ KITE_TEST(appui, nothing_on_the_shortcut_sheet_is_drawn_on_top_of_anything_else)
     }
 }
 
+// The sheet keeps its text between frames rather than rebuilding 134 rows every
+// one of them, so what it shows has to follow the bindings and the language. A
+// sheet still naming a chord nobody has any more is the same failure the "every
+// chord, not the first one" rule was written against, one cache further along.
+KITE_TEST(appui, the_shortcut_sheet_follows_a_rebinding_and_the_language) {
+    Fixture f;
+    // Room for the whole sheet, so what is missing is missing for a reason
+    // rather than because it is below the fold.
+    f.renderer.size = { 1600.0f, 1000.0f };
+
+    const auto sheetShows = [&](const std::string& text) {
+        for (const test::FakeRenderer::Text& t :
+             f.renderer.TextsAfterFill(f.app.theme().overlayScrim)) {
+            if (t.text.find(text) != std::string::npos) return true;
+        }
+        return false;
+    };
+
+    f.app.Execute(Cmd::ShowKeyHelp);
+    f.Paint();
+    KITE_EXPECT(sheetShows("Ctrl+Shift+N"));
+    KITE_EXPECT_FALSE(sheetShows("Ctrl+Alt+Shift+F9"));
+
+    // Add a chord through the editor, which is the only way a user can.
+    f.app.Execute(Cmd::ShowKeySettings);
+    const int index = f.KeyRowOf(Cmd::NewFolder);
+    KITE_EXPECT(index >= 0);
+    f.app.keyEditor().SelectRow(index);
+    f.Paint();
+    const PointF plus = f.KeyAddPoint(index);
+    f.Press(plus.x, plus.y);
+    f.app.OnKey(ParseChord("Ctrl+Alt+Shift+F9"));
+
+    f.app.Execute(Cmd::ShowKeyHelp);
+    f.Paint();
+    KITE_EXPECT(sheetShows("Ctrl+Alt+Shift+F9"));
+
+    // The labels come from the other side of the same cache.
+    const std::string before = f.app.strings().Label("cmd.new_folder");
+    f.app.Execute(Cmd::ToggleLanguage);
+    const std::string after = f.app.strings().Label("cmd.new_folder");
+    KITE_EXPECT_NE(before, after);
+    // The sheet is still open: ShowKeyHelp again would close it.
+    f.Paint();
+    KITE_EXPECT(sheetShows(after));
+}
+
 // Squeezing the leading is how the sheet fits; squeezing it past the height of
 // the letters is how it stopped being readable at all.
 KITE_TEST(appui, the_shortcut_sheet_keeps_its_rows_a_line_apart) {

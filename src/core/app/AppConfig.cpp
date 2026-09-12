@@ -305,6 +305,9 @@ void App::LoadConfig() {
 // second step - the language toggle used to - silently drops every line the user
 // translated themselves.
 void App::LoadLanguage() {
+    // Every label on the F1 sheet comes out of the table this is about to
+    // replace, so the sheet's copy is stale from here on.
+    keyHelpStale_ = true;
     std::string code = language_;
     if (code == "auto" || code.empty()) code = plat::PreferredLanguage();
     strings_.Load(code);

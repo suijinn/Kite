@@ -1723,6 +1723,32 @@ void App::CancelInlineEdit() {
     CancelPrompt();
 }
 
+const std::vector<App::KeyHelpLine>& App::keyHelpLines() const {
+    if (!keyHelpStale_ && keyHelpKeysRevision_ == keymap_.revision()) return keyHelpLines_;
+    keyHelpStale_ = false;
+    keyHelpKeysRevision_ = keymap_.revision();
+
+    keyHelpLines_.clear();
+    keyHelpLines_.reserve(AllCommands().size() + 24);
+
+    CmdGroup lastGroup = CmdGroup::Count;
+    for (const CommandInfo& info : AllCommands()) {
+        if (info.group != lastGroup) {
+            lastGroup = info.group;
+            if (!keyHelpLines_.empty()) keyHelpLines_.push_back({ false, true, {}, {} });
+            keyHelpLines_.push_back({ true, false, strings_.Get(GroupLabelKey(info.group)), {} });
+        }
+        // 割り当ては全部並べる。代表の 1 つだけを出していた頃は、2 つ目を足しても
+        // 画面が何も言わないので、足せたかどうかを確かめる方法が無かった。
+        //
+        // ラベルは Label()。番号違いの 24 個は表 3 行で賄われているので、Get() では
+        // `cmd.goto_session_1` がそのまま画面に出る。
+        keyHelpLines_.push_back(
+            { false, false, strings_.Label(info.labelKey), keymap_.ChordText(info.id) });
+    }
+    return keyHelpLines_;
+}
+
 void App::ChooseCompletion(int index) {
     if (prompt_.kind != PromptKind::Path) return;
     if (!complete_.Select(index)) return;

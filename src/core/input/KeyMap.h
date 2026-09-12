@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -41,8 +42,12 @@ public:
 
     /// @brief コマンドに割り当てられた和音をすべて返す。
     /// @param[in] id 対象のコマンド
-    /// @return 割り当て順の和音列。無ければ空
-    std::vector<Chord> ChordsFor(Cmd id) const;
+    /// @return 割り当て順の和音列への参照。無ければ空の列
+    /// @note 返すのは表そのものへの参照で、次に Bind() / Unbind() / UnbindCommand() /
+    ///       LoadDefaults() / ApplyIni() を呼ぶまで有効
+    /// @note F1 の一覧は 134 コマンドぶんをまとめて引くので、コマンドごとに
+    ///       全バインドを走査していると 1 回で 2 万回近い比較になる
+    const std::vector<Chord>& ChordsFor(Cmd id) const;
 
     /// @brief コマンドに割り当てられた和音を表示用の 1 行にまとめて返す。
     /// @param[in] id 対象のコマンド
@@ -71,6 +76,14 @@ public:
     /// @note 同じコマンドに複数の和音がある場合に、その 1 つだけを外すために使う
     void Unbind(const Chord& c);
 
+    /// @brief 割り当てが変わるたびに進む版番号を返す。
+    /// @return 現在の版。Bind() / Unbind() / UnbindCommand() / LoadDefaults() /
+    ///         ApplyIni() のたびに増える
+    /// @note 割り当てから組み立てた表（F1 の一覧）が、自分の写しが古いかどうかを
+    ///       1 回の比較で言えるようにするためにある ─ 変更の起きる場所を数えて
+    ///       回る形にすると、1 か所増えた日に写しだけが古いまま残る
+    uint64_t revision() const { return revision_; }
+
     /// @brief 組み込みの既定割り当てを返す。現在の割り当ては見ない。
     /// @param[in] id 対象のコマンド
     /// @return 既定の和音列。既定を持たないコマンドでは空
@@ -78,8 +91,14 @@ public:
     static std::vector<Chord> DefaultChordsFor(Cmd id);
 
 private:
+    void DropFromCommand(Cmd id, const Chord& c);
+
+    uint64_t revision_ = 0;
     std::unordered_map<uint32_t, Cmd> byChord_;
-    std::vector<std::pair<Chord, Cmd>> order_;  // insertion order, for display
+    // Per command, in the order the chords were bound - which is the order the
+    // F1 sheet, the settings screen and keys.ini all print them in, since every
+    // one of those walks the command table and asks each command in turn.
+    std::unordered_map<Cmd, std::vector<Chord>> byCommand_;
 };
 
 }  // namespace kite

@@ -92,28 +92,21 @@ void AppUi::PaintKeyHelp(Renderer& r, const RectF& area) {
                             std::max(titleBox.b + 5.0f, panel.b - 12.0f) };
     r.PushClip(content);
 
-    // Flatten the command table into printable lines first, so column breaking
-    // is a simple index calculation instead of interleaved bookkeeping.
+    // The text of the sheet - every label and every chord, in command-table
+    // order - is built by App and kept until the bindings or the language move.
+    // Column breaking below only reorders rows, so it works on pointers into
+    // that list; what it inserts is blank rows, which point at nothing.
     struct Line {
-        bool header = false;
-        bool spacer = false;
-        std::string label;
-        std::string chord;
+        const App::KeyHelpLine* row = nullptr;  // null for a spacer this pass added
+        bool header() const { return row && row->header; }
+        bool spacer() const { return !row || row->spacer; }
+        const std::string& label() const { return row->label; }
+        const std::string& chord() const { return row->chord; }
     };
     std::vector<Line> lines;
-    lines.reserve(AllCommands().size() + 24);
-
-    CmdGroup lastGroup = CmdGroup::Count;
-    for (const CommandInfo& info : AllCommands()) {
-        if (info.group != lastGroup) {
-            lastGroup = info.group;
-            if (!lines.empty()) lines.push_back({ false, true, {}, {} });
-            lines.push_back({ true, false, str.Get(GroupLabelKey(info.group)), {} });
-        }
-        // Every chord, not the first one: a command with two keys on it that
-        // only ever printed one made the second impossible to check from here.
-        lines.push_back({ false, false, str.Label(info.labelKey), km.ChordText(info.id) });
-    }
+    const std::vector<App::KeyHelpLine>& source = app_.keyHelpLines();
+    lines.reserve(source.size() + 24);
+    for (const App::KeyHelpLine& row : source) lines.push_back({ &row });
 
     // The chord column is as wide as the widest line of chords actually needs,
     // and the number of columns follows from that. A fixed width was fine while
@@ -121,7 +114,8 @@ void AppUi::PaintKeyHelp(Renderer& r, const RectF& area) {
     // it, and a cheat sheet that cuts the answer in half is worse than no sheet.
     float widest = 0.0f;
     for (const Line& line : lines) {
-        if (!line.chord.empty()) widest = std::max(widest, r.MeasureText(line.chord, FontRole::Mono));
+        if (line.spacer() || line.chord().empty()) continue;
+        widest = std::max(widest, r.MeasureText(line.chord(), FontRole::Mono));
     }
     // Past this, one long line would push the whole sheet down to two columns.
     widest = std::min(widest, 210.0f);
@@ -134,7 +128,7 @@ void AppUi::PaintKeyHelp(Renderer& r, const RectF& area) {
     const auto reflow = [&columns](std::vector<Line>& all) {
         int rows = (static_cast<int>(all.size()) + columns - 1) / columns;
         for (int i = rows - 1; i < static_cast<int>(all.size()); i += rows) {
-            if (all[i].header) all.insert(all.begin() + i, { false, true, {}, {} });
+            if (all[i].header()) all.insert(all.begin() + i, Line{});
         }
         return (static_cast<int>(all.size()) + columns - 1) / columns;
     };
@@ -151,7 +145,7 @@ void AppUi::PaintKeyHelp(Renderer& r, const RectF& area) {
         // Still over. The blank line between groups is the cheapest thing on the
         // sheet, so it goes before anything anybody came here to read does.
         lines.erase(std::remove_if(lines.begin(), lines.end(),
-                                   [](const Line& l) { return l.spacer; }),
+                                   [](const Line& l) { return l.spacer(); }),
                     lines.end());
         perColumn = reflow(lines);
         lineH = std::clamp(content.h() / static_cast<float>(std::max(1, perColumn)), minLine,
@@ -165,7 +159,7 @@ void AppUi::PaintKeyHelp(Renderer& r, const RectF& area) {
 
     for (size_t i = 0; i < lines.size(); ++i) {
         const Line& line = lines[i];
-        if (line.spacer) continue;
+        if (line.spacer()) continue;
 
         const int column = std::min(columns - 1, static_cast<int>(i) / perColumn);
         const int rowInColumn = static_cast<int>(i) % perColumn - keyHelpScroll_;
@@ -175,15 +169,16 @@ void AppUi::PaintKeyHelp(Renderer& r, const RectF& area) {
         const float y = content.t + static_cast<float>(rowInColumn) * lineH;
         const RectF row = { x, y, x + colW - 14.0f, y + lineH };
 
-        if (line.header) {
-            r.DrawText(line.label, row, th.accent, FontRole::UiBold, TextAlign::Left);
+        if (line.header()) {
+            r.DrawText(line.label(), row, th.accent, FontRole::UiBold, TextAlign::Left);
             continue;
         }
+        const bool unbound = line.chord().empty();
         const float chordW = std::min(widest + 2.0f, row.w() * 0.6f);
-        r.DrawText(line.label, { row.l, row.t, row.r - chordW - 6.0f, row.b }, th.text,
+        r.DrawText(line.label(), { row.l, row.t, row.r - chordW - 6.0f, row.b }, th.text,
                    FontRole::UiSmall, TextAlign::Left);
-        r.DrawText(line.chord.empty() ? "-" : line.chord, { row.r - chordW, row.t, row.r, row.b },
-                   line.chord.empty() ? th.textDim.alpha(0.4f) : th.textDim, FontRole::Mono,
+        r.DrawText(unbound ? "-" : line.chord(), { row.r - chordW, row.t, row.r, row.b },
+                   unbound ? th.textDim.alpha(0.4f) : th.textDim, FontRole::Mono,
                    TextAlign::Right);
     }
 

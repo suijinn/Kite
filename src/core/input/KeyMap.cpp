@@ -242,7 +242,8 @@ const DefaultBinding kDefaults[] = {
 
 void KeyMap::LoadDefaults() {
     byChord_.clear();
-    order_.clear();
+    byCommand_.clear();
+    ++revision_;
     for (const DefaultBinding& d : kDefaults) {
         const Chord c = ParseChord(d.chord);
         if (c.valid()) Bind(c, d.cmd);
@@ -259,33 +260,38 @@ std::vector<Chord> KeyMap::DefaultChordsFor(Cmd id) {
     return out;
 }
 
+void KeyMap::DropFromCommand(Cmd id, const Chord& c) {
+    auto it = byCommand_.find(id);
+    if (it == byCommand_.end()) return;
+    std::vector<Chord>& chords = it->second;
+    chords.erase(std::remove(chords.begin(), chords.end(), c), chords.end());
+    if (chords.empty()) byCommand_.erase(it);
+}
+
 void KeyMap::Bind(const Chord& c, Cmd id) {
     if (!c.valid()) return;
     auto it = byChord_.find(c.packed());
-    if (it != byChord_.end()) {
-        // The chord is being reassigned: drop the stale display entry.
-        order_.erase(std::remove_if(order_.begin(), order_.end(),
-                                    [&](const std::pair<Chord, Cmd>& p) { return p.first == c; }),
-                     order_.end());
-    }
+    // The chord is being reassigned: take it off whoever had it.
+    if (it != byChord_.end()) DropFromCommand(it->second, c);
     byChord_[c.packed()] = id;
-    order_.push_back({ c, id });
+    byCommand_[id].push_back(c);
+    ++revision_;
 }
 
 void KeyMap::Unbind(const Chord& c) {
-    byChord_.erase(c.packed());
-    order_.erase(std::remove_if(order_.begin(), order_.end(),
-                                [&](const std::pair<Chord, Cmd>& p) { return p.first == c; }),
-                 order_.end());
+    auto it = byChord_.find(c.packed());
+    if (it == byChord_.end()) return;
+    DropFromCommand(it->second, c);
+    byChord_.erase(it);
+    ++revision_;
 }
 
 void KeyMap::UnbindCommand(Cmd id) {
     for (auto it = byChord_.begin(); it != byChord_.end();) {
         it = (it->second == id) ? byChord_.erase(it) : std::next(it);
     }
-    order_.erase(std::remove_if(order_.begin(), order_.end(),
-                                [&](const std::pair<Chord, Cmd>& p) { return p.second == id; }),
-                 order_.end());
+    byCommand_.erase(id);
+    ++revision_;
 }
 
 void KeyMap::ApplyIni(const Ini& ini, std::vector<std::string>* warnings) {
@@ -326,12 +332,10 @@ Cmd KeyMap::Lookup(const Chord& c) const {
     return it == byChord_.end() ? Cmd::None : it->second;
 }
 
-std::vector<Chord> KeyMap::ChordsFor(Cmd id) const {
-    std::vector<Chord> out;
-    for (const std::pair<Chord, Cmd>& p : order_) {
-        if (p.second == id) out.push_back(p.first);
-    }
-    return out;
+const std::vector<Chord>& KeyMap::ChordsFor(Cmd id) const {
+    static const std::vector<Chord> kNone;
+    auto it = byCommand_.find(id);
+    return it == byCommand_.end() ? kNone : it->second;
 }
 
 std::string KeyMap::ChordText(Cmd id) const {
@@ -348,7 +352,7 @@ Ini KeyMap::ToIni() const {
     Ini::Section& sec = ini.Ensure("keys");
     // Emit grouped by command so the file reads like documentation.
     for (const CommandInfo& info : AllCommands()) {
-        const std::vector<Chord> chords = ChordsFor(info.id);
+        const std::vector<Chord>& chords = ChordsFor(info.id);
         if (chords.empty()) {
             // A real line, not a comment: read back, a commented-out command is
             // a command the file never mentions, and the default returns. An
