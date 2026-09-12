@@ -128,9 +128,27 @@ private:
     IDWriteTextFormat* FormatFor(ui::FontRole role) const;
     ID2D1SolidColorBrush* Brush(const Color& c);
 
+    /// 書式を作り直す必要があるかだけを決める、テーマのうちの 4 項目。
+    ///
+    /// Theme まるごとを覚えていたころは、毎フレーム来る UpdateTheme が 40 色と
+    /// std::string 2 本を無条件にコピーしていた ─ レンダラが読むのはここだけ
+    /// なので、比べるものと覚えるものを同じにする。
+    struct FontSpec {
+        std::string family;
+        std::string mono;
+        float size = 0.0f;
+        float scale = 0.0f;
+
+        bool operator==(const FontSpec& o) const {
+            return family == o.family && mono == o.mono && size == o.size && scale == o.scale;
+        }
+    };
+
+    static FontSpec FontSpecOf(const Theme& theme);
+
     HWND hwnd_ = nullptr;
     float dpi_ = 96.0f;
-    Theme theme_;
+    FontSpec fonts_;
 
     ID2D1Factory1* d2dFactory_ = nullptr;
     IDWriteFactory* dwriteFactory_ = nullptr;

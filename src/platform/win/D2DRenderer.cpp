@@ -31,7 +31,7 @@ D2DRenderer::~D2DRenderer() {
 bool D2DRenderer::Initialize(HWND hwnd, const Theme& theme, float dpi) {
     hwnd_ = hwnd;
     dpi_ = dpi;
-    theme_ = theme;
+    fonts_ = FontSpecOf(theme);
 
     D2D1_FACTORY_OPTIONS options{};
     if (FAILED(::D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory1),
@@ -47,6 +47,10 @@ bool D2DRenderer::Initialize(HWND hwnd, const Theme& theme, float dpi) {
     // Device and swap chain are created on the first frame, once the window is
     // actually visible.
     return true;
+}
+
+D2DRenderer::FontSpec D2DRenderer::FontSpecOf(const Theme& theme) {
+    return { theme.fontFamily, theme.monoFamily, theme.fontSize, theme.uiScale };
 }
 
 void D2DRenderer::CreateTextFormats(const Theme& theme) {
@@ -211,15 +215,14 @@ void D2DRenderer::ReleaseDeviceResources() {
 }
 
 void D2DRenderer::UpdateTheme(const Theme& theme, float dpi) {
-    const bool fontsChanged = theme.fontFamily != theme_.fontFamily ||
-                              theme.monoFamily != theme_.monoFamily ||
-                              theme.fontSize != theme_.fontSize || theme.uiScale != theme_.uiScale;
-    theme_ = theme;
+    const FontSpec fonts = FontSpecOf(theme);
+    const bool fontsChanged = !(fonts == fonts_);
+    fonts_ = fonts;
     if (dpi != dpi_) {
         dpi_ = dpi;
         if (context_) BindBackBuffer();
     }
-    if (fontsChanged) CreateTextFormats(theme_);
+    if (fontsChanged) CreateTextFormats(theme);
 }
 
 void D2DRenderer::Resize(UINT pixelWidth, UINT pixelHeight) {
