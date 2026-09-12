@@ -184,17 +184,13 @@ public:
     uint32_t IconFor(const std::string& path);
 
     /// @brief フォルダの合計サイズを返し、必要なら数え始める。
-    /// @param[in] dir 行が並んでいるフォルダのパス
+    /// @param[in] full その項目のフルパス
     /// @param[in] entry 対象の項目
-    /// @return 数えた結果。フォルダでない・切ってある・まだ何も無いときは
-    ///         状態が `fs::SizeState::Unknown` のもの
-    /// @note UI 層が描画のたびに呼ぶ。**自動で数えるのは画面に出ている行だけ**
-    ///       ─ ここが呼ばれるのがその行だけなので、1 万件のフォルダでも頼むのは
-    ///       数十件で済む（シェルアイコンとまったく同じ形）
-    /// @note リンク（ジャンクション・シンボリックリンク）は数えない。歩きが
-    ///       リンクの先へ降りない以上、その中身は誰も数えていない
-    fs::FolderSize FolderSizeFor(const std::string& dir, const fs::Entry& entry) {
-        return folderSizes_.For(dir, entry);
+    /// @return 数えた結果。判断は `FolderSizes::For` に
+    /// @note UI 層が描画のたびに呼ぶ。パスは呼ぶ側が組む ─ 同じ行で切り取りの印
+    ///       にもアイコンにも要るので、描く側はどのみち 1 本持っている
+    fs::FolderSize FolderSizeFor(const std::string& full, const fs::Entry& entry) {
+        return folderSizes_.For(full, entry);
     }
 
     /// @brief フォルダのサイズを数える側を返す。

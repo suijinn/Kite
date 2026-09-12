@@ -37,6 +37,22 @@ bool FolderSizeCache::Request(const std::string& path, bool force) {
     return true;
 }
 
+void FolderSizeCache::Skip(const std::string& path) {
+    if (path.empty()) return;
+    Entry_& entry = entries_[path];
+    entry.used = ++tick_;
+    // 数え中・数え終わりには触らない ─ 印は «まだ何も無い» に対してだけ立てる。
+    if (entry.value.state != SizeState::Unknown) return;
+    entry.value.state = SizeState::Skipped;
+    EvictIfNeeded();
+}
+
+void FolderSizeCache::ForgetSkipped() {
+    for (auto it = entries_.begin(); it != entries_.end();) {
+        it = (it->second.value.state == SizeState::Skipped) ? entries_.erase(it) : std::next(it);
+    }
+}
+
 bool FolderSizeCache::Apply(const FolderSizeUpdate& update) {
     auto it = entries_.find(update.path);
     if (it == entries_.end()) return false;

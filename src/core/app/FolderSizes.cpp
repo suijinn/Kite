@@ -19,22 +19,35 @@ void FolderSizes::Start(fs::IWakeSink& wake) {
 
 void FolderSizes::Shutdown() { job_.reset(); }
 
-fs::FolderSize FolderSizes::For(const std::string& dir, const fs::Entry& entry) {
+void FolderSizes::SetMode(FolderSizeMode mode) {
+    if (mode == mode_) return;
+    mode_ = mode;
+    // «自動では数えない» はこの設定の下での判断なので、切り替えたら根拠が変わる。
+    cache_.ForgetSkipped();
+}
+
+fs::FolderSize FolderSizes::For(const std::string& full, const fs::Entry& entry) {
     if (mode_ == FolderSizeMode::Off || !entry.isDir()) return {};
     // 歩きはリンクの先へ降りないので、リンクの中身は誰も数えていない。ここで
     // «数えた» 顔をすると、同じ木を 2 度数えた合計を出すことになる。
     if (fs::Has(entry.attrs, fs::Attr::Link)) return {};
 
-    const std::string full = fs::EntryPath(dir, entry);
     const fs::FolderSize known = cache_.Get(full);
+    // 数え中・数え終わり・失敗・やめた・自動では数えない ─ どれももう答えが
+    // 決まっている。`Skipped` がここで止まるのが肝で、そうでないと «この場所は
+    // 自動で数えてよいか» を行ごとに毎フレーム訊き直すことになる。
     if (known.state != fs::SizeState::Unknown) return known;
     if (mode_ != FolderSizeMode::Auto) return {};
     // クラウドにしか実体が無いフォルダは、歩くだけで OS が中身を取りに行きうる。
     // 頼まれたときだけ歩く。
-    if (fs::Has(entry.attrs, fs::Attr::Placeholder) || fs::Has(entry.attrs, fs::Attr::Offline)) {
-        return {};
+    if (fs::Has(entry.attrs, fs::Attr::Placeholder) || fs::Has(entry.attrs, fs::Attr::Offline) ||
+        !AutoCountEligible(full)) {
+        // 印を立ててから、その印を答えとして返す ─ 1 フレーム目と 2 フレーム目で
+        // 違う状態を返しては、同じ問いに 2 通り答えたことになる（列の見た目は
+        // どちらも `<DIR>` だが、そこに頼るのは «同じ» の理由として弱い）。
+        cache_.Skip(full);
+        return cache_.Get(full);
     }
-    if (!AutoCountEligible(full)) return {};
 
     Request(full);
     return cache_.Get(full);

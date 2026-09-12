@@ -62,23 +62,31 @@ public:
     /// @param[in] mode 新しい設定
     /// @note `Off` にしたら表も捨てること（呼ぶ側の `Clear()`）─ 残すと、
     ///       数えない設定なのに数えた値が並び、しかも二度と新しくならない
-    void SetMode(FolderSizeMode mode) { mode_ = mode; }
+    void SetMode(FolderSizeMode mode);
+
+    /// @brief «自動では数えない» と決めた印を捨てる。
+    /// @note ドライブ一覧が変わったら呼ぶ（`App::RefreshRoots`）─ USB を挿した
+    ///       のに «数えない» のままでは、その判断の根拠のほうが古い
+    void RootsChanged() { cache_.ForgetSkipped(); }
 
     /// @brief 覚えている表を返す。
     /// @return 表への参照。無効化（`ForgetChanged` / `ForgetRelated`）に使う
     fs::FolderSizeCache& cache() { return cache_; }
 
     /// @brief フォルダの合計サイズを返し、必要なら数え始める。
-    /// @param[in] dir 行が並んでいるフォルダのパス
+    /// @param[in] full その項目のフルパス
     /// @param[in] entry 対象の項目
     /// @return 数えた結果。フォルダでない・切ってある・まだ何も無いときは
     ///         状態が `fs::SizeState::Unknown` のもの
     /// @note UI 層が描画のたびに呼ぶ。**自動で数えるのは画面に出ている行だけ**
     ///       ─ ここが呼ばれるのがその行だけなので、1 万件のフォルダでも頼むのは
     ///       数十件で済む（シェルアイコンとまったく同じ形）
+    /// @note **パスは呼ぶ側が組む。** 同じ行で切り取りの印にもアイコンにも要る
+    ///       ので、描く側はどのみち 1 本持っている ─ ここで組み直すと、行ごとに
+    ///       毎フレーム 2 本目が生まれる
     /// @note リンク（ジャンクション・シンボリックリンク）は数えない。歩きが
     ///       リンクの先へ降りない以上、その中身は誰も数えていない
-    fs::FolderSize For(const std::string& dir, const fs::Entry& entry);
+    fs::FolderSize For(const std::string& full, const fs::Entry& entry);
 
     /// @brief フォルダ 1 つを数えるようワーカーに頼む。
     /// @param[in] path 数えるフォルダ

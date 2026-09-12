@@ -13,6 +13,7 @@
 #include "Fakes.h"
 #include "TestFramework.h"
 #include "core/app/App.h"
+#include "core/app/FolderSizes.h"
 #include "core/base/Format.h"
 #include "core/base/PathUtil.h"
 #include "core/fs/FolderSize.h"
@@ -84,7 +85,9 @@ struct AppHarness {
     fs::FolderSize Ask(const std::string& name) {
         const fs::Entry* e = Entry(name);
         KITE_EXPECT(e != nullptr);
-        return e ? app.FolderSizeFor(tab().path, *e) : fs::FolderSize{};
+        // The row's own path, the way PaintList hands it over - it already has
+        // one for the cut mark and the icon, so the column reuses it.
+        return e ? app.FolderSizeFor(fs::EntryPath(tab().path, *e), *e) : fs::FolderSize{};
     }
 
     // 数え終わるまで訊き続ける（1 回目の問いが依頼になる）。
@@ -399,8 +402,9 @@ KITE_TEST(foldersize, a_folder_on_screen_is_counted_by_itself) {
     KITE_EXPECT_EQ(value.bytes, static_cast<uint64_t>(64));
     // ファイルの行には関係が無い。
     const fs::Entry* file = h.Entry("notes.txt");
-    KITE_EXPECT_EQ(static_cast<int>(h.app.FolderSizeFor(h.tab().path, *file).state),
-                   static_cast<int>(fs::SizeState::Unknown));
+    KITE_EXPECT_EQ(
+        static_cast<int>(h.app.FolderSizeFor(fs::EntryPath(h.tab().path, *file), *file).state),
+        static_cast<int>(fs::SizeState::Unknown));
 }
 
 KITE_TEST(foldersize, the_status_line_names_the_counts_of_the_row_under_the_cursor) {
@@ -609,4 +613,93 @@ KITE_TEST(foldersize, the_column_says_it_is_walking_and_then_says_the_total) {
     KITE_EXPECT(h.HasText(FormatSize(5000)));
     // 「..」の行は数える相手ではないので今までどおり。
     KITE_EXPECT(h.HasText(str.Get("ui.dir_marker")));
+}
+
+// A place the walk is not started on by itself - a share, a USB stick, a cloud
+// placeholder. The column says `<DIR>` either way, but the decision is written
+// down: without that, every frame asks the drive list again, per row.
+KITE_TEST(foldersize, a_place_not_counted_by_itself_is_only_decided_once) {
+    FakeFileSystem files;
+    FakeHost host;
+    Strings strings;
+    strings.Load("en");
+    // No fixed disk at all, so nothing qualifies.
+    const std::vector<fs::Root> roots;
+    FolderSizes sizes(files, strings, roots);
+    sizes.Start(host);
+
+    fs::Entry entry;
+    entry.name = "pub";
+    entry.attrs = fs::Attr::Directory;
+    const std::string full = "\\\\srv\\pub";
+
+    const auto state = [](const fs::FolderSize& v) { return static_cast<int>(v.state); };
+
+    // Asked the first time: the answer is still "no total", and the reason is
+    // now in the table.
+    KITE_EXPECT_EQ(state(sizes.For(full, entry)), static_cast<int>(fs::SizeState::Skipped));
+    // Asked again - which is what the next frame does - it comes out of the
+    // table rather than off the drive list.
+    KITE_EXPECT_EQ(state(sizes.For(full, entry)), static_cast<int>(fs::SizeState::Skipped));
+    // It is not "counted": nothing is walking, and the column stays `<DIR>`.
+    KITE_EXPECT_FALSE(sizes.busy());
+    KITE_EXPECT_FALSE(sizes.cache().Get(full).known());
+
+    // Asked for explicitly, it counts anyway - counting a share is the judgement
+    // of whoever asked, the same as Stopped.
+    sizes.Request(full, true);
+    KITE_EXPECT_EQ(state(sizes.cache().Get(full)), static_cast<int>(fs::SizeState::Counting));
+}
+
+// The decision was made by looking at the drive list, so a new drive makes it
+// stale - plugging in a USB stick must not leave "not counted" standing.
+KITE_TEST(foldersize, a_new_drive_list_throws_the_skip_marks_away) {
+    FakeFileSystem files;
+    FakeHost host;
+    Strings strings;
+    strings.Load("en");
+    const std::vector<fs::Root> roots;
+    FolderSizes sizes(files, strings, roots);
+    sizes.Start(host);
+
+    fs::Entry entry;
+    entry.name = "pub";
+    entry.attrs = fs::Attr::Directory;
+    const std::string full = "\\\\srv\\pub";
+    KITE_EXPECT_EQ(static_cast<int>(sizes.For(full, entry).state),
+                   static_cast<int>(fs::SizeState::Skipped));
+
+    sizes.RootsChanged();
+    KITE_EXPECT_EQ(static_cast<int>(sizes.cache().Get(full).state),
+                   static_cast<int>(fs::SizeState::Unknown));
+
+    // Changing the setting is the other thing the decision rested on.
+    sizes.For(full, entry);
+    KITE_EXPECT_EQ(static_cast<int>(sizes.cache().Get(full).state),
+                   static_cast<int>(fs::SizeState::Skipped));
+    sizes.SetMode(FolderSizeMode::Manual);
+    KITE_EXPECT_EQ(static_cast<int>(sizes.cache().Get(full).state),
+                   static_cast<int>(fs::SizeState::Unknown));
+}
+
+// What is already counted, or already being counted, is not a decision waiting
+// to be made - the mark only goes on top of "nothing known yet".
+KITE_TEST(foldersize, the_skip_mark_never_covers_an_answer) {
+    fs::FolderSizeCache cache;
+    KITE_EXPECT(cache.Request("C:\\a"));
+    cache.Skip("C:\\a");
+    KITE_EXPECT_EQ(static_cast<int>(cache.Get("C:\\a").state),
+                   static_cast<int>(fs::SizeState::Counting));
+
+    fs::FolderSizeUpdate done;
+    done.path = "C:\\a";
+    done.bytes = 12;
+    done.done = true;
+    KITE_EXPECT(cache.Apply(done));
+    cache.Skip("C:\\a");
+    KITE_EXPECT_EQ(static_cast<int>(cache.Get("C:\\a").state),
+                   static_cast<int>(fs::SizeState::Done));
+    // And ForgetSkipped leaves a real answer where it is.
+    cache.ForgetSkipped();
+    KITE_EXPECT_EQ(cache.Get("C:\\a").bytes, static_cast<uint64_t>(12));
 }

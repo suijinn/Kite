@@ -1372,7 +1372,7 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
                         // フォルダの合計は木を歩かないと分からない。訊くのはこの
                         // 1 行だけなので、自動で数えるのも画面に出ている行だけに
                         // なる（シェルアイコンとまったく同じ形）。
-                        const fs::FolderSize folder = app_.FolderSizeFor(tab->path, e);
+                        const fs::FolderSize folder = app_.FolderSizeFor(full, e);
                         if (folder.state == fs::SizeState::Counting) {
                             // 増えていく途中の数。確定した値と同じ顔で出すと、
                             // まだ歩いている最中の合計がその答えに見える。

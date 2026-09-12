@@ -303,6 +303,9 @@ void App::RefreshRoots() {
     // this runs again whenever the drive list changes, not just at start-up.
     ApplySavedOrder(quickAccess_, quickAccessOrder_);
     ApplySavedOrder(roots_, driveOrder_);
+    // «自動では数えない» はこの一覧を見て決めた判断なので、一覧が変われば根拠が
+    // 変わる ─ USB を挿したのに «数えない» のままでは、判断のほうが古い。
+    folderSizes_.RootsChanged();
 }
 
 bool App::MoveSidebarSection(int from, int to) {
