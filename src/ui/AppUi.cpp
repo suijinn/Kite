@@ -133,11 +133,7 @@ bool AppUi::OutsideWindow(float x, float y) const {
 // states are deliberately not included, so pressing on a row does not blink it.
 bool AppUi::PointerOver(const RectF& box) const {
     if (!mouseInside_ || dropActive_) return false;
-    if (drag_ == Drag::Splitter || drag_ == Drag::Tab || drag_ == Drag::Marquee ||
-        drag_ == Drag::Sidebar || drag_ == Drag::Section || drag_ == Drag::Session ||
-        drag_ == Drag::TabBarWidth) {
-        return false;
-    }
+    if (DragHidesHover()) return false;
     return box.contains(mouseX_, mouseY_);
 }
 
@@ -264,39 +260,28 @@ void AppUi::PaintDragOverlay(Renderer& r) {
     }
 
     // Where the dragged tab would be inserted.
-    if (drag_ == Drag::Tab && !dropTabMarker_.empty()) {
-        r.FillRect(dropTabMarker_, th.accent);
+    if (const TabDrag* tab = std::get_if<TabDrag>(&drag_.what)) {
+        if (tab->started && !tab->marker.empty()) r.FillRect(tab->marker, th.accent);
     }
 
-    // And down the side of a column heading, where letting go would put it.
-    if (drag_ == Drag::Column && !dropColumnMarker_.empty()) {
-        r.FillRect(dropColumnMarker_, th.accent);
-    }
-
-    // The same caret for a sidebar item, laid across the row boundary rather
-    // than down the side of a tab, and for a whole section on its block edge.
-    if (drag_ == Drag::Sidebar && !dropSidebarMarker_.empty()) {
-        r.FillRect(dropSidebarMarker_, th.accent);
-    }
-    if (drag_ == Drag::Section && !dropSectionMarker_.empty()) {
-        r.FillRect(dropSectionMarker_, th.accent);
-    }
-    // And down the side of a session chip, the way a horizontal tab bar draws it:
-    // the chips are ordered along the row they wrapped into.
-    if (drag_ == Drag::Session && !dropSessionMarker_.empty()) {
-        r.FillRect(dropSessionMarker_, th.accent);
+    // The same caret for the four reorders: down the side of a column heading or
+    // a session chip, across the row boundary for a sidebar item, on the block
+    // edge for a whole section. Which edge it is was decided when the slot was
+    // proposed, so there is one line to draw here rather than four.
+    if (const ReorderDrag* drag = std::get_if<ReorderDrag>(&drag_.what)) {
+        if (drag->started && !drag->marker.empty()) r.FillRect(drag->marker, th.accent);
     }
 
     // The selection band. Drawn last and clipped to its own list, so sweeping
     // past the edge of the pane does not paint over the bars or the neighbour.
-    if (drag_ == Drag::Marquee && marqueePane_) {
-        const Tab* tab = marqueePane_->activeTab();
+    if (const MarqueeDrag* sweep = std::get_if<MarqueeDrag>(&drag_.what); sweep && sweep->pane) {
+        const Tab* tab = sweep->pane->activeTab();
         if (tab) {
-            const RectF& body = marqueePane_->viewport.listArea;
-            const float anchorY = body.t + marqueeAnchorY_ - tab->scroll;
+            const RectF& body = sweep->pane->viewport.listArea;
+            const float anchorY = body.t + sweep->anchorY - tab->scroll;
             const RectF band =
-                RectF{ std::min(marqueeAnchorX_, marqueeX_), std::min(anchorY, marqueeY_),
-                       std::max(marqueeAnchorX_, marqueeX_), std::max(anchorY, marqueeY_) }
+                RectF{ std::min(sweep->anchorX, sweep->x), std::min(anchorY, sweep->y),
+                       std::max(sweep->anchorX, sweep->x), std::max(anchorY, sweep->y) }
                     .intersect(body);
             if (!band.empty()) {
                 r.FillRect(band, th.accent.alpha(0.16f));
@@ -489,7 +474,8 @@ void AppUi::PaintSidebar(Renderer& r, const RectF& area) {
     // A section is greyed out while it is the one being carried, heading and
     // rows alike: it is the whole block that moves, not the heading on its own.
     auto carrying = [&](SidebarSection id) {
-        return drag_ == Drag::Section && dragSection_ == id;
+        const ReorderDrag* drag = std::get_if<ReorderDrag>(&drag_.what);
+        return drag && drag->started && drag->kind == ReorderKind::Section && drag->section == id;
     };
 
     // Returns whether the items under this heading are to be laid out at all.
@@ -547,8 +533,10 @@ void AppUi::PaintSidebar(Renderer& r, const RectF& area) {
             // The row being carried keeps its place until the drop, but says so:
             // with the pointer several rows away, the marker alone does not tell
             // you what is being moved.
-            const bool carried = (drag_ == Drag::Sidebar && dragSidebarSection_ == id &&
-                                  dragSidebarIndex_ == index) ||
+            const ReorderDrag* moving = std::get_if<ReorderDrag>(&drag_.what);
+            const bool carried = (moving && moving->started &&
+                                  moving->kind == ReorderKind::Sidebar &&
+                                  moving->section == id && moving->index == index) ||
                                  carrying(id);
             const Color textColor = selected ? th.rowSelectedText : th.text;
             r.DrawText(label, { icon.r + 6.0f, row.t, row.r - 6.0f, row.b },
