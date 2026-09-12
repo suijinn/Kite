@@ -15,9 +15,9 @@ namespace {
 bool Matches(const std::string& needle, const std::string& label, const char* name,
              const std::string& chords) {
     if (needle.empty()) return true;
-    if (utf8::ToLowerAscii(label).find(needle) != std::string::npos) return true;
-    if (utf8::ToLowerAscii(name).find(needle) != std::string::npos) return true;
-    return utf8::ToLowerAscii(chords).find(needle) != std::string::npos;
+    if (utf8::ContainsLowerAscii(label, needle)) return true;
+    if (utf8::ContainsLowerAscii(name, needle)) return true;
+    return utf8::ContainsLowerAscii(chords, needle);
 }
 
 }  // namespace

@@ -96,6 +96,22 @@ std::string ToLowerAscii(std::string_view s) {
     return out;
 }
 
+bool ContainsLowerAscii(std::string_view s, std::string_view lowerNeedle) {
+    if (lowerNeedle.empty()) return true;
+    if (s.size() < lowerNeedle.size()) return false;
+    const size_t last = s.size() - lowerNeedle.size();
+    for (size_t i = 0; i <= last; ++i) {
+        size_t j = 0;
+        for (; j < lowerNeedle.size(); ++j) {
+            char c = s[i + j];
+            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+            if (c != lowerNeedle[j]) break;
+        }
+        if (j == lowerNeedle.size()) return true;
+    }
+    return false;
+}
+
 bool EqualsIgnoreCaseAscii(std::string_view a, std::string_view b) {
     if (a.size() != b.size()) return false;
     for (size_t i = 0; i < a.size(); ++i) {

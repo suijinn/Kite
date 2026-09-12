@@ -61,6 +61,16 @@ size_t Utf16Length(std::string_view s);
 /// @return 変換後の文字列。マルチバイト文字はそのまま
 std::string ToLowerAscii(std::string_view s);
 
+/// @brief ASCII 範囲のみ大文字小文字を無視して部分一致を判定する。
+/// @param[in] s 走査対象の文字列
+/// @param[in] lowerNeedle 探す文字列。**すでに ToLowerAscii() 済みであること**
+/// @return `s` の中に `lowerNeedle` があれば true。`lowerNeedle` が空なら true
+/// @note ToLowerAscii(s).find(needle) と同じ答えを、写しを作らずに出す ─ 絞り込みは
+///       項目ごと・打鍵ごとに呼ばれるので、1 件につき 1 本の std::string を作る
+///       形では 10 万件のフォルダで打鍵のたびに 10 万回の割り当てになる。
+///       ASCII の外は ToLowerAscii が触らないバイトなので、答えは変わらない
+bool ContainsLowerAscii(std::string_view s, std::string_view lowerNeedle);
+
 /// @brief ASCII 範囲のみ大文字小文字を無視して比較する。
 /// @param[in] a 比較する文字列
 /// @param[in] b 比較する文字列

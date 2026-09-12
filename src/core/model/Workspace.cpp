@@ -150,10 +150,20 @@ void Tab::Rebuild() {
     for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
         const fs::Entry& e = entries[i];
         if (!view.showHidden && e.isHidden()) continue;
-        if (!needle.empty() && utf8::ToLowerAscii(e.name).find(needle) == std::string::npos) {
-            continue;
-        }
+        if (!needle.empty() && !utf8::ContainsLowerAscii(e.name, needle)) continue;
         visible.push_back(i);
+    }
+
+    // 並べ替えの «鍵» は比較の前に 1 回だけ作る。比較関数の中で作ると、10 万件で
+    // 約 170 万回の比較それぞれが名前を切り出し直すことになる ─ 拡張子順だけが
+    // 名前そのもの以外を見るので、要るのはこの 1 本。
+    //
+    // 中身は entries[i].name の中を指す view なので、entries が生きている間しか
+    // 有効でない ─ この関数を出るまでに使い終わる。
+    std::vector<std::string_view> extKeys;
+    if (view.sort == SortKey::Ext) {
+        extKeys.resize(entries.size());
+        for (int index : visible) extKeys[index] = path::ExtensionView(entries[index].name);
     }
 
     const ViewState v = view;
@@ -168,7 +178,9 @@ void Tab::Rebuild() {
                 cmp = path::NaturalCompare(a.name, b.name);
                 break;
             case SortKey::Ext: {
-                cmp = path::NaturalCompare(path::Extension(a.name), path::Extension(b.name));
+                // NaturalCompare は ASCII の大文字小文字をすでに畳むので、
+                // 小文字化した写しを渡していたときと順序は同じ。
+                cmp = path::NaturalCompare(extKeys[lhs], extKeys[rhs]);
                 if (cmp == 0) cmp = path::NaturalCompare(a.name, b.name);
                 break;
             }

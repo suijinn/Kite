@@ -1,4 +1,5 @@
 #include "TestFramework.h"
+#include "core/base/PathUtil.h"
 #include "core/fs/VirtualPath.h"
 #include "core/model/Workspace.h"
 
@@ -441,4 +442,36 @@ KITE_TEST(tab, turning_grouping_off_removes_every_heading) {
     KITE_EXPECT_EQ(static_cast<int>(tab.groups.size()), 0);
     KITE_EXPECT_EQ(static_cast<int>(tab.visible.size()), rows - 3);
     KITE_EXPECT_FALSE(tab.IsGroupRow(tab.cursor));
+}
+
+// A performance smoke test, not a timing assertion: sorting and filtering a
+// large listing must finish and stay correct. The time itself is measured by
+// hand (docs/refactoring-plan.md §6) - asserting on it here would make a test
+// that fails on a busy CI machine rather than on a real regression.
+KITE_TEST(tab, rebuilds_a_large_listing) {
+    Tab tab;
+    tab.path = "C:\\big";
+    tab.listing.entries.reserve(100000);
+    for (int i = 0; i < 100000; ++i) {
+        fs::Entry entry;
+        entry.name = "file" + std::to_string(i) + ((i % 3 == 0)   ? ".TXT"
+                                                   : (i % 3 == 1) ? ".md"
+                                                                  : "");
+        entry.size = static_cast<uint64_t>(i);
+        entry.mtime = i;
+        tab.listing.entries.push_back(std::move(entry));
+    }
+
+    tab.view.sort = SortKey::Ext;
+    tab.Rebuild();
+    KITE_EXPECT_EQ(tab.ItemCount(), 100000);
+    // Extensions sort case-insensitively, so every .md lands before every .TXT
+    // and the extension-less names come first.
+    KITE_EXPECT_EQ(path::Extension(tab.EntryAt(1)->name), std::string(""));
+    KITE_EXPECT_EQ(path::Extension(tab.EntryAt(tab.ItemCount())->name), std::string("txt"));
+
+    tab.filter = "FILE999";
+    tab.Rebuild();
+    // file999, file9990..file9999 and file99900..file99999 - 111 in all.
+    KITE_EXPECT_EQ(tab.ItemCount(), 111);
 }

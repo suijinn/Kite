@@ -10,7 +10,7 @@ namespace {
 bool Matches(const std::string& needle, const PickerList::Entry& entry) {
     if (needle.empty()) return true;
     for (const std::string& field : entry.fields) {
-        if (utf8::ToLowerAscii(field).find(needle) != std::string::npos) return true;
+        if (utf8::ContainsLowerAscii(field, needle)) return true;
     }
     return false;
 }

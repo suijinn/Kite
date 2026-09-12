@@ -93,3 +93,21 @@ KITE_TEST(utf8, utf16_length_counts_what_windows_counts) {
     const std::string mixed = "C:\\\xE8\xB3\x87\xE6\x96\x99\\a";
     KITE_EXPECT(utf8::Utf16Length(mixed) <= mixed.size());
 }
+
+KITE_TEST(utf8, contains_lower_ascii_matches_the_copy_it_replaces) {
+    // The filter used to lower a copy of every name on every keystroke. This
+    // answers the same question without the copy, so the two must agree.
+    const char* kText[] = { "Report.TXT", "", "a", "AAA", "\xE8\xB3\x87\xE6\x96\x99 Notes" };
+    const char* kNeedles[] = { "", "report", "txt", "aa", "zz", "notes", "\xE8\xB3\x87" };
+    for (const char* text : kText) {
+        for (const char* needle : kNeedles) {
+            const bool copied = utf8::ToLowerAscii(text).find(needle) != std::string::npos;
+            KITE_EXPECT_EQ(utf8::ContainsLowerAscii(text, needle), copied);
+        }
+    }
+    // The needle is taken as already lowered - an upper-case one finds nothing,
+    // which is why every caller lowers the query once, up front.
+    KITE_EXPECT_FALSE(utf8::ContainsLowerAscii("report", "REPORT"));
+    // A needle longer than the text can never match.
+    KITE_EXPECT_FALSE(utf8::ContainsLowerAscii("ab", "abc"));
+}

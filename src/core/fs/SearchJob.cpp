@@ -88,7 +88,7 @@ void SearchJob::Walk(const Job& job) {
         if (result.status != Status::Ok) return true;
 
         for (const Entry& e : result.entries) {
-            if (utf8::ToLowerAscii(e.name).find(job.needle) == std::string::npos) continue;
+            if (!utf8::ContainsLowerAscii(e.name, job.needle)) continue;
             Entry hit = e;
             // 名前を親のパスに繋いでも指せない ─ 当たった項目は今いるフォルダの
             // 直下とは限らないので、`address` に «その項目自身のパス» を入れる

@@ -1,5 +1,6 @@
 #include "TestFramework.h"
 #include "core/base/PathUtil.h"
+#include "core/base/Utf8.h"
 
 using namespace kite;
 
@@ -56,6 +57,26 @@ KITE_TEST(path, filename_and_stem_and_extension) {
     // A leading dot is part of the name, not an extension.
     KITE_EXPECT_EQ(path::Extension("C:\\a\\.gitignore"), std::string(""));
     KITE_EXPECT_EQ(path::Stem("C:\\a\\.gitignore"), std::string(".gitignore"));
+}
+
+KITE_TEST(path, extension_view_answers_without_copying) {
+    // Same answer as Extension() except for the case, which it leaves as
+    // written - the sort folds case itself, so nothing has to be lowered.
+    KITE_EXPECT_EQ(path::ExtensionView("C:\\a\\b.TXT"), std::string_view("TXT"));
+    KITE_EXPECT_EQ(path::ExtensionView("b.tar.gz"), std::string_view("gz"));
+    KITE_EXPECT_EQ(path::ExtensionView("C:\\a\\b"), std::string_view(""));
+    KITE_EXPECT_EQ(path::ExtensionView("C:\\a\\.gitignore"), std::string_view(""));
+    KITE_EXPECT_EQ(path::ExtensionView(""), std::string_view(""));
+    // A root is its own name, which is what FileName() says about it too.
+    KITE_EXPECT_EQ(path::ExtensionView("C:\\"), std::string_view(""));
+    // The view points into the argument - it must not outlive it.
+    const std::string name = "report.pdf";
+    KITE_EXPECT(path::ExtensionView(name).data() == name.data() + 7);
+    // Extension() is the lower-cased copy of exactly this.
+    const char* kPaths[] = { "C:\\a\\b.TXT", "b.tar.gz", "C:\\a\\b", ".gitignore", "C:\\" };
+    for (const char* q : kPaths) {
+        KITE_EXPECT_EQ(path::Extension(q), utf8::ToLowerAscii(path::ExtensionView(q)));
+    }
 }
 
 KITE_TEST(path, is_root) {

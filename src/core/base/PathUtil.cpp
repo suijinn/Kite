@@ -85,11 +85,25 @@ std::string FileName(std::string_view p) {
     return std::string(p.substr(i));
 }
 
-std::string Extension(std::string_view p) {
-    const std::string name = FileName(p);
+std::string_view ExtensionView(std::string_view p) {
+    // FileName() は std::string を返すので使えない ─ ここが返すのは `p` の中を
+    // 指す view で、末尾の名前を切り出すのに写しを作っては意味が無い。切り出し方
+    // そのものは FileName() と同じ（ルートはルート自身が名前）。
+    const size_t root = RootLength(p);
+    while (p.size() > root && IsSep(p.back())) p.remove_suffix(1);
+    std::string_view name = p;
+    if (p.size() > root) {
+        size_t begin = p.size();
+        while (begin > root && !IsSep(p[begin - 1])) --begin;
+        name = p.substr(begin);
+    }
     const size_t dot = name.rfind('.');
-    if (dot == std::string::npos || dot == 0) return {};
-    return utf8::ToLowerAscii(std::string_view(name).substr(dot + 1));
+    if (dot == std::string_view::npos || dot == 0) return {};
+    return name.substr(dot + 1);
+}
+
+std::string Extension(std::string_view p) {
+    return utf8::ToLowerAscii(ExtensionView(p));
 }
 
 std::string Stem(std::string_view p) {
