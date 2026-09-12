@@ -1231,8 +1231,8 @@ void App::EnsureCursorVisible() {
     Tab* t = p->activeTab();
     if (!t) return;
 
-    const float rowH = p->rowHeight > 0.0f ? p->rowHeight : theme_.rowHeight;
-    const float viewH = p->listHeight > 0.0f ? p->listHeight : rowH * 10.0f;
+    const float rowH = p->viewport.rowHeight > 0.0f ? p->viewport.rowHeight : theme_.rowHeight;
+    const float viewH = p->viewport.listHeight > 0.0f ? p->viewport.listHeight : rowH * 10.0f;
     const float top = static_cast<float>(t->cursor) * rowH;
 
     if (top < t->scroll) {
@@ -1540,12 +1540,12 @@ void App::ShowShellMenu(const std::vector<std::string>& paths, int screenX, int 
 
 bool App::CursorRowAnchor(int& screenX, int& screenY) {
     Pane* pane = workspace_.focusedPane();
-    if (!pane || pane->listArea.empty()) return false;
+    if (!pane || pane->viewport.listArea.empty()) return false;
     const Tab* t = pane->activeTab();
     if (!t) return false;
 
-    const RectF& area = pane->listArea;
-    const float rowH = pane->rowHeight > 0.0f ? pane->rowHeight : theme_.rowHeight;
+    const RectF& area = pane->viewport.listArea;
+    const float rowH = pane->viewport.rowHeight > 0.0f ? pane->viewport.rowHeight : theme_.rowHeight;
 
     // Bottom-left of the cursor row, which is where Windows itself drops the
     // menu for a focused list item. An off-screen or absent cursor falls back to

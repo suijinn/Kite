@@ -148,7 +148,7 @@ struct Fixture {
     // Thumbs painted inside the tab bar. The listing has a scrollbar of its own
     // in the same colour, so the ones out in the pane do not count.
     std::vector<RectF> TabBarThumbs() {
-        const RectF bar = { paneRect().l, paneRect().t, pane()->listArea.l, paneRect().b };
+        const RectF bar = { paneRect().l, paneRect().t, pane()->viewport.listArea.l, paneRect().b };
         std::vector<RectF> out;
         for (const test::FakeRenderer::Fill& fill : renderer.fills) {
             if (!test::FakeRenderer::SameColor(fill.color, app.theme().scrollThumb)) continue;
@@ -1129,7 +1129,7 @@ KITE_TEST(appui, the_tab_bar_stays_one_row_while_the_tabs_fit) {
 
     const Theme& th = f.app.theme();
     Pane* pane = f.app.workspace().focusedPane();
-    KITE_EXPECT_NEAR(pane->listArea.t,
+    KITE_EXPECT_NEAR(pane->viewport.listArea.t,
                      ContentTop(th) + th.tabBarHeight + th.pathBarHeight + th.headerHeight, 0.01f);
 }
 
@@ -1143,7 +1143,7 @@ KITE_TEST(appui, the_tab_bar_grows_a_row_instead_of_running_off_the_edge) {
     const Theme& th = f.app.theme();
     Pane* pane = f.app.workspace().focusedPane();
     KITE_EXPECT_EQ(pane->tabs.size(), size_t{ 20 });
-    KITE_EXPECT_NEAR(pane->listArea.t,
+    KITE_EXPECT_NEAR(pane->viewport.listArea.t,
                      ContentTop(th) + th.tabBarHeight * 2.0f + th.pathBarHeight + th.headerHeight,
                      0.01f);
 }
@@ -1261,8 +1261,8 @@ KITE_TEST(appui, creating_borrows_a_row_below_the_cursor) {
 
     // The gap that opened up is a field, and it is empty: an empty box on a
     // borrowed row is what says "type a name here".
-    const RectF gap = { f.pane()->listArea.l + 40.0f, belowWas + 4.0f,
-                        f.pane()->listArea.l + 60.0f, belowWas + 12.0f };
+    const RectF gap = { f.pane()->viewport.listArea.l + 40.0f, belowWas + 4.0f,
+                        f.pane()->viewport.listArea.l + 60.0f, belowWas + 12.0f };
     KITE_EXPECT_FALSE(FieldBoxUnder(f, gap).empty());
     KITE_EXPECT(f.app.prompt().text.empty());
 }
@@ -1489,8 +1489,8 @@ KITE_TEST(appui, the_vertical_bar_takes_the_left_of_the_pane_and_nothing_above_t
     const RectF pane = f.paneRect();
     // The list starts past the column, and no longer below a bar: the path bar
     // is the first thing at the top of what is left.
-    KITE_EXPECT_NEAR(f.pane()->listArea.l, pane.l + th.tabBarWidth, 0.01f);
-    KITE_EXPECT_NEAR(f.pane()->listArea.t, pane.t + th.pathBarHeight + th.headerHeight, 0.01f);
+    KITE_EXPECT_NEAR(f.pane()->viewport.listArea.l, pane.l + th.tabBarWidth, 0.01f);
+    KITE_EXPECT_NEAR(f.pane()->viewport.listArea.t, pane.t + th.pathBarHeight + th.headerHeight, 0.01f);
 }
 
 KITE_TEST(appui, a_tab_further_down_the_column_can_be_clicked) {
@@ -1596,7 +1596,7 @@ KITE_TEST(appui, switching_tabs_pulls_the_column_back_to_the_active_one) {
     f.Paint();
     // Wound right back to the first tab, with the active one off the bottom.
     KITE_EXPECT_EQ(f.pane()->tabScroll, 0);
-    KITE_EXPECT(f.pane()->active >= f.pane()->tabRowsPerPage);
+    KITE_EXPECT(f.pane()->active >= f.pane()->viewport.tabRowsPerPage);
 
     // The wheel only holds until the selection moves; a new tab is a new answer.
     f.app.Execute(Cmd::NewTab);
@@ -1605,7 +1605,7 @@ KITE_TEST(appui, switching_tabs_pulls_the_column_back_to_the_active_one) {
     Pane* p = f.pane();
     KITE_EXPECT(p->tabScroll > 0);
     KITE_EXPECT(p->active >= p->tabScroll);
-    KITE_EXPECT(p->active < p->tabScroll + p->tabRowsPerPage);
+    KITE_EXPECT(p->active < p->tabScroll + p->viewport.tabRowsPerPage);
 }
 
 KITE_TEST(appui, the_column_shows_a_thumb_only_when_it_is_holding_tabs_back) {
@@ -1669,7 +1669,7 @@ KITE_TEST(appui, dragging_the_edge_of_the_column_widens_it_and_the_list_follows)
 
     KITE_EXPECT_NEAR(f.app.theme().tabBarWidth, before + 40.0f, 1.0f);
     // 幅はバーだけの話ではない ─ 取ったぶんだけ一覧が右から始まる。
-    KITE_EXPECT_NEAR(f.pane()->listArea.l, pane.l + f.app.theme().tabBarWidth, 0.01f);
+    KITE_EXPECT_NEAR(f.pane()->viewport.listArea.l, pane.l + f.app.theme().tabBarWidth, 0.01f);
 }
 
 KITE_TEST(appui, the_edge_stops_where_the_bar_would_start_replacing_the_list) {
@@ -1689,7 +1689,7 @@ KITE_TEST(appui, the_edge_stops_where_the_bar_would_start_replacing_the_list) {
     KITE_EXPECT(f.app.theme().tabBarWidth <= pane.w() * 0.5f + 0.01f);
     // 掴んだ線がポインタから離れない、が守れているかは «止まった» ことでしか
     // 見えない ─ 覚えた幅が画面の外まで伸びていれば、次に窓を広げたときに跳ぶ。
-    KITE_EXPECT_NEAR(f.pane()->listArea.l, pane.l + f.app.theme().tabBarWidth, 0.01f);
+    KITE_EXPECT_NEAR(f.pane()->viewport.listArea.l, pane.l + f.app.theme().tabBarWidth, 0.01f);
 }
 
 KITE_TEST(appui, the_edge_keeps_enough_of_the_bar_to_read_a_name_in) {
@@ -1734,7 +1734,7 @@ KITE_TEST(appui, a_press_just_inside_the_list_still_belongs_to_the_list) {
     f.UseVerticalTabBar();
 
     const float before = f.app.theme().tabBarWidth;
-    const RectF list = f.pane()->listArea;
+    const RectF list = f.pane()->viewport.listArea;
     f.Press(list.l + 1.0f, list.t + f.app.theme().rowHeight * 0.5f);
     f.Drag(list.l + 60.0f, list.t + f.app.theme().rowHeight * 0.5f);
     f.Release(list.l + 60.0f, list.t + f.app.theme().rowHeight * 0.5f);
@@ -2504,7 +2504,7 @@ KITE_TEST(appui, a_conversion_in_progress_is_drawn_inside_the_field) {
     KITE_EXPECT(typed != nullptr);
     if (!typed) return;
     KITE_EXPECT_FALSE(FieldBoxUnder(f, typed->ink).empty());
-    KITE_EXPECT(f.pane()->listArea.contains(typed->ink.l + 1.0f, typed->ink.center().y));
+    KITE_EXPECT(f.pane()->viewport.listArea.contains(typed->ink.l + 1.0f, typed->ink.center().y));
 
     // 下線 1 本が «まだ確定していない» の共通語彙。文字の下に、文字の幅だけ引く。
     const Theme& th = f.app.theme();
@@ -2695,7 +2695,7 @@ namespace {
 
 // 見出しの帯の中ほどの高さ。列は帯の中でしか掴めない。
 float HeaderY(Fixture& f) {
-    return f.pane()->listArea.t - f.app.theme().headerHeight * 0.5f;
+    return f.pane()->viewport.listArea.t - f.app.theme().headerHeight * 0.5f;
 }
 
 // その列の見出しがこのフレームで置かれた左端。見出しの文字は 4 px 内側から
@@ -2801,7 +2801,7 @@ KITE_TEST(appui, group_headings_are_drawn_in_the_list) {
 
     const test::FakeRenderer::Text* heading = f.TextNamed(folders);
     KITE_EXPECT(heading != nullptr);
-    KITE_EXPECT(f.pane()->listArea.contains(heading->ink.l + 1.0f, heading->ink.center().y));
+    KITE_EXPECT(f.pane()->viewport.listArea.contains(heading->ink.l + 1.0f, heading->ink.center().y));
 }
 
 KITE_TEST(appui, clicking_a_group_heading_selects_the_whole_group) {

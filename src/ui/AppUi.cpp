@@ -262,7 +262,7 @@ void AppUi::PaintDragOverlay(Renderer& r) {
     if (drag_ == Drag::Marquee && marqueePane_) {
         const Tab* tab = marqueePane_->activeTab();
         if (tab) {
-            const RectF& body = marqueePane_->listArea;
+            const RectF& body = marqueePane_->viewport.listArea;
             const float anchorY = body.t + marqueeAnchorY_ - tab->scroll;
             const RectF band =
                 RectF{ std::min(marqueeAnchorX_, marqueeX_), std::min(anchorY, marqueeY_),
@@ -763,8 +763,8 @@ AppUi::TabLayout AppUi::LayoutTabBar(Pane& pane, const RectF& area) const {
 
     // Written back for the wheel: it has to know how far the bar can go, and only
     // the layout knows how many rows there are and how many of them fit.
-    pane.tabRows = out.rows;
-    pane.tabRowsPerPage = out.shownRows;
+    pane.viewport.tabRows = out.rows;
+    pane.viewport.tabRowsPerPage = out.shownRows;
     return out;
 }
 
@@ -1074,10 +1074,10 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
 
     if (!tab) return;
 
-    pane->listHeight = body.h();
-    pane->rowHeight = th.rowHeight;
-    pane->rowsPerPage = std::max(1, static_cast<int>(body.h() / th.rowHeight) - 1);
-    pane->listArea = body;
+    pane->viewport.listHeight = body.h();
+    pane->viewport.rowHeight = th.rowHeight;
+    pane->viewport.rowsPerPage = std::max(1, static_cast<int>(body.h() / th.rowHeight) - 1);
+    pane->viewport.listArea = body;
 
     if (tab->loadToken != 0 && !tab->loaded) {
         r.DrawText(str.Get("ui.loading"), body.inset(kPad, 8.0f), th.textDim, FontRole::Ui,

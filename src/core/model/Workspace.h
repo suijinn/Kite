@@ -228,9 +228,26 @@ public:
     std::vector<std::unique_ptr<Tab>> tabs;  ///< 保持しているタブ
     int active = 0;                          ///< アクティブなタブの添字
 
-    float listHeight = 0.0f;  ///< 一覧領域の高さ。UI 層がレイアウトごとに書き込む
-    float rowHeight = 22.0f;  ///< 1 行の高さ。UI 層がレイアウトごとに書き込む
-    int rowsPerPage = 20;     ///< 1 画面分の行数。UI 層がレイアウトごとに書き込む
+    /// @brief UI 層がレイアウトのたびに書き戻す、画面の寸法。
+    ///
+    /// `App` は行の座標を自分では持てない ─ どこに何をどの大きさで描いたかを
+    /// 知っているのは UI 層だけなので、`PageUp`・`EnsureCursorVisible`・
+    /// カーソル行に合わせるコンテキストメニューはここを読む。
+    ///
+    /// **core → ui の逆流はこの 1 つに畳んである。** 平置きの 6 フィールドだった
+    /// ころは、どれが «モデルの状態» でどれが «描いた結果» なのかが並びからは
+    /// 読み取れなかった ─ `Tab::scroll` や `tabScroll` は前者で、ここは後者。
+    /// 一度もレイアウトされていなければ `listArea.empty()` が true。
+    struct Viewport {
+        float listHeight = 0.0f;  ///< 一覧領域の高さ
+        float rowHeight = 22.0f;  ///< 1 行の高さ
+        int rowsPerPage = 20;     ///< 1 画面分の行数
+        int tabRows = 1;          ///< タブバーの総行数
+        int tabRowsPerPage = 1;   ///< タブバーに出ている行数
+        RectF listArea;           ///< 一覧の描画領域（クライアント座標・DIP）
+    };
+
+    Viewport viewport;  ///< 最後に描いたときの寸法。UI 層が書き、App が読む
 
     /// @brief タブバーの先頭に出す行。ホイールで動かした位置を覚える。
     ///
@@ -245,17 +262,6 @@ public:
     /// ということ。**両者が同じ間は tabScroll に触らない** ─ 触ると、ホイールで
     /// 別のタブを見に行った次のフレームに必ず元へ戻る。
     int tabScrollFor = -1;
-
-    int tabRows = 1;         ///< タブバーの総行数。UI 層がレイアウトごとに書き込む
-    int tabRowsPerPage = 1;  ///< タブバーに出ている行数。UI 層がレイアウトごとに書き込む
-
-    /// @brief 一覧の描画領域（クライアント座標・DIP）。UI 層がレイアウトごとに書き込む。
-    ///
-    /// キーボードから出すコンテキストメニューをカーソル行の位置に合わせるために
-    /// 要る。App は行の座標を自分では持てない ─ どこに何を描いたかを知っているのは
-    /// UI 層だけなので、listHeight などと同じくここへ書き戻してもらう。
-    /// 一度もレイアウトされていなければ empty() が true。
-    RectF listArea;
 
     /// @brief アクティブなタブを返す。
     /// @return アクティブなタブ。タブが 1 つも無ければ nullptr

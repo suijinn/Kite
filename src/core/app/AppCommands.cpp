@@ -207,16 +207,16 @@ void App::Execute(Cmd cmd) {
         // --- cursor and selection --------------------------------------------
         case Cmd::CursorUp:        MoveCursor(-1, false); break;
         case Cmd::CursorDown:      MoveCursor(1, false); break;
-        case Cmd::CursorPageUp:    MoveCursor(-(pane ? pane->rowsPerPage : 10), false); break;
-        case Cmd::CursorPageDown:  MoveCursor(pane ? pane->rowsPerPage : 10, false); break;
+        case Cmd::CursorPageUp:    MoveCursor(-(pane ? pane->viewport.rowsPerPage : 10), false); break;
+        case Cmd::CursorPageDown:  MoveCursor(pane ? pane->viewport.rowsPerPage : 10, false); break;
         case Cmd::CursorTop:       MoveCursor(0, false, true); break;
         case Cmd::CursorBottom:
             MoveCursor(tab ? static_cast<int>(tab->visible.size()) - 1 : 0, false, true);
             break;
         case Cmd::ExtendUp:        MoveCursor(-1, true); break;
         case Cmd::ExtendDown:      MoveCursor(1, true); break;
-        case Cmd::ExtendPageUp:    MoveCursor(-(pane ? pane->rowsPerPage : 10), true); break;
-        case Cmd::ExtendPageDown:  MoveCursor(pane ? pane->rowsPerPage : 10, true); break;
+        case Cmd::ExtendPageUp:    MoveCursor(-(pane ? pane->viewport.rowsPerPage : 10), true); break;
+        case Cmd::ExtendPageDown:  MoveCursor(pane ? pane->viewport.rowsPerPage : 10, true); break;
         case Cmd::ExtendTop:       MoveCursor(0, true, true); break;
         case Cmd::ExtendBottom:
             MoveCursor(tab ? static_cast<int>(tab->visible.size()) - 1 : 0, true, true);

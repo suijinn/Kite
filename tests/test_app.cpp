@@ -1691,8 +1691,8 @@ KITE_TEST(app, a_menu_opened_from_the_keyboard_lands_on_the_cursor_row) {
     // keyboard-driven move is nowhere near the row being acted on.
     Harness h;
     Pane* p = h.pane();
-    p->listArea = { 10.0f, 40.0f, 400.0f, 400.0f };
-    p->rowHeight = 20.0f;
+    p->viewport.listArea = { 10.0f, 40.0f, 400.0f, 400.0f };
+    p->viewport.rowHeight = 20.0f;
     h.tab()->cursor = 2;
     h.tab()->scroll = 0.0f;
 
@@ -1705,8 +1705,8 @@ KITE_TEST(app, a_menu_opened_from_the_keyboard_lands_on_the_cursor_row) {
 KITE_TEST(app, a_menu_anchor_stays_inside_the_list_when_the_cursor_is_scrolled_away) {
     Harness h;
     Pane* p = h.pane();
-    p->listArea = { 10.0f, 40.0f, 400.0f, 400.0f };
-    p->rowHeight = 20.0f;
+    p->viewport.listArea = { 10.0f, 40.0f, 400.0f, 400.0f };
+    p->viewport.rowHeight = 20.0f;
     h.tab()->cursor = 0;
     h.tab()->scroll = 500.0f;
 
@@ -1720,12 +1720,12 @@ KITE_TEST(app, a_menu_falls_back_to_the_pointer_when_there_is_no_anchor) {
     // cannot map coordinates cannot produce one either. A negative pair tells
     // the shell to use the pointer, which is what Windows does by default.
     Harness h;
-    h.pane()->listArea = {};
+    h.pane()->viewport.listArea = {};
     h.app.Execute(Cmd::ContextMenu);
     KITE_EXPECT_EQ(h.shell.lastContextMenuX, -1);
     KITE_EXPECT_EQ(h.shell.lastContextMenuY, -1);
 
-    h.pane()->listArea = { 10.0f, 40.0f, 400.0f, 400.0f };
+    h.pane()->viewport.listArea = { 10.0f, 40.0f, 400.0f, 400.0f };
     h.host.canMapCoordinates = false;
     h.app.Execute(Cmd::ContextMenu);
     KITE_EXPECT_EQ(h.shell.lastContextMenuX, -1);

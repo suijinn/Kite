@@ -28,7 +28,7 @@ void AppUi::ScrollPane(Pane* pane, float deltaPixels) {
     if (!tab) return;
     tab->scroll += deltaPixels;
     const float maxScroll = std::max(
-        0.0f, static_cast<float>(tab->visible.size()) * pane->rowHeight - pane->listHeight);
+        0.0f, static_cast<float>(tab->visible.size()) * pane->viewport.rowHeight - pane->viewport.listHeight);
     tab->scroll = std::clamp(tab->scroll, 0.0f, maxScroll);
     app_.host().Invalidate();
 }
@@ -110,9 +110,9 @@ void AppUi::BeginMarquee(Pane* pane, const MouseEvent& e) {
     // The strip beside the rows belongs to the scrollbar whenever one is drawn.
     // It is empty list space as far as hit testing goes, but sweeping a
     // selection out of the thumb is not what anyone reaching for it wants.
-    const RectF& area = pane->listArea;
+    const RectF& area = pane->viewport.listArea;
     const bool overScrollbar = e.x >= area.r - kScrollbarWidth &&
-                               static_cast<float>(tab->visible.size()) * pane->rowHeight > area.h();
+                               static_cast<float>(tab->visible.size()) * pane->viewport.rowHeight > area.h();
     if (overScrollbar) return;
 
     // No threshold to cross first, unlike a tab or a file drag: there is nothing
@@ -146,8 +146,8 @@ void AppUi::UpdateMarquee(float x, float y) {
     marqueeX_ = x;
     marqueeY_ = y;
 
-    const RectF& body = marqueePane_->listArea;
-    const float rowH = std::max(1.0f, marqueePane_->rowHeight);
+    const RectF& body = marqueePane_->viewport.listArea;
+    const float rowH = std::max(1.0f, marqueePane_->viewport.rowHeight);
     const float contentY = (y - body.t) + tab->scroll;
     const float top = std::min(marqueeAnchorY_, contentY);
     const float bottom = std::max(marqueeAnchorY_, contentY);
@@ -817,14 +817,14 @@ bool AppUi::OnMouse(const MouseEvent& e) {
         // a bar with everything on screen has nothing to answer with, so the
         // wheel goes on doing what it has always done there and scrolls the list.
         if (region && region->pane && IsTabBarHit(region->kind) &&
-            region->pane->tabRows > region->pane->tabRowsPerPage) {
+            region->pane->viewport.tabRows > region->pane->viewport.tabRowsPerPage) {
             Pane& pane = *region->pane;
             // A notch is worth three tabs either way: a row of the vertical bar
             // holds one tab, a row of the horizontal bar holds a screenful.
             const int step = (app_.tabBarPosition() == TabBarPosition::Left) ? 3 : 1;
             const int wanted =
                 pane.tabScroll - static_cast<int>(std::lround(e.wheel * static_cast<float>(step)));
-            pane.tabScroll = std::clamp(wanted, 0, pane.tabRows - pane.tabRowsPerPage);
+            pane.tabScroll = std::clamp(wanted, 0, pane.viewport.tabRows - pane.viewport.tabRowsPerPage);
             // The wheel is an answer to "show me somewhere else", so it takes
             // over from the active tab until that changes again.
             pane.tabScrollFor = pane.active;
@@ -1047,7 +1047,7 @@ bool AppUi::OnMouse(const MouseEvent& e) {
             resizeTabBarLeft_ = bar.l;
             // ペインの右端は一覧の右端。バーの左端からそこまでがペインの幅で、
             // レイアウトが幅を止めるのはその半分。
-            const RectF list = region->pane ? region->pane->listArea : RectF{};
+            const RectF list = region->pane ? region->pane->viewport.listArea : RectF{};
             resizeTabBarMax_ = list.empty() ? 0.0f : (list.r - bar.l) * 0.5f;
             return true;
         }
