@@ -607,6 +607,10 @@ public:
     std::vector<Text> texts;
     std::vector<Icon> icons;
     SizeF size{ 1200.0f, 800.0f };
+    /// 1 行の高さ。設定できるのは、文字に追随する器は文字を動かさないと検査できない
+    /// ため ─ 本物は書式のサイズ × 1.35 を返すので、ここを上げるのは «`Ctrl++` した
+    /// とき» を訊いているのと同じ。
+    float lineHeight = 16.0f;
 
     void PushClip(const RectF&) override {}
     void PopClip() override {}
@@ -638,7 +642,7 @@ public:
     float MeasureText(std::string_view utf8, ui::FontRole) override {
         return static_cast<float>(utf8.size()) * 7.0f;
     }
-    float LineHeight(ui::FontRole) override { return 16.0f; }
+    float LineHeight(ui::FontRole) override { return lineHeight; }
     SizeF surfaceSize() const override { return size; }
 
     void Clear() {

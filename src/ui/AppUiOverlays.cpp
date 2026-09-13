@@ -36,6 +36,96 @@ std::string KeySettingsHint(const Strings& str, const KeyMap& keys, const char* 
     return str.Format(key, { chord });
 }
 
+// The guide line along the bottom of every overlay panel, and the room it takes.
+//
+// Every panel here used to hand that line one fixed 20 px strip and let the
+// renderer clip whatever stuck out, which held only as long as the font stayed
+// at 13 px. Turn Ctrl++ a few times, or raise `[ui] font_size`, and the shortcut
+// editor's line was cut off partway through - the reported shape of this.
+//
+//   * **The band follows the letters.** It is a container for text, so it is
+//     measured rather than assumed; a container left at a constant while its
+//     contents grow is the mistake Theme::Scale exists to stop. 20 px is now the
+//     floor, so nothing moves at the default size.
+//   * **What does not fit on one line goes on the next.** Nothing here can be
+//     dropped the way the F1 title row drops the build stamp: every piece of it
+//     names a key, and the piece that falls off the end is "Esc: close" - the way
+//     out of a screen that swallows every keystroke while it is up.
+constexpr float kHintMargin = 20.0f;  // 表題と同じ左右の余白
+constexpr float kHintBottom = 6.0f;   // 帯とパネル下端の間
+
+// Where a hint line may break: the run of spaces the string table puts between
+// its pieces. Each piece is a chord and what it does, so a break anywhere else
+// would leave "Ctrl+Enter:" pointing at nothing.
+std::vector<std::string> HintPieces(const std::string& hint) {
+    std::vector<std::string> out;
+    for (size_t i = 0; i < hint.size();) {
+        const size_t sep = hint.find("  ", i);
+        if (sep == std::string::npos) {
+            out.push_back(hint.substr(i));
+            break;
+        }
+        if (sep > i) out.push_back(hint.substr(i, sep - i));
+        i = hint.find_first_not_of(' ', sep);
+        if (i == std::string::npos) break;
+    }
+    if (out.empty()) out.push_back(hint);
+    return out;
+}
+
+// One laid-out hint: the lines as they will be drawn, and how tall the band has
+// to be. Measured once and passed to the painter, because the settings panel
+// sizes itself to its contents and so has to know the cost before it exists.
+struct HintBand {
+    std::vector<std::string> lines;
+    float lineH = 0.0f;
+    float height = 0.0f;  ///< 下端の余白を含めた帯の高さ
+};
+
+HintBand LayoutHint(Renderer& r, const std::string& hint, float panelW, float maxBand) {
+    HintBand band;
+    band.lineH = std::max(20.0f, r.LineHeight(FontRole::UiSmall));
+
+    const float width = std::max(1.0f, panelW - kHintMargin * 2.0f);
+    for (const std::string& piece : HintPieces(hint)) {
+        // Greedy: keep filling the line in hand, and only start a new one when
+        // the next piece would not fit whole. A piece wider than the panel on its
+        // own stays as it is - there is no break inside "Ctrl+Enter: add" that
+        // does not lie about what the key does.
+        if (!band.lines.empty()) {
+            const std::string joined = band.lines.back() + "   " + piece;
+            if (r.MeasureText(joined, FontRole::UiSmall) <= width) {
+                band.lines.back() = joined;
+                continue;
+            }
+        }
+        band.lines.push_back(piece);
+    }
+
+    // Never past what the caller says it can spare, which always keeps a row for
+    // the list: the rows are what the screen is for. A window too small for both
+    // gets the same last resort the F1 sheet takes - leave out what there is no
+    // room for rather than pile it on - but never the first line, since a panel
+    // that swallows every keystroke has to say somewhere how to leave.
+    const float cap = std::max(band.lineH, maxBand - kHintBottom);
+    const size_t fits = static_cast<size_t>(std::max(1.0f, cap / band.lineH));
+    if (band.lines.size() > fits) band.lines.resize(fits);
+    band.height = band.lineH * static_cast<float>(band.lines.size()) + kHintBottom;
+    return band;
+}
+
+// Draws the band at the foot of the panel and answers with its top, which is
+// where the caller's body has to stop.
+float PaintHint(Renderer& r, const Theme& th, const RectF& panel, const HintBand& band) {
+    const float top = panel.b - band.height;
+    for (size_t i = 0; i < band.lines.size(); ++i) {
+        const float y = top + static_cast<float>(i) * band.lineH;
+        const RectF line = { panel.l + kHintMargin, y, panel.r - kHintMargin, y + band.lineH };
+        r.DrawText(band.lines[i], line, th.textDim, FontRole::UiSmall, TextAlign::Left);
+    }
+    return top;
+}
+
 }  // namespace
 
 void AppUi::PaintKeyHelp(Renderer& r, const RectF& area) {
@@ -245,11 +335,14 @@ void AppUi::PaintKeySettings(Renderer& r, const RectF& area) {
                    messageBox, th.textDim.alpha(0.7f), FontRole::UiSmall, TextAlign::Left);
     }
 
-    const RectF footer = { panel.l + 20.0f, panel.b - 26.0f, panel.r - 20.0f, panel.b - 6.0f };
-    r.DrawText(str.Get("ui.key_settings_hint"), footer, th.textDim, FontRole::UiSmall,
-               TextAlign::Left);
+    // What the guide may take is what is left once the list keeps a row: a panel
+    // whose rows have all been pushed out answers nothing.
+    const HintBand hint = LayoutHint(r, str.Get("ui.key_settings_hint"), width,
+                                     panel.b - messageBox.b - th.rowHeight - 8.0f);
+    const float footerTop = PaintHint(r, th, panel, hint);
 
-    const RectF body = { panel.l + 12.0f, messageBox.b + 4.0f, panel.r - 12.0f, footer.t - 4.0f };
+    const RectF body = { panel.l + 12.0f, messageBox.b + 4.0f, panel.r - 12.0f,
+                         std::max(messageBox.b + 5.0f, footerTop - 4.0f) };
     r.FillRect({ body.l, body.t, body.r, body.t + 1.0f }, th.border);
 
     const float rowH = th.rowHeight;
@@ -367,11 +460,19 @@ void AppUi::PaintSettings(Renderer& r, const RectF& area) {
 
     const std::vector<SettingsEditor::Row>& rows = editor.rows();
     const float rowH = th.rowHeight;
-    const float chrome = 38.0f + 20.0f + 8.0f + 26.0f + 12.0f;  // title, note, rule, footer, pad
-    const float wanted = chrome + rowH * static_cast<float>(rows.size());
 
     const float width = std::clamp(area.w() - 48.0f, 200.0f, 560.0f);
-    const float height = std::min(wanted, std::max(120.0f, area.h() - 48.0f));
+    const float room = std::max(120.0f, area.h() - 48.0f);
+    // The foot of the panel is measured, not assumed: the guide line wraps once
+    // the font is large enough, and a panel sized around 26 px of it would take
+    // the difference out of its own rows.
+    const float fixed = 38.0f + 20.0f + 8.0f + 12.0f;  // 表題・注記・罫・余白
+    const HintBand hint = LayoutHint(r, KeySettingsHint(str, app_.keys(), "ui.settings_hint"),
+                                     width, room - fixed - rowH);
+    const float chrome = fixed + hint.height;
+    const float wanted = chrome + rowH * static_cast<float>(rows.size());
+
+    const float height = std::min(wanted, room);
     const float left = std::round(area.center().x - width * 0.5f);
     const float top = std::round(area.center().y - height * 0.5f);
     const RectF panel = { left, top, left + width, top + height };
@@ -389,11 +490,10 @@ void AppUi::PaintSettings(Renderer& r, const RectF& area) {
     r.DrawText(str.Get(app_.standalone() ? "ui.settings_no_save" : "ui.settings_file"), noteBox,
                th.textDim.alpha(0.7f), FontRole::UiSmall, TextAlign::Left);
 
-    const RectF footer = { panel.l + 20.0f, panel.b - 26.0f, panel.r - 20.0f, panel.b - 6.0f };
-    r.DrawText(KeySettingsHint(str, app_.keys(), "ui.settings_hint"), footer, th.textDim,
-               FontRole::UiSmall, TextAlign::Left);
+    const float footerTop = PaintHint(r, th, panel, hint);
 
-    const RectF body = { panel.l + 12.0f, noteBox.b + 4.0f, panel.r - 12.0f, footer.t - 4.0f };
+    const RectF body = { panel.l + 12.0f, noteBox.b + 4.0f, panel.r - 12.0f,
+                         std::max(noteBox.b + 5.0f, footerTop - 4.0f) };
     r.FillRect({ body.l, body.t, body.r, body.t + 1.0f }, th.border);
 
     r.PushClip(body);
@@ -539,10 +639,13 @@ AppUi::PickerFrame AppUi::PaintPickerFrame(Renderer& r, const RectF& area,
     PaintTextField(r, fieldBox.inset(10.0f, 0.0f), *chrome.field, FontRole::Ui, 5.0f,
                    chrome.placeholder, chrome.prefixLen);
 
-    const RectF footer = { panel.l + 20.0f, panel.b - 26.0f, panel.r - 20.0f, panel.b - 6.0f };
-    r.DrawText(chrome.hint, footer, th.textDim, FontRole::UiSmall, TextAlign::Left);
+    // Whatever is left below the field once one row is kept for the list: a
+    // chooser with no room for a choice is not one.
+    const HintBand hint = LayoutHint(r, chrome.hint, width, panel.b - field.b - rowH - 12.0f);
+    const float footerTop = PaintHint(r, th, panel, hint);
 
-    const RectF body = { panel.l + 12.0f, field.b + 8.0f, panel.r - 12.0f, footer.t - 4.0f };
+    const RectF body = { panel.l + 12.0f, field.b + 8.0f, panel.r - 12.0f,
+                         std::max(field.b + 9.0f, footerTop - 4.0f) };
     r.FillRect({ body.l, body.t, body.r, body.t + 1.0f }, th.border);
 
     PickerFrame frame;
