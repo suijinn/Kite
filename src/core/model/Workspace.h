@@ -228,9 +228,26 @@ public:
     std::vector<std::unique_ptr<Tab>> tabs;  ///< 保持しているタブ
     int active = 0;                          ///< アクティブなタブの添字
 
-    float listHeight = 0.0f;  ///< 一覧領域の高さ。UI 層がレイアウトごとに書き込む
-    float rowHeight = 22.0f;  ///< 1 行の高さ。UI 層がレイアウトごとに書き込む
-    int rowsPerPage = 20;     ///< 1 画面分の行数。UI 層がレイアウトごとに書き込む
+    /// @brief UI 層がレイアウトのたびに書き戻す、画面の寸法。
+    ///
+    /// `App` は行の座標を自分では持てない ─ どこに何をどの大きさで描いたかを
+    /// 知っているのは UI 層だけなので、`PageUp`・`EnsureCursorVisible`・
+    /// カーソル行に合わせるコンテキストメニューはここを読む。
+    ///
+    /// **core → ui の逆流はこの 1 つに畳んである。** 平置きの 6 フィールドだった
+    /// ころは、どれが «モデルの状態» でどれが «描いた結果» なのかが並びからは
+    /// 読み取れなかった ─ `Tab::scroll` や `tabScroll` は前者で、ここは後者。
+    /// 一度もレイアウトされていなければ `listArea.empty()` が true。
+    struct Viewport {
+        float listHeight = 0.0f;  ///< 一覧領域の高さ
+        float rowHeight = 22.0f;  ///< 1 行の高さ
+        int rowsPerPage = 20;     ///< 1 画面分の行数
+        int tabRows = 1;          ///< タブバーの総行数
+        int tabRowsPerPage = 1;   ///< タブバーに出ている行数
+        RectF listArea;           ///< 一覧の描画領域（クライアント座標・DIP）
+    };
+
+    Viewport viewport;  ///< 最後に描いたときの寸法。UI 層が書き、App が読む
 
     /// @brief タブバーの先頭に出す行。ホイールで動かした位置を覚える。
     ///
@@ -245,17 +262,6 @@ public:
     /// ということ。**両者が同じ間は tabScroll に触らない** ─ 触ると、ホイールで
     /// 別のタブを見に行った次のフレームに必ず元へ戻る。
     int tabScrollFor = -1;
-
-    int tabRows = 1;         ///< タブバーの総行数。UI 層がレイアウトごとに書き込む
-    int tabRowsPerPage = 1;  ///< タブバーに出ている行数。UI 層がレイアウトごとに書き込む
-
-    /// @brief 一覧の描画領域（クライアント座標・DIP）。UI 層がレイアウトごとに書き込む。
-    ///
-    /// キーボードから出すコンテキストメニューをカーソル行の位置に合わせるために
-    /// 要る。App は行の座標を自分では持てない ─ どこに何を描いたかを知っているのは
-    /// UI 層だけなので、listHeight などと同じくここへ書き戻してもらう。
-    /// 一度もレイアウトされていなければ empty() が true。
-    RectF listArea;
 
     /// @brief アクティブなタブを返す。
     /// @return アクティブなタブ。タブが 1 つも無ければ nullptr
@@ -348,7 +354,18 @@ public:
 
     /// @brief すべてのペインを表示順に返す。
     /// @return ペインへのポインタ列。所有権は移らない
+    /// @note 並びそのものが要る場所（添字で指す、隣を探す）のためにある。
+    ///       ただ舐めるだけなら ForEachPane() ─ そちらは vector を作らない
     std::vector<Pane*> Panes() const;
+
+    /// @brief すべてのペインを表示順にたどる。
+    /// @param[in] f ペインごとに呼ぶもの。`void(Pane&)`
+    /// @note Panes() と違って中間の vector を作らない。1 フレームに何度も通る
+    ///       経路（列挙の回収、監視の張り直し）はこちらを使う
+    template <class F>
+    void ForEachPane(F&& f) const {
+        WalkPanes(root.get(), f);
+    }
 
     /// @brief ペインを保持している葉ノードを探す。
     /// @param[in] p 探すペイン
@@ -388,6 +405,20 @@ public:
     /// @param[in] text Serialize() が出力した文字列
     /// @return 復元したセッション。書式が壊れている場合は nullptr
     static std::unique_ptr<Session> Deserialize(const std::string& name, const std::string& text);
+
+private:
+    // The depth-first walk Panes() is built on, written once so the order the
+    // two of them report cannot drift apart.
+    template <class F>
+    static void WalkPanes(SplitNode* node, F& f) {
+        if (!node) return;
+        if (node->leaf()) {
+            if (node->pane) f(*node->pane);
+            return;
+        }
+        WalkPanes(node->a.get(), f);
+        WalkPanes(node->b.get(), f);
+    }
 };
 
 /// @brief 登録されたブックマーク 1 件。
@@ -435,6 +466,36 @@ public:
     /// @param[in] index アクティブにするセッションの添字。範囲外はクランプする
     /// @note 切り替え時、離れるセッションの非アクティブタブは一覧を解放する
     void ActivateSession(int index);
+
+    /// @brief すべてのセッションのすべてのペインをたどる。
+    /// @param[in] f ペインごとに呼ぶもの。`void(Pane&)`
+    template <class F>
+    void ForEachPane(F&& f) const {
+        for (const std::unique_ptr<Session>& s : sessions) s->ForEachPane(f);
+    }
+
+    /// @brief すべてのセッションのすべてのタブをたどる。
+    /// @param[in] f タブごとに呼ぶもの。`void(Tab&)`
+    /// @note 背面のセッションのタブも含む ─ 一覧を手放していても、トークンも
+    ///       表示設定もそこに在る
+    template <class F>
+    void ForEachTab(F&& f) const {
+        ForEachPane([&f](Pane& pane) {
+            for (const std::unique_ptr<Tab>& t : pane.tabs) f(*t);
+        });
+    }
+
+    /// @brief 実行中の列挙リクエストのトークンでタブを探す。
+    /// @param[in] token 探すトークン。0 は誰とも一致しない
+    /// @return 対応するタブ。見つからなければ nullptr
+    /// @note 届いた一覧の行き先を決めるのはこれ 1 つ。トークンの持ち主が
+    ///       居なければ、その答えは黙って捨ててよい
+    Tab* FindTabByLoadToken(uint64_t token) const;
+
+    /// @brief 画面に出ているタブを返す。
+    /// @return アクティブなセッションの各ペインのアクティブタブ。表示順
+    /// @note 背面のセッションのペインは画面に出ていないので入らない
+    std::vector<Tab*> VisibleTabs() const;
 
     /// @brief セッションの並び順を変える。
     /// @param[in] fromIndex 動かすセッションの添字

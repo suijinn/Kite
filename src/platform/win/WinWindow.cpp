@@ -447,9 +447,13 @@ void WinWindow::Paint() {
         ::SetTimer(hwnd_, kDragDropTimerId, kDragDropDelayMs, nullptr);
     }
 
-    // Keep repainting while a transient status message is on screen.
-    if (!app_->statusMessage().empty() && !app_->statusExpired()) {
-        ::SetTimer(hwnd_, kStatusTimerId, 500, nullptr);
+    // One wake-up, at the deadline - not a poll. The status line needs a frame
+    // at the moment it expires and no frames before it, and SetTimer with the
+    // same id re-arms rather than piling up, so every paint can just say when
+    // the answer changes next. A little past the deadline, since the check is
+    // a strict comparison against the clock.
+    if (const uint64_t left = app_->statusRemainingMs(); left > 0) {
+        ::SetTimer(hwnd_, kStatusTimerId, static_cast<UINT>(left) + 16, nullptr);
     }
 }
 

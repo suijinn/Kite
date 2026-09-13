@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <functional>
 #include <initializer_list>
 #include <string>
 #include <string_view>
@@ -57,8 +58,20 @@ public:
     static std::vector<std::string> AvailableCodes();
 
 private:
+    /// @brief string_view のまま表を引くための透過ハッシュ。
+    ///
+    /// 表示中の全画面が毎フレーム Get() を呼ぶので、引くたびに鍵の std::string を
+    /// 組んでいると 1 フレームで数百回の割り当てになる。`is_transparent` があると
+    /// find() が string_view を受け取れる。
+    struct KeyHash {
+        using is_transparent = void;
+        size_t operator()(std::string_view k) const noexcept {
+            return std::hash<std::string_view>{}(k);
+        }
+    };
+
     std::string code_;
-    std::unordered_map<std::string, std::string> map_;
+    std::unordered_map<std::string, std::string, KeyHash, std::equal_to<>> map_;
 };
 
 }  // namespace kite

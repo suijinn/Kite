@@ -31,7 +31,7 @@ D2DRenderer::~D2DRenderer() {
 bool D2DRenderer::Initialize(HWND hwnd, const Theme& theme, float dpi) {
     hwnd_ = hwnd;
     dpi_ = dpi;
-    theme_ = theme;
+    fonts_ = FontSpecOf(theme);
 
     D2D1_FACTORY_OPTIONS options{};
     if (FAILED(::D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory1),
@@ -47,6 +47,10 @@ bool D2DRenderer::Initialize(HWND hwnd, const Theme& theme, float dpi) {
     // Device and swap chain are created on the first frame, once the window is
     // actually visible.
     return true;
+}
+
+D2DRenderer::FontSpec D2DRenderer::FontSpecOf(const Theme& theme) {
+    return { theme.fontFamily, theme.monoFamily, theme.fontSize, theme.uiScale };
 }
 
 void D2DRenderer::CreateTextFormats(const Theme& theme) {
@@ -211,15 +215,14 @@ void D2DRenderer::ReleaseDeviceResources() {
 }
 
 void D2DRenderer::UpdateTheme(const Theme& theme, float dpi) {
-    const bool fontsChanged = theme.fontFamily != theme_.fontFamily ||
-                              theme.monoFamily != theme_.monoFamily ||
-                              theme.fontSize != theme_.fontSize || theme.uiScale != theme_.uiScale;
-    theme_ = theme;
+    const FontSpec fonts = FontSpecOf(theme);
+    const bool fontsChanged = !(fonts == fonts_);
+    fonts_ = fonts;
     if (dpi != dpi_) {
         dpi_ = dpi;
         if (context_) BindBackBuffer();
     }
-    if (fontsChanged) CreateTextFormats(theme_);
+    if (fontsChanged) CreateTextFormats(theme);
 }
 
 void D2DRenderer::Resize(UINT pixelWidth, UINT pixelHeight) {
@@ -403,11 +406,17 @@ void D2DRenderer::DrawText(std::string_view utf8, const RectF& r, const Color& c
 float D2DRenderer::MeasureText(std::string_view utf8, ui::FontRole role) {
     if (utf8.empty()) return 0.0f;
     const size_t index = FormatIndex(role);
-    std::unordered_map<std::string, float>& cache = measureCache_[index];
+    MeasureCache& cache = measureCache_[index];
 
     const std::string key(utf8);
-    auto it = cache.find(key);
-    if (it != cache.end()) return it->second;
+    if (auto it = cache.fresh.find(key); it != cache.fresh.end()) return it->second;
+    // Found in the older half: it is in use again, so it moves back across.
+    if (auto it = cache.stale.find(key); it != cache.stale.end()) {
+        const float width = it->second;
+        cache.stale.erase(it);
+        cache.fresh.emplace(key, width);
+        return width;
+    }
 
     float width = 0.0f;
     if (IDWriteTextFormat* format = FormatFor(role)) {
@@ -425,8 +434,13 @@ float D2DRenderer::MeasureText(std::string_view utf8, ui::FontRole role) {
     }
 
     // Bounded so a folder full of pathological names cannot grow this forever.
-    if (cache.size() > 4096) cache.clear();
-    cache.emplace(key, width);
+    // The full half is retired rather than thrown away, so nothing on screen is
+    // ever measured twice in a row just because the cache happened to fill.
+    if (cache.fresh.size() > 4096) {
+        cache.stale = std::move(cache.fresh);
+        cache.fresh.clear();
+    }
+    cache.fresh.emplace(key, width);
     return width;
 }
 

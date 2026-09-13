@@ -124,8 +124,10 @@ add_library(kite_core STATIC
     src/core/app/PlacePicker.cpp
     src/core/app/CommandPalette.cpp
     src/core/app/ConfigDir.cpp
+    src/core/app/FolderSizes.cpp
     src/core/app/IconProvider.cpp
     src/core/app/PickerList.cpp
+    src/core/app/Searching.cpp
     src/core/app/SettingsEditor.cpp
     src/core/app/UndoStack.cpp
     src/core/base/Format.cpp
@@ -315,6 +317,7 @@ if(KITE_BUILD_TESTS)
         tests/test_vfolder.cpp
         tests/test_search.cpp
         tests/test_foldersize.cpp
+        tests/test_jobqueue.cpp
     )
     target_link_libraries(kite_tests PRIVATE kite_core)
 
@@ -322,7 +325,7 @@ if(KITE_BUILD_TESTS)
     set(KITE_TEST_SUITES
         utf8 path ini format strings keymap keyeditor settings pathcomplete textfield typeahead theme columns tab workspace session
         app appui drop iconcache hostproto config undo placepicker palette vfolder fileops search
-        foldersize)
+        foldersize jobqueue)
 
     foreach(suite IN LISTS KITE_TEST_SUITES)
         add_test(NAME ${suite} COMMAND kite_tests --filter ${suite}.)

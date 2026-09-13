@@ -246,7 +246,7 @@ void App::LoadConfig() {
     // 既定は «自動»。off にすると、この機能が在ること自体が設定画面を開くまで
     // 誰にも伝わらない（書庫を開く既定と同じ判断）。自動でも歩き始めるのは
     // 画面に出ている行と、ローカルの固定ディスクだけ。
-    folderSizeMode_ = FolderSizeModeFromName(settings_.GetStr("ui", "folder_sizes", "auto"));
+    folderSizes_.SetMode(FolderSizeModeFromName(settings_.GetStr("ui", "folder_sizes", "auto")));
 
     defaultView_.showHidden = settings_.GetBool("view", "show_hidden", false);
     defaultView_.dirsFirst = settings_.GetBool("view", "dirs_first", true);
@@ -305,6 +305,9 @@ void App::LoadConfig() {
 // second step - the language toggle used to - silently drops every line the user
 // translated themselves.
 void App::LoadLanguage() {
+    // Every label on the F1 sheet comes out of the table this is about to
+    // replace, so the sheet's copy is stale from here on.
+    keyHelpStale_ = true;
     std::string code = language_;
     if (code == "auto" || code.empty()) code = plat::PreferredLanguage();
     strings_.Load(code);
@@ -357,7 +360,6 @@ bool App::SetColumnWidth(int index, float width) {
     if (!columns_.SetWidth(index, factor > 0.0f ? width / factor : width)) return false;
     RebuildColumns();
     dirty_ = true;
-    host_.Invalidate();
     return true;
 }
 
@@ -380,7 +382,6 @@ bool App::SetTabBarWidth(float width) {
     tabBarWidth_ = wanted;
     ApplyTheme();
     dirty_ = true;
-    host_.Invalidate();
     return true;
 }
 
@@ -399,7 +400,6 @@ bool App::MoveColumn(int from, int to) {
     if (!columns_.Move(from, to)) return false;
     RebuildColumns();
     dirty_ = true;
-    host_.Invalidate();
     return true;
 }
 
@@ -407,7 +407,6 @@ void App::SetColumnVisible(SortKey id, bool visible) {
     if (!columns_.SetVisible(id, visible)) return;
     RebuildColumns();
     dirty_ = true;
-    host_.Invalidate();
 }
 
 void App::SetFontScale(float scale) {
@@ -423,7 +422,6 @@ void App::SetFontScale(float scale) {
     SetStatus(strings_.Format("ui.font_scale",
                               { std::to_string(static_cast<int>(fontScale_ * 100.0f + 0.5f)) }));
     dirty_ = true;
-    host_.Invalidate();
 }
 
 bool App::sidebarCollapsed(SidebarSection section) const {
@@ -436,7 +434,6 @@ void App::ToggleSidebarSection(SidebarSection section) {
     bool& collapsed = sidebarCollapsed_[static_cast<size_t>(section)];
     collapsed = !collapsed;
     dirty_ = true;
-    host_.Invalidate();
 }
 
 // Written out the moment anything changes rather than when the screen closes: a
@@ -452,7 +449,6 @@ void App::SaveKeysIfChanged() {
 void App::RemoveKeyBinding(int index) {
     keyEditor_.RemoveChord(index, keymap_, strings_);
     SaveKeysIfChanged();
-    host_.Invalidate();
 }
 
 bool App::WriteKeysFile() {
@@ -497,7 +493,7 @@ SettingsValues App::CollectSettings() const {
     v.Set(SettingId::Sidebar, sidebarVisible_ ? 1 : 0);
     v.Set(SettingId::ShellIcons, shellIcons_ ? 1 : 0);
     v.Set(SettingId::OpenArchives, openArchives_ ? 1 : 0);
-    v.Set(SettingId::FolderSizes, static_cast<int>(folderSizeMode_));
+    v.Set(SettingId::FolderSizes, static_cast<int>(folderSizes_.mode()));
     v.Set(SettingId::TabBarPos, tabBarPosition_ == TabBarPosition::Left ? 1 : 0);
     v.Set(SettingId::NewTabPos, newTabPosition_ == NewTabPosition::AfterCurrent ? 1 : 0);
     v.Set(SettingId::NewTabHidden, defaultView_.showHidden ? 1 : 0);
@@ -551,15 +547,15 @@ void App::ApplySetting(SettingId id, const SettingsValues& values) {
             openArchives_ = (index != 0);
             break;
         case SettingId::FolderSizes:
-            folderSizeMode_ = static_cast<FolderSizeMode>(
-                std::clamp(index, 0, static_cast<int>(FolderSizeMode::Auto)));
+            folderSizes_.SetMode(static_cast<FolderSizeMode>(
+                std::clamp(index, 0, static_cast<int>(FolderSizeMode::Auto))));
             // 切ったなら覚えている値も捨てる ─ 残しておくと、数えない設定なのに
             // 数えた値が並ぶ（そして二度と新しくならない）。
-            if (folderSizeMode_ == FolderSizeMode::Off) {
-                StopFolderSizes();
-                sizes_.Clear();
+            if (folderSizes_.mode() == FolderSizeMode::Off) {
+                folderSizes_.Stop();
+                folderSizes_.cache().Clear();
             } else if (Tab* t = workspace_.focusedTab()) {
-                SyncFolderSizesForSort(*t);
+                folderSizes_.SyncForSort(*t);
             }
             break;
         case SettingId::TabBarPos:
@@ -591,7 +587,6 @@ void App::ApplySetting(SettingId id, const SettingsValues& values) {
             return;
     }
     dirty_ = true;
-    host_.Invalidate();
 }
 
 void App::ApplyPendingSetting() {
@@ -645,7 +640,7 @@ bool App::SaveSettings() {
     settings_.SetFloat("ui", "font_scale", fontScale_);
     settings_.SetBool("ui", "shell_icons", shellIcons_);
     settings_.SetBool("ui", "open_archives", openArchives_);
-    settings_.Set("ui", "folder_sizes", FolderSizeModeName(folderSizeMode_));
+    settings_.Set("ui", "folder_sizes", FolderSizeModeName(folderSizes_.mode()));
     settings_.Set("ui", "new_tab_position", NewTabPositionName(newTabPosition_));
     settings_.Set("ui", "tab_bar_position", TabBarPositionName(tabBarPosition_));
     settings_.SetFloat("ui", "tab_bar_width", tabBarWidth_);
@@ -731,11 +726,7 @@ void App::LoadWorkspace(const std::vector<std::string>& startPaths) {
                                    static_cast<int>(workspace_.sessions.size()) - 1);
 
     // Seed every tab's view state from the saved defaults.
-    for (const std::unique_ptr<Session>& s : workspace_.sessions) {
-        for (Pane* p : s->Panes()) {
-            for (std::unique_ptr<Tab>& t : p->tabs) t->view = defaultView_;
-        }
-    }
+    workspace_.ForEachTab([&](Tab& t) { t.view = defaultView_; });
 
     // Command-line paths open as extra tabs in the focused pane.
     if (firstExtra < startPaths.size()) {

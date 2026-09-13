@@ -20,17 +20,14 @@
 #pragma once
 
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
-#include "core/fs/DirectoryLoader.h"
 #include "core/fs/FileSystem.h"
+#include "core/fs/JobQueue.h"
 
 namespace kite::fs {
 
@@ -71,6 +68,16 @@ enum class SizeState : uint8_t {
     /// やめる道が無いのと同じ。もう一度数えるのは、頼まれたとき
     /// （`Cmd::CountFolderSize`）か、その木が変わったとき（`F5`・ファイル操作）。
     Stopped,
+
+    /// 自動では数えない場所（ネットワーク共有・USB・クラウドのプレースホルダ）。
+    ///
+    /// **列の見た目は `Unknown` と同じ `<DIR>`。** 分けてあるのは、そこが
+    /// «まだ訊いていない» ではなく «訊かないと決めた» だからで、`Unknown` の
+    /// ままにすると描画のたびにドライブ一覧を走査し直すことになる ─ 1 行につき
+    /// 毎フレーム。頼まれれば（`Cmd::CountFolderSizes`）数えるのは `Stopped` と
+    /// 同じで、ドライブ一覧が変わったとき（`RefreshRoots`）と設定を変えたときに
+    /// 捨てる。
+    Skipped,
 };
 
 /// @brief 1 つのフォルダについて数えた結果。
@@ -151,6 +158,17 @@ public:
     ///       捨てたはずの値が «数え終わった» 顔で戻ってくる
     bool Apply(const FolderSizeUpdate& update);
 
+    /// @brief 自動では数えない印を立てる。
+    /// @param[in] path 対象のフォルダ
+    /// @note 描画から毎フレーム «この場所は自動で数えてよいか» を訊き直すのを
+    ///       止めるためだけにある。答えは同じなので、表に 1 回書いておけば済む
+    void Skip(const std::string& path);
+
+    /// @brief «自動では数えない» 印を全部捨てる。
+    /// @note ドライブ一覧が変わった（`RefreshRoots`）、設定が変わった ─ どちらも
+    ///       «訊かないと決めた» の根拠が変わったということ。数え終わった値は残す
+    void ForgetSkipped();
+
     /// @brief 数え中のものを «やめた» 印に変える。
     /// @note やめたとき（`Cmd::StopFolderSizes`）に呼ぶ。途中経過は捨てる ─
     ///       止めた値が «数え終わった» 値と同じ顔で残ると、どちらなのかを画面が
@@ -212,13 +230,13 @@ private:
 /// から ─ 子ごとに歩けば、1 つずつ «確定» が増えていく。
 class FolderSizeJob {
 public:
-    /// @brief ワーカースレッドを起動する。
+    /// @brief 数えるワーカーを用意する。**スレッドは最初の依頼まで作らない。**
     /// @param[in] fsys 列挙に使うファイルシステム。本オブジェクトより長生きすること
     /// @param[in] wake 完了通知先。本オブジェクトより長生きすること
     /// @param[in] workers ワーカースレッド数。1 未満を渡した場合は 1 に丸める
     FolderSizeJob(IFileSystem& fsys, IWakeSink& wake, int workers = kFolderSizeWorkers);
 
-    /// @brief ワーカースレッドの停止を待って破棄する。
+    /// @brief 歩きを打ち切らせてからワーカーを止め、破棄する。
     ~FolderSizeJob();
 
     FolderSizeJob(const FolderSizeJob&) = delete;
@@ -247,7 +265,7 @@ public:
 
     /// @brief 数えているもの・待っているものがあるかを返す。
     /// @return あれば true
-    bool busy() const { return pending_.load(std::memory_order_relaxed) > 0; }
+    bool busy() const { return queue_.busy(); }
 
 private:
     struct Job {
@@ -255,24 +273,21 @@ private:
         std::string path;
     };
 
-    void WorkerMain();
-    void Count(const Job& job);
-    void Publish(FolderSizeUpdate update);
+    using Queue = JobQueue<Job, FolderSizeUpdate>;
+
+    void Count(const Job& job, const Queue::Emit& emit);
 
     IFileSystem& fs_;
-    IWakeSink& wake_;
 
-    std::mutex mutex_;
-    std::condition_variable cv_;
-    std::deque<Job> queue_;
     // 待ち行列と «今歩いているもの» の両方。同じパスを 2 度歩かないためだけに持つ。
+    // 骨格の待ち行列とは別の錠で守る ─ 骨格が守るのは «依頼» で、こちらが守るのは
+    // «その場所はもう誰かが数えている» という約束で、寿命が違う（歩き終わった後に
+    // 外れる）。
+    mutable std::mutex claimMutex_;
     std::vector<std::string> claimed_;
-    std::vector<FolderSizeUpdate> done_;
-    bool stop_ = false;
 
     std::atomic<uint64_t> epoch_{ 1 };
-    std::atomic<int> pending_{ 0 };
-    std::vector<std::thread> threads_;
+    Queue queue_;
 };
 
 }  // namespace kite::fs

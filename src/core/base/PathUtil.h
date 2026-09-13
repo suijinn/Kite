@@ -39,6 +39,14 @@ std::string Parent(std::string_view p);
 /// @return 末尾の名前。"C:\\" のようなルートに対してはルート自身
 std::string FileName(std::string_view p);
 
+/// @brief 拡張子を `p` の中を指す view として返す。
+/// @param[in] p 対象のパス
+/// @return ドットを含まない拡張子。**小文字化しない**（書かれたままの綴り）。
+///         無い場合や先頭ドットのみの名前（".gitignore" など）では空
+/// @note 並べ替えの比較関数と一覧の描画から項目ごとに呼ばれるので、写しを作らない。
+///       Extension() はこの上に乗っている。`p` より長生きさせてはならない
+std::string_view ExtensionView(std::string_view p);
+
 /// @brief 拡張子を小文字で返す。
 /// @param[in] p 対象のパス
 /// @return ドットを含まない小文字の拡張子。無い場合や先頭ドットのみの

@@ -24,15 +24,12 @@
 #pragma once
 
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
-#include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
 
-#include "core/fs/DirectoryLoader.h"
 #include "core/fs/FileSystem.h"
+#include "core/fs/JobQueue.h"
 
 namespace kite::fs {
 
@@ -67,12 +64,12 @@ struct SearchBatch {
 /// @brief 再帰検索を非同期に行うワーカー。
 class SearchJob {
 public:
-    /// @brief ワーカースレッドを起動する。
+    /// @brief 検索のワーカーを用意する。**スレッドは最初の検索まで作らない。**
     /// @param[in] fsys 列挙に使うファイルシステム。本オブジェクトより長生きすること
     /// @param[in] wake 完了通知先。本オブジェクトより長生きすること
     SearchJob(IFileSystem& fsys, IWakeSink& wake);
 
-    /// @brief ワーカースレッドの停止を待って破棄する。
+    /// @brief 歩きを打ち切らせてからワーカーを止め、破棄する。
     ~SearchJob();
 
     SearchJob(const SearchJob&) = delete;
@@ -98,7 +95,9 @@ public:
 
     /// @brief まだ歩いている最中かを返す。
     /// @return 歩いていれば true
-    bool busy() const { return running_.load(std::memory_order_relaxed); }
+    /// @note 待ち行列の長さではない ─ 一度に 1 本しか歩かないので、«まだ歩いて
+    ///       いるか» と «待っているものがあるか» は同じことになる
+    bool busy() const { return queue_.busy(); }
 
 private:
     struct Job {
@@ -107,26 +106,19 @@ private:
         std::string needle;  // 小文字に畳んだ問い
     };
 
-    void WorkerMain();
-    void Walk(const Job& job);
-    void Publish(uint64_t token, std::vector<Entry>& batch, bool done, bool truncated);
+    using Queue = JobQueue<Job, SearchBatch>;
+
+    void Walk(const Job& job, const Queue::Emit& emit);
+    void Publish(const Queue::Emit& emit, uint64_t token, std::vector<Entry>& batch, bool done,
+                 bool truncated);
 
     IFileSystem& fs_;
-    IWakeSink& wake_;
-
-    std::mutex mutex_;
-    std::condition_variable cv_;
-    Job pending_;
-    bool hasPending_ = false;
-    bool stop_ = false;
-    std::vector<SearchBatch> done_;
 
     // 「今どれを歩いてよいか」。ワーカーはフォルダの切れ目ごとにこれと自分の
     // トークンを比べる ─ 食い違っていれば、その歩きはもう誰も見ていない。
     std::atomic<uint64_t> active_{ 0 };
     std::atomic<uint64_t> nextToken_{ 1 };
-    std::atomic<bool> running_{ false };
-    std::thread thread_;
+    Queue queue_;
 };
 
 }  // namespace kite::fs

@@ -12,6 +12,7 @@
 
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "core/app/App.h"
@@ -137,26 +138,102 @@ private:
         PaletteRow,
     };
 
-    /// 左ボタンが今おこなっている操作。
-    enum class Drag : uint8_t {
-        None,
-        Splitter,
-        PendingTab,   // pressed on a tab, not yet moved far enough
-        Tab,          // reordering / relocating a tab
-        PendingFile,  // pressed on a row, may become an OS file drag
-        Marquee,      // pressed on empty list space, sweeping a selection band
-        PendingSidebar,  // pressed on a sidebar item, not yet moved far enough
-        Sidebar,         // reordering within one sidebar section
-        PendingSection,  // pressed on a sidebar heading, not yet moved far enough
-        Section,         // reordering the sidebar sections themselves
-        PendingSession,  // pressed on a session chip, not yet moved far enough
-        Session,         // reordering the session chips
-        PendingColumn,   // pressed on a column heading; a click here sorts
-        Column,          // reordering the columns
-        ColumnWidth,     // dragging a column edge
-        TabBarWidth,     // dragging the vertical tab bar's edge
+    /// ペインの分割線を掴んでいる。
+    struct SplitterDrag {
+        SplitNode* node = nullptr;  ///< 掴んでいる分割
+        float origin = 0.0f;        ///< 押した位置。分割の向きの軸だけ
+        float ratio = 0.5f;         ///< 押した時点の比
     };
 
+    /// タブを掴んでいる。押しただけの間は `started` が false。
+    struct TabDrag {
+        Pane* pane = nullptr;   ///< 掴んだタブのペイン
+        int index = -1;         ///< 掴んだタブの位置
+        bool started = false;   ///< 6 px 動いて本当のドラッグになったか
+        Pane* dropPane = nullptr;  ///< 落とし先のペイン。無ければ nullptr
+        int dropIndex = -1;        ///< 落とし先の位置
+        RectF marker{};            ///< 挿入位置の印
+        /// 窓の外まで運ばれた ─ 離せば新しいウィンドウ。**当たり判定ではなく
+        /// 描画面の外側で測る**（バーの上も «当たりが無い» だが、外ではない）。
+        bool outside = false;
+    };
+
+    /// 行を押した ─ 動かせば OS のファイルドラッグになる。
+    ///
+    /// 本番になった瞬間に OS へ渡して自分の状態は捨てるので、`started` に当たる
+    /// ものは要らない（`BeginFileDrag` は終わるまで戻らない）。
+    struct FileDrag {};
+
+    /// 一覧の余白から選択の枠を引いている。
+    ///
+    /// 引き始めた点は画面座標ではなく **一覧の中の位置**（行 0 の上端からの画素数）
+    /// で覚える ─ ホバーが行番号を覚えないのと同じ理由で、ガラスの上の一点が何を
+    /// 指すかは一覧が動けば変わる。
+    struct MarqueeDrag {
+        Pane* pane = nullptr;
+        Tab* tab = nullptr;
+        float anchorX = 0.0f;  ///< 引き始めた x（画面座標）
+        float anchorY = 0.0f;  ///< 引き始めた y（一覧の中の位置）
+        float x = 0.0f;        ///< 今の x（画面座標）
+        float y = 0.0f;        ///< 今の y（画面座標）
+        std::vector<uint8_t> base;  ///< 引き始めたときの印。毎フレームここから引き直す
+    };
+
+    /// 並べ替えの相手。4 種とも «提案 → 印 → 確定» の 3 段が同じ形をしている。
+    enum class ReorderKind : uint8_t {
+        Sidebar,  ///< 1 つの区画の中の項目
+        Section,  ///< サイドバーの区画そのもの
+        Session,  ///< セッションのチップ
+        Column,   ///< 一覧の列
+    };
+
+    /// 並べ替えのドラッグ。押しただけの間は `started` が false。
+    struct ReorderDrag {
+        ReorderKind kind = ReorderKind::Sidebar;
+        SidebarSection section = SidebarSection::Count;  ///< Sidebar / Section のみ
+        int index = -1;        ///< 掴んだものの位置
+        bool started = false;  ///< 6 px 動いて本当のドラッグになったか
+        int dropIndex = -1;    ///< 落とし先。提案が無ければ -1
+        RectF marker{};        ///< 挿入位置の印
+
+        /// 押しただけで離したときに開くフォルダ（Sidebar のみ）。
+        std::string pendingPath;
+        bool pendingNewTab = false;
+    };
+
+    /// 列の縁を掴んで幅を変えている。右端は動かないので、幅は «右端 - ポインタ»。
+    struct ColumnWidthDrag {
+        int index = -1;
+        float right = 0.0f;
+    };
+
+    /// 縦置きタブバーの右の縁を掴んで幅を変えている。
+    ///
+    /// 上限を控えるのは、レイアウトが幅をペインの半分で止めるため ─ 控えずに
+    /// 渡すと、画面のバーはもう伸びないのに覚えている幅だけが増える。
+    struct TabBarWidthDrag {
+        float left = 0.0f;
+        float max = 0.0f;
+    };
+
+    /// 左ボタンが今おこなっている操作 ─ **1 つだけ**。
+    ///
+    /// 種別ごとのフィールドを平置きしていたころは、`CancelDrag` がそれを 1 つずつ
+    /// 初期値へ戻す列で、フィールドを足すたびに抜けた。型にしてあれば `drag_ = {}`
+    /// で全部が消える。
+    using DragWhat = std::variant<std::monostate, SplitterDrag, TabDrag, FileDrag, MarqueeDrag,
+                                  ReorderDrag, ColumnWidthDrag, TabBarWidthDrag>;
+
+    /// 今のドラッグと、それが始まった点。
+    struct DragState {
+        /// 押した場所。«6 px 動いたら本番» を測る相手で、どの種別にも共通。
+        PointF start{};
+        DragWhat what{};
+    };
+
+    /// 当たり判定 1 つぶん。**文字列を持たない** ─ 毎フレーム全部を積み直すので、
+    /// 行ごとにパスを写すとサイドバーやパンくずの行数ぶんの割り当てが乗る。
+    /// パスの要る 2 種（サイドバーの行・パンくず）は添字から引き直す（PathIn）。
     struct Region {
         RectF rect;
         Hit kind = Hit::None;
@@ -164,14 +241,21 @@ private:
         SplitNode* node = nullptr;
         int index = 0;
         SidebarSection section = SidebarSection::Count;  ///< サイドバーの行のみ
-        std::string path;
     };
 
     void Add(const RectF& r, Hit kind, int index = 0, Pane* pane = nullptr,
-             SplitNode* node = nullptr, std::string path = {});
-    void AddSidebar(const RectF& r, Hit kind, SidebarSection section, int index,
-                    std::string path = {});
+             SplitNode* node = nullptr);
+    void AddSidebar(const RectF& r, Hit kind, SidebarSection section, int index);
     const Region* Pick(float x, float y) const;
+
+    // The path a region points at, for the two kinds that point at one. Looked
+    // up from the index rather than carried, so Region stays a POD. By value:
+    // this is asked once per click, never per row per frame.
+    std::string PathIn(const Region* region) const;
+
+    // The breadcrumb trail of a tab, deepest last - the paths only. PaintPathBar
+    // labels them; a click resolves the one it hit back through this.
+    static std::vector<std::string> CrumbPaths(const Tab& tab);
 
     bool PointerOver(const RectF& box) const;
     bool OutsideWindow(float x, float y) const;
@@ -321,12 +405,33 @@ private:
     std::string DropTargetIn(const Region* region) const;
 
     bool HandleListClick(const Region& region, const MouseEvent& e);
+
+    /// @brief ボタンを押したときの振り分け。
+    /// @param[in] e 処理するイベント
+    /// @return 消費したら true
+    bool OnPress(const MouseEvent& e);
+
+    /// @brief ポインタが動いたときの振り分け。
+    /// @param[in] e 処理するイベント
+    /// @param[in,out] redraw 入口の番人。何も変わらなかったときだけ降ろす
+    /// @return 消費したら true
+    /// @note 押しただけのドラッグが本番になるのはここ 1 か所
+    bool OnDrag(const MouseEvent& e, Redraw& redraw);
+
+    /// @brief ボタンを離したときの振り分け。
+    /// @param[in] e 処理するイベント
+    /// @return 消費したら true
+    bool OnRelease(const MouseEvent& e);
+
+    /// @brief ホイールの振り分け。
+    /// @param[in] e 処理するイベント
+    /// @return 消費したら true
+    bool OnWheel(const MouseEvent& e);
     void BeginMarquee(Pane* pane, const MouseEvent& e);
     void UpdateMarquee(float x, float y);
     void ScrollPane(Pane* pane, float deltaPixels);
 
     bool ResolveTabDrop(float x, float y, Pane** outPane, int* outIndex) const;
-    void FinishTabDrag();
     /// 1 ペインに置いた列 1 つ。見出しを描くときも行を描くときも同じ位置を使う。
     struct PlacedColumn {
         SortKey id = SortKey::Name;  ///< どの列か
@@ -351,20 +456,39 @@ private:
     RectF TabBarRect(const Pane* pane) const;
 
     bool ResolveColumnDrop(float x, float y, int* outIndex, RectF* outMarker) const;
-    void FinishColumnDrag();
 
     /// @brief その列で並べ替える。
     /// @param[in] index App::columns() への添字。範囲外なら何もしない
     /// @note 列の識別子は並べ替えの基準そのものなので、表を 1 つ引くだけで済む
     void SortByColumn(int index);
     bool ResolveSessionDrop(float x, float y, int* outIndex, RectF* outMarker) const;
-    void FinishSessionDrag();
     bool ResolveSidebarDrop(float x, float y, int* outIndex, RectF* outMarker) const;
-    void FinishSidebarDrag();
     RectF SectionBlock(SidebarSection section) const;
     bool ResolveSectionDrop(float x, float y, int* outIndex, RectF* outMarker) const;
-    void FinishSectionDrag();
+
+    /// @brief 並べ替えのドラッグが今どの位置を求めているかを引き直す。
+    /// @param[in] drag 対象のドラッグ。落とし先と印を書き換える
+    /// @param[in] x ポインタの X
+    /// @param[in] y ポインタの Y
+    /// @note 4 種とも同じ 3 段 ─ 提案（Resolve*）→ 印 → 確定（FinishReorder）─ を
+    ///       通るので、種別で表を引くだけで済む。自分の行から外れたところでは
+    ///       何も提案しない（落とし先が -1 になる）
+    void ProposeReorder(ReorderDrag& drag, float x, float y);
+
+    /// @brief 並べ替えのドラッグを確定してドラッグを畳む。
+    /// @param[in] drag 対象のドラッグ
+    /// @note 落とし先が無ければ順序は変わらない ─ 提案しなかった場所で離すのは
+    ///       «やめた» と同じ
+    void FinishReorder(const ReorderDrag& drag);
+
+    void FinishTabDrag(const TabDrag& drag);
     void CancelDrag();
+
+    /// @brief ホバーの強調を止めるドラッグかを返す。
+    /// @return 光らせてはいけない間なら true
+    /// @note 分割線・タブ・枠・並べ替え（列を除く）・タブバーの幅 ─ どれも
+    ///       «通りすがった行が光ると掴んでいるものの行き先が読めない» が理由
+    bool DragHidesHover() const;
 
     App& app_;
 
@@ -393,81 +517,15 @@ private:
     // it, and a drag cannot start before a frame has been painted.
     SizeF surface_{};
 
-    Drag drag_ = Drag::None;
-    float dragStartX_ = 0.0f;
-    float dragStartY_ = 0.0f;
+    DragState drag_{};
 
     // A press on a row that was already marked keeps the marks - the press may
     // be the start of a drag, and a drag carries the selection - so dropping
     // them waits for the release that turns out to be a plain click.
+    //
+    // Not part of DragState: it is not what is being dragged, it is a promise
+    // about what letting go means.
     bool pendingUnmark_ = false;
-
-    SplitNode* dragSplitter_ = nullptr;
-    float dragOrigin_ = 0.0f;
-    float dragRatio_ = 0.5f;
-
-    // Where the band started, as a place in the listing (pixels from the top of
-    // row 0) rather than a place on the screen. Same reason the hover keeps no
-    // row index: what a point on the glass means changes when the list moves.
-    Pane* marqueePane_ = nullptr;
-    Tab* marqueeTab_ = nullptr;
-    float marqueeAnchorX_ = 0.0f;
-    float marqueeAnchorY_ = 0.0f;
-    float marqueeX_ = 0.0f;
-    float marqueeY_ = 0.0f;
-    std::vector<uint8_t> marqueeBase_;  // marks as they were when the sweep began
-
-    // The sidebar row under the button, and where letting go would put it.
-    // Opening it waits for the release: navigating on the press would mean
-    // every reorder also left the folder the user was reordering from.
-    SidebarSection dragSidebarSection_ = SidebarSection::Count;
-    int dragSidebarIndex_ = -1;
-    int dropSidebarIndex_ = -1;
-    RectF dropSidebarMarker_{};
-    std::string pendingSidebarPath_;
-    bool pendingSidebarNewTab_ = false;
-
-    // A heading being carried moves its whole block - the heading and every row
-    // under it. Folding it waits for the release, for the same reason opening a
-    // folder does: the press cannot know yet which of the two it is.
-    SidebarSection dragSection_ = SidebarSection::Count;
-    int dragSectionIndex_ = -1;
-    int dropSectionIndex_ = -1;
-    RectF dropSectionMarker_{};
-
-    // The chip being carried along the session bar, and the slot letting go
-    // would put it in. The press activates that session (as a plain click always
-    // has), so the bar keeps scrolling to the chip under the pointer.
-    int dragSessionIndex_ = -1;
-    int dropSessionIndex_ = -1;
-    RectF dropSessionMarker_{};
-
-    // 掴んでいる見出しと、離したときに入る位置。押しただけなら並べ替えではなく
-    // 並べ替えの基準の切り替えなので、どちらなのかは離すまで決まらない。
-    int dragColumnIndex_ = -1;
-    int dropColumnIndex_ = -1;
-    RectF dropColumnMarker_{};
-    // 幅を変えている列と、その列の右端。右端はドラッグの間動かない（右の列は
-    // 何も変わらない）ので、幅は «右端 - ポインタ» で毎フレーム出せる。
-    int resizeColumnIndex_ = -1;
-    float resizeColumnRight_ = 0.0f;
-    // 縦置きタブバーの幅を変えている間の 2 つ。掴んでいるのは右の縁で、左端は
-    // ドラッグの間動かない（バーはペインの左端から始まる）ので、幅は
-    // «ポインタ - 左端» で出る ─ 列の縁と左右が逆なだけで同じ話。
-    // 上限をここに控えるのは、レイアウトが幅をペインの半分で止めるため。
-    // 控えずに渡すと、ポインタだけが先へ進んで掴んだ線が指から離れる。
-    float resizeTabBarLeft_ = 0.0f;
-    float resizeTabBarMax_ = 0.0f;
-
-    Pane* dragTabPane_ = nullptr;
-    int dragTabIndex_ = -1;
-    Pane* dropTabPane_ = nullptr;
-    int dropTabIndex_ = -1;
-    RectF dropTabMarker_{};
-    // Carried past the edge of the window: letting go out there asks for a
-    // window of its own. Measured against the surface, not the hit list - "no
-    // region here" also happens over the bars, and those are not outside.
-    bool dropTabOutside_ = false;
 
     bool dropActive_ = false;
     RectF dropHighlight_{};

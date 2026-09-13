@@ -225,4 +225,35 @@ public:
     virtual bool BeginFileDrag(const std::vector<std::string>& paths) = 0;
 };
 
+/// @brief スコープを抜けるときに再描画を頼む番人。
+///
+/// **再描画の要求は入口で 1 回。** 「入力を受け取った」「ワーカーの結果を回収
+/// した」は、どちらも必ず何かを変えたとみなしてよい ─ 打鍵 1 つに対して深いほう
+/// で 100 か所が思い出して呼ぶ形は、1 か所抜けた日に «次の無関係な打鍵まで画面が
+/// 変わらない» という不具合を生む（CLAUDE.md「App::SetStatus は自分で再描画を
+/// 要求する」の罠は、まさにその形で報告された）。
+///
+/// 例外は「動かしただけで何も変わらなかったマウス移動」だけで、そこは cancel()
+/// で降りる ─ 1 ピクセルごとに頼むと、動かしている間ずっと全面再描画になる。
+class Redraw {
+public:
+    /// @brief 番人を立てる。
+    /// @param[in] host 抜けるときに Invalidate() を頼む相手。番人より長生きすること
+    explicit Redraw(IHost& host) : host_(&host) {}
+
+    /// @brief 降りていなければ再描画を頼む。
+    ~Redraw() {
+        if (host_) host_->Invalidate();
+    }
+
+    Redraw(const Redraw&) = delete;
+    Redraw& operator=(const Redraw&) = delete;
+
+    /// @brief 何も変わらなかったので頼まない。
+    void cancel() { host_ = nullptr; }
+
+private:
+    IHost* host_;
+};
+
 }  // namespace kite

@@ -128,9 +128,27 @@ private:
     IDWriteTextFormat* FormatFor(ui::FontRole role) const;
     ID2D1SolidColorBrush* Brush(const Color& c);
 
+    /// 書式を作り直す必要があるかだけを決める、テーマのうちの 4 項目。
+    ///
+    /// Theme まるごとを覚えていたころは、毎フレーム来る UpdateTheme が 40 色と
+    /// std::string 2 本を無条件にコピーしていた ─ レンダラが読むのはここだけ
+    /// なので、比べるものと覚えるものを同じにする。
+    struct FontSpec {
+        std::string family;
+        std::string mono;
+        float size = 0.0f;
+        float scale = 0.0f;
+
+        bool operator==(const FontSpec& o) const {
+            return family == o.family && mono == o.mono && size == o.size && scale == o.scale;
+        }
+    };
+
+    static FontSpec FontSpecOf(const Theme& theme);
+
     HWND hwnd_ = nullptr;
     float dpi_ = 96.0f;
-    Theme theme_;
+    FontSpec fonts_;
 
     ID2D1Factory1* d2dFactory_ = nullptr;
     IDWriteFactory* dwriteFactory_ = nullptr;
@@ -147,7 +165,23 @@ private:
     bool drawing_ = false;
     bool iconsLost_ = false;
 
-    std::unordered_map<std::string, float> measureCache_[4];
+    /// 測った幅の写し。書式（FontRole）ごとに 2 世代持つ。
+    ///
+    /// 上限で丸ごと捨てていたころは、10 万件のフォルダをスクロールし続けると
+    /// 4,096 行ごとに «画面に出ている行を全部測り直す» 1 フレームが挟まった ─
+    /// そこだけ IDWriteTextLayout の生成が数十回走る。古い側へ退かせておけば、
+    /// いつでも直近の 4,096〜8,192 件が残る。
+    struct MeasureCache {
+        std::unordered_map<std::string, float> fresh;
+        std::unordered_map<std::string, float> stale;
+
+        void clear() {
+            fresh.clear();
+            stale.clear();
+        }
+    };
+
+    MeasureCache measureCache_[4];
     std::unordered_map<uint32_t, ID2D1Bitmap1*> icons_;
 };
 

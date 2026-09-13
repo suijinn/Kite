@@ -218,7 +218,8 @@ void ApplySavedOrder(std::vector<fs::Root>& roots, const std::vector<std::string
 
 App::App(fs::IFileSystem& filesystem, IShellIntegration& shell, IHost& host,
          fs::IDirectoryWatcher* watcher)
-    : fs_(filesystem), shell_(shell), host_(host), watcher_(watcher) {
+    : fs_(filesystem), shell_(shell), host_(host), watcher_(watcher),
+      folderSizes_(filesystem, strings_, roots_), searching_(filesystem, strings_) {
     theme_ = Theme::Dark();
 }
 
@@ -232,8 +233,8 @@ bool App::Init(const std::vector<std::string>& startPaths) {
     LoadConfig();
     loader_ = std::make_unique<fs::DirectoryLoader>(fs_, host_, 2);
     fileOps_ = std::make_unique<fs::FileOpQueue>(fs_, host_);
-    search_ = std::make_unique<fs::SearchJob>(fs_, host_);
-    sizeJob_ = std::make_unique<fs::FolderSizeJob>(fs_, host_);
+    searching_.Start(host_);
+    folderSizes_.Start(host_);
     RefreshRoots();
     LoadWorkspace(startPaths);
     EnsureVisibleTabsLoaded();
@@ -261,9 +262,9 @@ void App::Shutdown() {
     fileOps_.reset();
     // 検索は途中で捨ててよい ─ 歩くだけで何も書き換えないので、待つ理由が無い。
     // デストラクタが «次のフォルダの切れ目で抜けろ» と言ってから join する。
-    search_.reset();
+    searching_.Shutdown();
     // フォルダのサイズも同じ ─ 数えているだけなので、途中で畳んで構わない。
-    sizeJob_.reset();
+    folderSizes_.Shutdown();
 }
 
 uint32_t App::IconFor(const std::string& path) {
@@ -274,151 +275,9 @@ uint32_t App::IconFor(const std::string& path) {
 // ---------------------------------------------------------------------------
 // Folder sizes
 //
-// サイズ列がフォルダについて何か言えるのは、その木を歩いた後だけ。歩くのは
-// `fs::FolderSizeJob`（検索とまったく同じ `fs::WalkTree` の上）で、覚えるのは
-// `sizes_` ─ **表が正で、`fs::Entry::size` に書き戻すのは並べ替えのための写し**。
-//
-// 自動で頼むのは画面に出ている行だけ（`FolderSizeFor` が描画から呼ばれる）で、
-// シェルアイコンとまったく同じ形になっている ─ 1 万件のフォルダでも頼むのは
-// 数十件で済む。例外はサイズで並べ替えているときで、そこは値が要るのが画面に
-// 出ている行だけではない（`SyncFolderSizesForSort`）。
+// 判断はすべて `FolderSizes`（`core/app/FolderSizes.h`）が持つ。ここに残るのは、
+// あちらが持っていない «今フォーカスされているのはどのタブか» を渡す 1 つだけ。
 // ---------------------------------------------------------------------------
-
-fs::FolderSize App::FolderSizeFor(const std::string& dir, const fs::Entry& entry) {
-    if (folderSizeMode_ == FolderSizeMode::Off || !entry.isDir()) return {};
-    // 歩きはリンクの先へ降りないので、リンクの中身は誰も数えていない。ここで
-    // «数えた» 顔をすると、同じ木を 2 度数えた合計を出すことになる。
-    if (fs::Has(entry.attrs, fs::Attr::Link)) return {};
-
-    const std::string full = fs::EntryPath(dir, entry);
-    const fs::FolderSize known = sizes_.Get(full);
-    if (known.state != fs::SizeState::Unknown) return known;
-    if (folderSizeMode_ != FolderSizeMode::Auto) return {};
-    // クラウドにしか実体が無いフォルダは、歩くだけで OS が中身を取りに行きうる。
-    // 頼まれたときだけ歩く。
-    if (fs::Has(entry.attrs, fs::Attr::Placeholder) || fs::Has(entry.attrs, fs::Attr::Offline)) {
-        return {};
-    }
-    if (!AutoCountEligible(full)) return {};
-
-    RequestFolderSize(full);
-    return sizes_.Get(full);
-}
-
-void App::RequestFolderSize(const std::string& path, bool force) {
-    if (!sizeJob_ || path.empty()) return;
-    // 仮想フォルダの列挙は kite_shellhost.exe 1 本を直列に通る ─ 再帰的に占有すると、
-    // 他のフォルダが 1 つも開けなくなる（検索を断っているのと同じ理由）。
-    if (vfs::IsVirtual(path)) return;
-    if (sizes_.Request(path, force)) sizeJob_->Request(path);
-}
-
-void App::RequestFolderSizesIn(Tab& tab, bool force) {
-    if (vfs::IsVirtual(tab.path)) return;
-    for (const fs::Entry& e : tab.listing.entries) {
-        if (!e.isDir() || fs::Has(e.attrs, fs::Attr::Link)) continue;
-        RequestFolderSize(fs::EntryPath(tab.path, e), force);
-    }
-}
-
-void App::SyncFolderSizesForSort(Tab& tab) {
-    if (folderSizeMode_ != FolderSizeMode::Auto) return;
-    if (tab.view.sort != SortKey::Size || tab.search.active) return;
-    if (!AutoCountEligible(tab.path)) return;
-    RequestFolderSizesIn(tab);
-}
-
-bool App::AutoCountEligible(const std::string& p) const {
-    if (p.empty() || vfs::IsVirtual(p)) return false;
-    // ネットワークは共有 1 つで分単位になりうる。「待たせて空を返す機能は無い機能
-    // より悪い」と同じ判断で、黙って歩き始めない ─ 頼まれれば歩く。
-    if (path::UncServerLength(p) > 0) return false;
-    for (const fs::Root& r : roots_) {
-        if (r.kind != fs::RootKind::Fixed) continue;
-        if (utf8::EqualsIgnoreCaseAscii(p, r.path) || path::IsInside(p, r.path)) return true;
-    }
-    // どのドライブの下か分からないものは «固定ディスクだと分かっている» に入らない。
-    return false;
-}
-
-bool App::ApplyFolderSizes(Tab& tab) {
-    bool changed = false;
-    for (fs::Entry& e : tab.listing.entries) {
-        if (!e.isDir()) continue;
-        const fs::FolderSize value = sizes_.Get(fs::EntryPath(tab.path, e));
-        // 写すのは数え終わったものだけ ─ 途中経過を並べ替えに載せると、数えて
-        // いる間ずっと行が動いて目で追えなくなる。
-        if (!value.settled() || e.size == value.bytes) continue;
-        e.size = value.bytes;
-        changed = true;
-    }
-    return changed;
-}
-
-void App::PumpFolderSizes() {
-    if (!sizeJob_) return;
-    std::vector<fs::FolderSizeUpdate> updates;
-    sizeJob_->Drain(updates);
-
-    const uint64_t epoch = sizeJob_->epoch();
-    bool touched = false;
-    bool settledAny = false;
-    for (const fs::FolderSizeUpdate& u : updates) {
-        // やめた後に届いた «前の代» の答え。取り込めば、止めたはずの値が
-        // 数え終わった顔で表に戻る。
-        if (u.epoch != epoch) continue;
-        if (!sizes_.Apply(u)) continue;
-        touched = true;
-        if (u.done) settledAny = true;
-    }
-
-    // 写すのは確定が届いたときだけ。途中経過ごとに全項目を引き当て直すと、
-    // 10 万件のフォルダで毎回その代金を払うことになる。
-    if (settledAny) {
-        for (const std::unique_ptr<Session>& s : workspace_.sessions) {
-            for (Pane* pane : s->Panes()) {
-                for (std::unique_ptr<Tab>& t : pane->tabs) {
-                    if (!ApplyFolderSizes(*t)) continue;
-                    if (t->view.sort == SortKey::Size) resortSizes_ = true;
-                }
-            }
-        }
-    }
-
-    // **並べ直すのは、数えるものが無くなってから 1 回だけ。** 1 件確定するたびに
-    // 並べ替えると、数えている間ずっと行が動いて目で追えない ─ 途中経過は
-    // «表示» のもので、並べ替えは «確定した値» のもの。
-    if (resortSizes_ && !sizeJob_->busy()) {
-        resortSizes_ = false;
-        for (const std::unique_ptr<Session>& s : workspace_.sessions) {
-            for (Pane* pane : s->Panes()) {
-                for (std::unique_ptr<Tab>& t : pane->tabs) {
-                    if (t->view.sort == SortKey::Size) t->Rebuild();
-                }
-            }
-        }
-        EnsureCursorVisible();
-        touched = true;
-    }
-
-    if (touched) host_.Invalidate();
-}
-
-void App::StopFolderSizes() {
-    if (sizeJob_) sizeJob_->CancelAll();
-    sizes_.ResetInFlight();
-    resortSizes_ = false;
-}
-
-bool App::folderSizesBusy() const {
-    return (sizeJob_ && sizeJob_->busy()) || sizes_.countingCount() > 0;
-}
-
-std::string App::folderSizeStatus() const {
-    const size_t counting = sizes_.countingCount();
-    if (counting == 0) return {};
-    return strings_.Format("ui.folder_size_counting", { std::to_string(counting) });
-}
 
 std::string App::folderSizeDetail() const {
     // フォーカス中のタブ。`focusedTab()` には const 版が無いので、検索の状態行と
@@ -426,25 +285,7 @@ std::string App::folderSizeDetail() const {
     const Session* session = workspace_.activeSession();
     if (!session || !session->focus) return {};
     const Tab* t = session->focus->activeTab();
-    if (!t) return {};
-    const fs::Entry* e = t->CursorEntry();
-    if (!e || !e->isDir()) return {};
-
-    const fs::FolderSize value = sizes_.Get(fs::EntryPath(t->path, *e));
-    // そのフォルダ自体を読めなかった。列は `<DIR>` のままなので、理由を言えるのは
-    // ここしかない。
-    if (value.state == fs::SizeState::Failed) return strings_.Get("ui.err_generic");
-    if (!value.known()) return {};
-
-    // **ファイル数とフォルダ数を言うのはここだけ。** 列を増やすと、通常のフォルダ
-    // では全行が埋まるとは限らない列をウィンドウ中で持ち回ることになる。
-    std::string text = strings_.Format("ui.folder_size_detail",
-                                       { std::to_string(value.files),
-                                         std::to_string(value.dirs) });
-    // 読めない枝があったことも列には出さない ─ 数字の隣に印を足すと、同じ列が
-    // 2 通りの綴りを持つことになる。
-    if (value.incomplete) text += " " + strings_.Get("ui.folder_size_incomplete");
-    return text;
+    return t ? folderSizes_.detail(*t) : std::string();
 }
 
 void App::RefreshRoots() {
@@ -462,12 +303,14 @@ void App::RefreshRoots() {
     // this runs again whenever the drive list changes, not just at start-up.
     ApplySavedOrder(quickAccess_, quickAccessOrder_);
     ApplySavedOrder(roots_, driveOrder_);
+    // «自動では数えない» はこの一覧を見て決めた判断なので、一覧が変われば根拠が
+    // 変わる ─ USB を挿したのに «数えない» のままでは、判断のほうが古い。
+    folderSizes_.RootsChanged();
 }
 
 bool App::MoveSidebarSection(int from, int to) {
     if (!MoveInVector(sidebarSections_, from, to)) return false;
     dirty_ = true;
-    host_.Invalidate();
     return true;
 }
 
@@ -477,6 +320,18 @@ int App::SidebarItemCount(SidebarSection section) const {
         case SidebarSection::Bookmarks: return static_cast<int>(workspace_.bookmarks.size());
         case SidebarSection::Drives: return static_cast<int>(roots_.size());
         default: return 0;
+    }
+}
+
+const std::string& App::SidebarPath(SidebarSection section, int index) const {
+    static const std::string kNone;
+    if (index < 0 || index >= SidebarItemCount(section)) return kNone;
+    const size_t at = static_cast<size_t>(index);
+    switch (section) {
+        case SidebarSection::QuickAccess: return quickAccess_[at].path;
+        case SidebarSection::Bookmarks: return workspace_.bookmarks[at].path;
+        case SidebarSection::Drives: return roots_[at].path;
+        default: return kNone;
     }
 }
 
@@ -501,7 +356,6 @@ bool App::MoveSidebarItem(SidebarSection section, int from, int to) {
     }
     if (!moved) return false;
     dirty_ = true;
-    host_.Invalidate();
     return true;
 }
 
@@ -552,11 +406,7 @@ void App::RequestLoad(Tab& tab, bool force) {
 }
 
 void App::EnsureVisibleTabsLoaded() {
-    Session* s = workspace_.activeSession();
-    if (!s) return;
-    for (Pane* p : s->Panes()) {
-        if (Tab* t = p->activeTab()) RequestLoad(*t);
-    }
+    for (Tab* t : workspace_.VisibleTabs()) RequestLoad(*t);
     SyncWatches();
 }
 
@@ -568,20 +418,16 @@ void App::SyncWatches() {
     std::unordered_map<uint64_t, std::string> desired;
     std::vector<Tab*> newlyWatched;
 
-    if (Session* s = workspace_.activeSession()) {
-        for (Pane* p : s->Panes()) {
-            Tab* t = p->activeTab();
-            if (!t) continue;
-            // Nothing to hang a notification on: the shell namespace has no
-            // directory handle. F5 is how these are refreshed.
-            if (vfs::IsVirtual(t->path)) continue;
-            if (t->watchId == 0) t->watchId = NextWatchId();
-            desired[t->watchId] = t->path;
+    for (Tab* t : workspace_.VisibleTabs()) {
+        // Nothing to hang a notification on: the shell namespace has no
+        // directory handle. F5 is how these are refreshed.
+        if (vfs::IsVirtual(t->path)) continue;
+        if (t->watchId == 0) t->watchId = NextWatchId();
+        desired[t->watchId] = t->path;
 
-            auto previous = watched_.find(t->watchId);
-            if (previous == watched_.end() || previous->second != t->path) {
-                newlyWatched.push_back(t);
-            }
+        auto previous = watched_.find(t->watchId);
+        if (previous == watched_.end() || previous->second != t->path) {
+            newlyWatched.push_back(t);
         }
     }
 
@@ -602,6 +448,11 @@ void App::SyncWatches() {
 }
 
 void App::PumpLoader() {
+    // ワーカーが何かを持ち帰ったから起こされている ─ 結果を回収した以上、画面は
+    // 変わったとみなしてよい。深いほうで «届いたのはサイズだったか、検索だったか»
+    // を数えて回る形にすると、1 か所抜けた日にその種類だけ画面に出なくなる。
+    const Redraw redraw(host_);
+
     // Filesystem notifications arrive on the same wake-up as finished listings.
     if (watcher_) {
         std::vector<fs::ChangeEvent> changes;
@@ -611,21 +462,20 @@ void App::PumpLoader() {
             // 数え直すのは、次にその行が画面に出たとき（または F5）。
             // **数えたばかりの値は残す** ─ 通知は書き込みのたびに届くので、
             // 1 つごとに歩き直すと、見ているだけでディスクを舐め続ける。
-            sizes_.ForgetChanged(change.path, plat::NowMs(), fs::kFolderSizeRecountMs);
-            for (const std::unique_ptr<Session>& s : workspace_.sessions) {
-                for (Pane* p : s->Panes()) {
-                    Tab* t = p->activeTab();
-                    // Re-list only if the tab is still showing the folder that
-                    // changed; it may have navigated away in the meantime.
-                    // 検索結果を出している間は取り直さない。届くのはフォルダの
-                    // 中身で、画面に出ているのはその下から集めたもの ─ 通すと、
-                    // 通知 1 つで検索結果が消える。
-                    if (t && !t->search.active && t->watchId == change.watchId &&
-                        t->path == change.path) {
-                        RequestLoad(*t, true);
-                    }
+            folderSizes_.cache().ForgetChanged(change.path, plat::NowMs(),
+                                               fs::kFolderSizeRecountMs);
+            workspace_.ForEachPane([&](Pane& pane) {
+                Tab* t = pane.activeTab();
+                // Re-list only if the tab is still showing the folder that
+                // changed; it may have navigated away in the meantime.
+                // 検索結果を出している間は取り直さない。届くのはフォルダの
+                // 中身で、画面に出ているのはその下から集めたもの ─ 通すと、
+                // 通知 1 つで検索結果が消える。
+                if (t && !t->search.active && t->watchId == change.watchId &&
+                    t->path == change.path) {
+                    RequestLoad(*t, true);
                 }
-            }
+            });
         }
     }
 
@@ -635,7 +485,8 @@ void App::PumpLoader() {
     // 検索の途中経過も同じ起こされ方で届く。
     PumpSearch();
     // フォルダのサイズも同じ ─ 数え終わったぶんがここで表に入る。
-    PumpFolderSizes();
+    // 並べ直したなら、カーソルは画面の外へ出ているかもしれない。
+    if (folderSizes_.Pump(workspace_)) EnsureCursorVisible();
 
     if (!loader_) return;
     std::vector<fs::LoadedListing> done;
@@ -651,34 +502,30 @@ void App::PumpLoader() {
             complete_.SetListing(l.path, l.result.entries);
             continue;
         }
-        for (const std::unique_ptr<Session>& s : workspace_.sessions) {
-            for (Pane* p : s->Panes()) {
-                for (std::unique_ptr<Tab>& t : p->tabs) {
-                    if (t->loadToken != l.token) continue;
-                    t->listing = std::move(l.result);
-                    t->loadToken = 0;
-                    t->loaded = true;
-                    t->marked.assign(t->listing.entries.size(), 0);
-                    // 数え終わっている値があれば、並べ替えの前に写す ─ 一覧は
-                    // 作り直されるが、数えた値の寿命はそれより長い。
-                    ApplyFolderSizes(*t);
-                    t->Rebuild();
-                    // サイズで並べているタブは、画面に出ている行だけでは順序が
-                    // 整わない（数えていないフォルダは 0 として並ぶ）。
-                    SyncFolderSizesForSort(*t);
-                    // "Access denied" on a share is usually not a verdict but a
-                    // question that has not been asked yet. The listing itself
-                    // cannot ask it - a credential dialog raised from a worker
-                    // thread would also fire while the address bar is being
-                    // typed into - so name the key that does.
-                    if (t.get() == workspace_.focusedTab() &&
-                        t->listing.status == fs::Status::AccessDenied &&
-                        !path::UncRoot(t->path).empty()) {
-                        SetStatus(strings_.Format("ui.network_auth_hint",
-                                                  { keymap_.ChordText(Cmd::ConnectNetwork) }));
-                    }
-                }
-            }
+        // 行き先が無ければ黙って捨てる ─ トークンの持ち主が閉じた、あるいは
+        // 別のフォルダへ移って新しいトークンを持っている。
+        Tab* t = workspace_.FindTabByLoadToken(l.token);
+        if (!t) continue;
+
+        t->listing = std::move(l.result);
+        t->loadToken = 0;
+        t->loaded = true;
+        t->marked.assign(t->listing.entries.size(), 0);
+        // 数え終わっている値があれば、並べ替えの前に写す ─ 一覧は作り直されるが、
+        // 数えた値の寿命はそれより長い。
+        folderSizes_.ApplyTo(*t);
+        t->Rebuild();
+        // サイズで並べているタブは、画面に出ている行だけでは順序が整わない
+        // （数えていないフォルダは 0 として並ぶ）。
+        folderSizes_.SyncForSort(*t);
+        // "Access denied" on a share is usually not a verdict but a question
+        // that has not been asked yet. The listing itself cannot ask it - a
+        // credential dialog raised from a worker thread would also fire while
+        // the address bar is being typed into - so name the key that does.
+        if (t == workspace_.focusedTab() && t->listing.status == fs::Status::AccessDenied &&
+            !path::UncRoot(t->path).empty()) {
+            SetStatus(
+                strings_.Format("ui.network_auth_hint", { keymap_.ChordText(Cmd::ConnectNetwork) }));
         }
     }
     // The answer that just arrived may already be for the wrong folder - the
@@ -686,145 +533,35 @@ void App::PumpLoader() {
     RequestCompletion();
     EnsureCursorVisible();
     UpdateTitle();
-    host_.Invalidate();
 }
 
 // ---------------------------------------------------------------------------
 // Search
 //
-// 絞り込み（Ctrl+F）とは別の機能。あちらは今の一覧から行を減らすだけで、こちらは
-// このフォルダの下を歩いて **別の一覧を作る** ─ 並ぶ項目はどのサブフォルダのもの
-// でもよく、`fs::Entry::address` が自分自身のパスを持つ（仮想フォルダと同じ手）。
-//
-// 打ち込まれた問いは `Tab::filter` が持ち、`Tab::Rebuild()` がそのまま絞り込みに
-// 使う ─ 検索のためだけの絞り込みをもう 1 つ書かない。ワーカーに渡した «ふるい»
-// （`Tab::search.sieve`）とは普通ずれていて、そのずれこそが「前へ打ち足している
-// 間は歩き直さない」という約束の中身になる（`fs::SearchJob` の冒頭）。
+// 判断はすべて `Searching`（`core/app/Searching.h`）が持つ。ここに残るのは、
+// あちらが持っていない «今フォーカスされているのはどのタブか» と、カーソルを
+// 画面内へ引き戻す後始末だけ。
 // ---------------------------------------------------------------------------
 
-void App::StartSearch(Tab& tab, const std::string& query) {
-    if (!search_) return;
-    if (tab.search.token) search_->Cancel(tab.search.token);
+void App::StartSearch(Tab& tab, const std::string& query) { searching_.Begin(tab, query); }
 
-    tab.search.active = true;
-    tab.search.truncated = false;
-    tab.search.sieve = query;
-    tab.filter = query;
-
-    // 0 件から始める。フォルダの中身を残したまま検索欄を出すと、最初の 1 打鍵が
-    // それを消したように見える ─ 検索欄の下に並ぶ行は検索結果でなければならない。
-    // 場所そのものについての値（表示名・容量）は残す。タブはまだそこに立っている。
-    tab.listing.entries.clear();
-    tab.listing.status = fs::Status::Ok;
-    tab.listing.message.clear();
-    tab.marked.clear();
-    tab.groups.clear();
-    tab.cursor = 0;
-    tab.anchor = 0;
-    tab.scroll = 0.0f;
-    tab.loaded = true;
-    // 走っている列挙のトークンを落とす。残したままだと、後から届いたフォルダの
-    // 一覧が、集めたばかりの検索結果を黙って上書きする（PumpLoader はトークンで
-    // 突き合わせるので、0 にしておけばその答えはどのタブのものでもなくなる）。
-    tab.loadToken = 0;
-    tab.search.token = search_->Start(tab.path, query);
-    tab.Rebuild();
-}
-
-void App::CancelSearch(Tab& tab) {
-    if (!tab.search.active) return;
-    if (search_ && tab.search.token) search_->Cancel(tab.search.token);
-    tab.search = SearchState{};
-    // 問いも一緒に捨てる。検索を抜けた先の一覧はこのフォルダの中身で、そこに
-    // 検索語が絞り込みとして残っていると、フォルダが空に見える。
-    tab.filter.clear();
-}
+void App::CancelSearch(Tab& tab) { searching_.Cancel(tab); }
 
 void App::SyncSearchQuery(Tab& tab, const std::string& query) {
-    tab.filter = query;
-    const std::string sieve = utf8::ToLowerAscii(tab.search.sieve);
-    const std::string asked = utf8::ToLowerAscii(query);
-    // ふるいが今の問いの部分文字列である限り、«今の問いに当たるもの» はすべて
-    // «ふるいに当たるもの» でもある ─ つまり、もう手元にある。前へ打ち足している
-    // 限り歩き直しが起きないのはこれが理由で、縮めたときだけディスクを歩き直す。
-    //
-    // **ただし «全部» を持ち帰った歩きに限る。** 条件は 2 つ:
-    //
-    // - **まだ歩いている最中なら歩き直す。** そうしないと、ふるいは «最初の 1 文字»
-    //   のまま固まる ─ 打ち始めた瞬間に走り出した歩きが、以後どれだけ打ち足しても
-    //   «全部持っている» と主張し続けるので、`C:\` から `report` を探すつもりが
-    //   «r を含むもの» を集める歩きになる。捨てるのは途中まで集めたものだけで、
-    //   同じものは狭い問いで拾い直せる。
-    // - **上限で打ち切られた歩きも歩き直す。** あれは «当たりの一部» なので、
-    //   絞り込んだ答えが完全である保証がない。広すぎる問いはたいてい歩き始めて
-    //   すぐ上限に届くので、歩き直す代金もそこで頭打ちになる。
-    const bool complete = !tab.search.running() && !tab.search.truncated;
-    if (complete && !sieve.empty() && asked.find(sieve) != std::string::npos) {
-        tab.Rebuild();
-        EnsureCursorVisible();
-        return;
-    }
-    StartSearch(tab, query);
+    // 歩き直さずに済んだときだけカーソルを引き戻す ─ 歩き直したほうは一覧が
+    // 空から始まるので、引き戻す先がまだ無い。
+    if (searching_.SyncQuery(tab, query)) EnsureCursorVisible();
 }
 
 void App::PumpSearch() {
-    if (!search_) return;
-    std::vector<fs::SearchBatch> batches;
-    search_->Drain(batches);
-    if (batches.empty()) return;
-
-    bool touched = false;
-    for (fs::SearchBatch& batch : batches) {
-        Tab* target = nullptr;
-        for (const std::unique_ptr<Session>& s : workspace_.sessions) {
-            for (Pane* p : s->Panes()) {
-                for (std::unique_ptr<Tab>& t : p->tabs) {
-                    if (t->search.token != 0 && t->search.token == batch.token) target = t.get();
-                }
-            }
-        }
-        if (!target) {
-            // 行き先が無い ─ タブが閉じた、または背面に回って一覧を手放した
-            // （`Tab::DropListing`）。歩き続ける理由がもう無いので、ここで畳む。
-            search_->Cancel(batch.token);
-            continue;
-        }
-
-        // まだ動かしていないカーソルは先頭に留める。Rebuild() は «同じ項目の上に
-        // 留まる» を約束するので、放っておくと最初に見つかった 1 件を追いかけて
-        // 一覧の中を下がっていく ─ 誰も指していないものを指し続けることになる。
-        const bool atTop = target->cursor == 0;
-
-        for (fs::Entry& e : batch.entries) target->listing.entries.push_back(std::move(e));
-        target->marked.resize(target->listing.entries.size(), 0);
-        if (batch.truncated) target->search.truncated = true;
-        if (batch.done) target->search.token = 0;
-        target->Rebuild();
-        if (atTop) target->cursor = target->SkipGroupRows(0, 1);
-        touched = true;
-    }
-
-    if (!touched) return;
-    EnsureCursorVisible();
-    host_.Invalidate();
+    if (searching_.Pump(workspace_)) EnsureCursorVisible();
 }
 
 std::string App::searchStatus() const {
     const Session* s = workspace_.activeSession();
     if (!s || !s->focus) return {};
     const Tab* t = s->focus->activeTab();
-    if (!t || !t->search.active) return {};
-    // まだ何も訊かれていない。案内はここではなく一覧の側が出す ─ 帯の右は
-    // «今何が起きたか» で、まだ何も起きていない。
-    if (t->search.sieve.empty()) return {};
-
-    const std::string count = strings_.Format("ui.status_items", { std::to_string(t->ItemCount()) });
-    if (t->search.running()) return strings_.Format("ui.search_running", { count });
-    if (t->search.truncated) {
-        return strings_.Format("ui.search_truncated",
-                               { count, std::to_string(fs::kSearchMaxResults) });
-    }
-    return strings_.Format("ui.search_done", { count });
+    return t ? searching_.status(*t) : std::string();
 }
 
 void App::UpdateTitle() {
@@ -852,7 +589,6 @@ void App::FocusPane(Pane* pane) {
     s->focus = pane;
     if (Tab* t = pane->activeTab()) RequestLoad(*t);
     SyncWatches();
-    host_.Invalidate();
 }
 
 // Pulling a tab out of the bar and letting go outside the window.
@@ -871,7 +607,6 @@ bool App::DetachTabToNewWindow(Pane* pane, int index) {
     const bool lastInPane = pane->tabs.size() <= 1;
     if (lastInPane && session->Panes().size() <= 1) {
         SetStatus(strings_.Get("ui.cannot_detach_last"));
-        host_.Invalidate();
         return false;
     }
 
@@ -879,7 +614,6 @@ bool App::DetachTabToNewWindow(Pane* pane, int index) {
     if (!host_.OpenNewWindow(path)) {
         // Drop nothing when the window never opened - the tab is all there is.
         SetStatus(strings_.Get("ui.new_window_failed"));
-        host_.Invalidate();
         return false;
     }
 
@@ -894,7 +628,6 @@ bool App::DetachTabToNewWindow(Pane* pane, int index) {
     dirty_ = true;
     SyncWatches();
     UpdateTitle();
-    host_.Invalidate();
     return true;
 }
 
@@ -938,7 +671,6 @@ void App::NavigateFocused(const std::string& raw) {
     RequestLoad(*t, true);
     SyncWatches();
     dirty_ = true;
-    host_.Invalidate();
 }
 
 void App::OpenPath(const std::string& p, bool newTab) {
@@ -947,7 +679,6 @@ void App::OpenPath(const std::string& p, bool newTab) {
     if (newTab) {
         OpenTabIn(*pane, ArchiveTarget(path::Normalize(p)), NewTabAt(*pane), defaultView_);
         dirty_ = true;
-        host_.Invalidate();
     } else {
         NavigateFocused(p);
     }
@@ -1134,7 +865,7 @@ void App::RefreshFocused() {
         RequestLoad(*t, true);
         // «訊き直せ» はフォルダのサイズにも掛かる。監視はこのフォルダ 1 階層しか
         // 見ていないので、下で起きた変更を知る道は F5 のほかに無い。
-        sizes_.ForgetRelated(t->path);
+        folderSizes_.cache().ForgetRelated(t->path);
         // Overlays show a file's state (committed, synced, locked), and every
         // caller here has just changed something - including the shell menu,
         // which is where a commit or a sync is started from. Nothing tells us
@@ -1220,15 +951,11 @@ bool App::PerformDrop(const std::vector<std::string>& paths, const std::string& 
 
 void App::RefreshTabsShowing(const std::string& dir) {
     if (dir.empty()) return;
-    Session* s = workspace_.activeSession();
-    if (!s) return;
-    for (Pane* p : s->Panes()) {
-        if (Tab* t = p->activeTab()) {
-            // 検索結果を出しているタブは取り直さない ─ 届くのはフォルダの
-            // 中身で、画面に出ているのはその下から集めたもの（監視の通知と同じ話）。
-            if (t->search.active) continue;
-            if (utf8::EqualsIgnoreCaseAscii(t->path, dir)) RequestLoad(*t, true);
-        }
+    for (Tab* t : workspace_.VisibleTabs()) {
+        // 検索結果を出しているタブは取り直さない ─ 届くのはフォルダの
+        // 中身で、画面に出ているのはその下から集めたもの（監視の通知と同じ話）。
+        if (t->search.active) continue;
+        if (utf8::EqualsIgnoreCaseAscii(t->path, dir)) RequestLoad(*t, true);
     }
 }
 
@@ -1238,7 +965,6 @@ void App::RebuildFocused() {
     if (Tab* t = workspace_.focusedTab()) {
         t->Rebuild();
         EnsureCursorVisible();
-        host_.Invalidate();
     }
 }
 
@@ -1261,8 +987,8 @@ void App::EnsureCursorVisible() {
     Tab* t = p->activeTab();
     if (!t) return;
 
-    const float rowH = p->rowHeight > 0.0f ? p->rowHeight : theme_.rowHeight;
-    const float viewH = p->listHeight > 0.0f ? p->listHeight : rowH * 10.0f;
+    const float rowH = p->viewport.rowHeight > 0.0f ? p->viewport.rowHeight : theme_.rowHeight;
+    const float viewH = p->viewport.listHeight > 0.0f ? p->viewport.listHeight : rowH * 10.0f;
     const float top = static_cast<float>(t->cursor) * rowH;
 
     if (top < t->scroll) {
@@ -1295,7 +1021,6 @@ void App::MoveCursor(int delta, bool extend, bool absolute) {
         t->ResetAnchor();
     }
     EnsureCursorVisible();
-    host_.Invalidate();
 }
 
 // ---------------------------------------------------------------------------
@@ -1377,6 +1102,12 @@ void App::ReportFailure(const char* key, const std::string& detail) {
 
 bool App::statusExpired() const { return plat::NowMs() > statusUntilMs_; }
 
+uint64_t App::statusRemainingMs() const {
+    if (statusMessage_.empty()) return 0;
+    const uint64_t now = plat::NowMs();
+    return now >= statusUntilMs_ ? 0 : statusUntilMs_ - now;
+}
+
 // ---------------------------------------------------------------------------
 // Bookmarks
 // ---------------------------------------------------------------------------
@@ -1393,13 +1124,11 @@ void App::ToggleBookmark(const std::string& p) {
         if (utf8::EqualsIgnoreCaseAscii(workspace_.bookmarks[i].path, p)) {
             workspace_.bookmarks.erase(workspace_.bookmarks.begin() + i);
             dirty_ = true;
-            host_.Invalidate();
             return;
         }
     }
     workspace_.bookmarks.push_back({ path::DisplayName(p), p });
     dirty_ = true;
-    host_.Invalidate();
 }
 
 // ---------------------------------------------------------------------------
@@ -1503,7 +1232,6 @@ void App::ConfirmDefaultManager(bool on) {
 // if nothing happened.
 void App::SyncDefaultManagerRow() {
     if (settingsEditor_.visible()) settingsEditor_.SetValues(CollectSettings(), strings_);
-    host_.Invalidate();
 }
 
 // The state is read first so that the answer to a question already settled is a
@@ -1564,12 +1292,12 @@ void App::ShowShellMenu(const std::vector<std::string>& paths, int screenX, int 
 
 bool App::CursorRowAnchor(int& screenX, int& screenY) {
     Pane* pane = workspace_.focusedPane();
-    if (!pane || pane->listArea.empty()) return false;
+    if (!pane || pane->viewport.listArea.empty()) return false;
     const Tab* t = pane->activeTab();
     if (!t) return false;
 
-    const RectF& area = pane->listArea;
-    const float rowH = pane->rowHeight > 0.0f ? pane->rowHeight : theme_.rowHeight;
+    const RectF& area = pane->viewport.listArea;
+    const float rowH = pane->viewport.rowHeight > 0.0f ? pane->viewport.rowHeight : theme_.rowHeight;
 
     // Bottom-left of the cursor row, which is where Windows itself drops the
     // menu for a focused list item. An off-screen or absent cursor falls back to
@@ -1601,7 +1329,6 @@ void App::BeginPrompt(PromptKind kind, const char* labelKey, const std::string& 
     // screen, and listing its children before a single key is pressed would put
     // a menu over the list for a question nobody asked.
     if (kind == PromptKind::Path) complete_.SetInput(initial);
-    host_.Invalidate();
 }
 
 void App::CancelPrompt() {
@@ -1628,7 +1355,6 @@ void App::CancelPrompt() {
     complete_.Reset();
     completeToken_ = 0;
     completeRequested_.clear();
-    host_.Invalidate();
 }
 
 // ---------------------------------------------------------------------------
@@ -1714,13 +1440,38 @@ bool App::MoveCompletion(int delta) {
     if (!complete_.Move(delta)) return false;
     prompt_.text = complete_.text();
     prompt_.SetCaret(prompt_.text.size());
-    host_.Invalidate();
     return true;
 }
 
 void App::CancelInlineEdit() {
     if (!prompt_.isInline()) return;
     CancelPrompt();
+}
+
+const std::vector<App::KeyHelpLine>& App::keyHelpLines() const {
+    if (!keyHelpStale_ && keyHelpKeysRevision_ == keymap_.revision()) return keyHelpLines_;
+    keyHelpStale_ = false;
+    keyHelpKeysRevision_ = keymap_.revision();
+
+    keyHelpLines_.clear();
+    keyHelpLines_.reserve(AllCommands().size() + 24);
+
+    CmdGroup lastGroup = CmdGroup::Count;
+    for (const CommandInfo& info : AllCommands()) {
+        if (info.group != lastGroup) {
+            lastGroup = info.group;
+            if (!keyHelpLines_.empty()) keyHelpLines_.push_back({ false, true, {}, {} });
+            keyHelpLines_.push_back({ true, false, strings_.Get(GroupLabelKey(info.group)), {} });
+        }
+        // 割り当ては全部並べる。代表の 1 つだけを出していた頃は、2 つ目を足しても
+        // 画面が何も言わないので、足せたかどうかを確かめる方法が無かった。
+        //
+        // ラベルは Label()。番号違いの 24 個は表 3 行で賄われているので、Get() では
+        // `cmd.goto_session_1` がそのまま画面に出る。
+        keyHelpLines_.push_back(
+            { false, false, strings_.Label(info.labelKey), keymap_.ChordText(info.id) });
+    }
+    return keyHelpLines_;
 }
 
 void App::ChooseCompletion(int index) {
@@ -1841,7 +1592,6 @@ void App::ApplyPrompt() {
         case PromptKind::None:
             break;
     }
-    host_.Invalidate();
 }
 
 bool App::HandlePromptKey(const Chord& chord) {
@@ -1881,14 +1631,12 @@ bool App::HandlePromptKey(const Chord& chord) {
             syncFilter();
             SyncCompletion(true);
         }
-        host_.Invalidate();
     };
 
     auto pasteField = [&] {
         if (!PasteIntoField(shell_, prompt_)) return;
         syncFilter();
         SyncCompletion(true);
-        host_.Invalidate();
     };
 
     switch (chord.key) {
@@ -1897,7 +1645,6 @@ bool App::HandlePromptKey(const Chord& chord) {
             // without losing what has been typed so far.
             if (complete_.open()) {
                 complete_.Close();
-                host_.Invalidate();
                 return true;
             }
             CancelPrompt();
@@ -1955,11 +1702,9 @@ bool App::HandlePromptKey(const Chord& chord) {
             case TextField::Edit::Changed:
                 syncFilter();
                 SyncCompletion(true);
-                host_.Invalidate();
                 return true;
             case TextField::Edit::Moved:
                 SyncCompletion(false);
-                host_.Invalidate();
                 return true;
             case TextField::Edit::None:
                 break;
@@ -1971,6 +1716,10 @@ bool App::HandlePromptKey(const Chord& chord) {
 }
 
 bool App::OnChar(uint32_t cp) {
+    // 入口で 1 回。消費しなかった（false を返す）ときも頼んでよい ─ 要求は
+    // 合成されるので、無駄になるのは «何も変わらなかった 1 打鍵» のぶんだけ。
+    const Redraw redraw(host_);
+
     // 設定画面は絞り込みを持たないが、打鍵は残らず飲み込む ─ 出しっぱなしの
     // 画面の裏でプロンプトが文字を受け取っては困る。
     if (settingsEditor_.visible()) return true;
@@ -1979,14 +1728,12 @@ bool App::OnChar(uint32_t cp) {
     const auto typeIntoPicker = [&](auto& picker) {
         if (!picker.HandleChar(cp)) return false;
         SyncPickerMode();
-        host_.Invalidate();
         return true;
     };
     if (placePicker_.visible()) return typeIntoPicker(placePicker_);
     if (commandPalette_.visible()) return typeIntoPicker(commandPalette_);
     if (keyEditor_.visible()) {
         if (!keyEditor_.HandleChar(cp, strings_, keymap_)) return false;
-        host_.Invalidate();
         return true;
     }
     if (!prompt_.active()) {
@@ -2017,7 +1764,6 @@ bool App::OnChar(uint32_t cp) {
         if (Tab* t = workspace_.focusedTab()) SyncSearchQuery(*t, prompt_.text);
     }
     SyncCompletion(true);
-    host_.Invalidate();
     return true;
 }
 
@@ -2047,6 +1793,10 @@ bool App::TypeAheadChar(uint32_t cp) {
 }
 
 bool App::OnKey(const Chord& chord) {
+    // 入口で 1 回（OnChar と同じ）。この下にある Execute の 134 の case も、
+    // 入力欄も、チューザも、もう自分で頼まない。
+    const Redraw redraw(host_);
+
     // Whether a name is being typed right now has to be read before anything
     // below gets the chance to clear it.
     const bool typing = typeAhead_.active(plat::NowMs());
@@ -2057,7 +1807,6 @@ bool App::OnKey(const Chord& chord) {
         // waiting on the answer, and an arrow key that moved the cursor underneath
         // would leave the Yes applying to whichever row it landed on.
         if (prompt_.isConfirm() && HandlePromptKey(chord)) {
-            host_.Invalidate();
             return true;
         }
         // 開いたキーがそのまま閉じるキーになる。ショートカットの設定へ抜ける道も
@@ -2069,7 +1818,6 @@ bool App::OnKey(const Chord& chord) {
         }
         const bool consumed = settingsEditor_.HandleKey(chord, strings_);
         ApplyPendingSetting();
-        host_.Invalidate();
         return consumed;
     }
     if (keyEditor_.visible()) {
@@ -2086,7 +1834,6 @@ bool App::OnKey(const Chord& chord) {
         // Escape closes the screen from the inside; take the same exit as the
         // command would have, so the confirmation is not lost.
         if (!keyEditor_.visible()) CloseKeyEditor();
-        host_.Invalidate();
         return consumed;
     }
     if (placePicker_.visible()) {
@@ -2106,7 +1853,6 @@ bool App::OnKey(const Chord& chord) {
         if (PickerClipboardKey(shell_, placePicker_, chord)) {
             // A pasted ">" counts the same as a typed one.
             SyncPickerMode();
-            host_.Invalidate();
             return true;
         }
         switch (placePicker_.HandleKey(chord)) {
@@ -2117,7 +1863,6 @@ bool App::OnKey(const Chord& chord) {
         }
         // Everything reaching here was swallowed: picking a folder is not a state
         // to fire unrelated shortcuts from.
-        host_.Invalidate();
         return true;
     }
     if (commandPalette_.visible()) {
@@ -2131,7 +1876,6 @@ bool App::OnKey(const Chord& chord) {
         }
         if (PickerClipboardKey(shell_, commandPalette_, chord)) {
             SyncPickerMode();
-            host_.Invalidate();
             return true;
         }
         switch (commandPalette_.HandleKey(chord)) {
@@ -2142,7 +1886,6 @@ bool App::OnKey(const Chord& chord) {
         }
         // Swallowed like the bookmark list: a chord reaching the keymap from here
         // would run one command while another is being picked.
-        host_.Invalidate();
         return true;
     }
     if (keyHelp_) {
@@ -2150,7 +1893,6 @@ bool App::OnKey(const Chord& chord) {
         const Cmd c = keymap_.Lookup(chord);
         if (c == Cmd::ShowKeyHelp) return true;
         keyHelp_ = false;
-        host_.Invalidate();
         // The key that closed the sheet is spent on closing it: its character
         // must not fall through and move the cursor in the list behind.
         swallowChar_ = ProducesChar(chord);
@@ -2204,7 +1946,6 @@ void App::GotoTab(int index) {
     if (index >= static_cast<int>(p->tabs.size())) return;
     p->Activate(index);
     if (Tab* t = p->activeTab()) RequestLoad(*t);
-    host_.Invalidate();
 }
 
 void App::GotoSession(int index) {
@@ -2212,13 +1953,11 @@ void App::GotoSession(int index) {
     workspace_.ActivateSession(index);
     EnsureVisibleTabsLoaded();
     dirty_ = true;
-    host_.Invalidate();
 }
 
 bool App::MoveSession(int from, int to) {
     if (!workspace_.ReorderSession(from, to)) return false;
     dirty_ = true;
-    host_.Invalidate();
     return true;
 }
 
@@ -2362,7 +2101,6 @@ void App::SyncPickerMode() {
         OpenCommandPalette();
         commandPalette_.filterField() = carried;
         commandPalette_.FilterEdited();
-        host_.Invalidate();
         return;
     }
 
@@ -2373,12 +2111,10 @@ void App::SyncPickerMode() {
     // Nowhere to go: the places list says so and stays shut rather than coming up
     // empty. Closed is the honest answer, and the status line carries the reason.
     if (!OpenPlacePicker()) {
-        host_.Invalidate();
         return;
     }
     placePicker_.filterField() = carried;
     placePicker_.FilterEdited();
-    host_.Invalidate();
 }
 
 void App::ChoosePlace(bool newTab) {
@@ -2393,7 +2129,6 @@ void App::ChoosePlace(bool newTab) {
     // has already finished asking.
     placePicker_.Close();
     if (!hasRow) {
-        host_.Invalidate();
         return;
     }
 
@@ -2407,12 +2142,10 @@ void App::ChoosePlace(bool newTab) {
             pane->Activate(row.tab);
             FocusPane(pane);
         }
-        host_.Invalidate();
         return;
     }
 
     if (!row.path.empty()) OpenPath(row.path, newTab);
-    host_.Invalidate();
 }
 
 void App::RunPaletteCommand() {
@@ -2423,7 +2156,6 @@ void App::RunPaletteCommand() {
     // command is not in the list, so this cannot loop back in here.
     commandPalette_.Close();
     if (cmd != Cmd::None) Execute(cmd);
-    host_.Invalidate();
 }
 
 void App::DoDelete(bool permanent) {
@@ -2699,7 +2431,6 @@ void App::DoUndo() {
     } else {
         ReportFailure("ui.undo_failed", err);
     }
-    host_.Invalidate();
 }
 
 // ---------------------------------------------------------------------------
@@ -2721,7 +2452,6 @@ void App::QueueFileOp(fs::FileOpRequest request, PendingFileOp plan) {
     if (!fileOps_) return;
     plan.token = fileOps_->Request(std::move(request));
     pendingOps_.push_back(std::move(plan));
-    host_.Invalidate();
 }
 
 void App::PumpFileOps() {
@@ -2782,13 +2512,12 @@ void App::FinishFileOp(const fs::FileOpDone& done, const PendingFileOp& plan) {
     for (const std::string& dir : plan.refresh) {
         // 自分で起こした変更は、監視の通知を待たずにここで無効にする ─ 貼り付けた
         // 直後の画面が古い合計を主張しないため。
-        sizes_.ForgetRelated(dir);
+        folderSizes_.cache().ForgetRelated(dir);
         RefreshTabsShowing(dir);
     }
     // 一覧を取り直したのだから、オーバーレイにも訊き直す（RefreshFocused と同じ
     // 理由 ─ たった今変えたものの状態を映しているのはそちら）。
     if (icons_ && shellIcons_) icons_->Invalidate();
-    host_.Invalidate();
 }
 
 std::string App::fileOpStatus() const {

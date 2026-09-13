@@ -231,3 +231,74 @@ KITE_TEST(workspace, focused_tab_follows_the_focused_pane) {
     KITE_EXPECT_EQ(workspace.focusedPane(), created);
     KITE_EXPECT_EQ(workspace.focusedTab(), created->activeTab());
 }
+
+// ForEachPane() is what Panes() is built on, so the two report the same panes in
+// the same order - which is the point of writing the walk only once.
+KITE_TEST(workspace, for_each_pane_visits_what_panes_returns_in_the_same_order) {
+    Workspace workspace;
+    Session* session = workspace.AddSession("one", "C:\\a");
+    Pane* second = session->Split(session->focus, SplitNode::Kind::LeftRight);
+    KITE_EXPECT(second != nullptr);
+    KITE_EXPECT(session->Split(second, SplitNode::Kind::TopBottom) != nullptr);
+
+    std::vector<Pane*> walked;
+    session->ForEachPane([&walked](Pane& pane) { walked.push_back(&pane); });
+
+    const std::vector<Pane*> listed = session->Panes();
+    KITE_EXPECT_EQ(walked.size(), size_t{ 3 });
+    KITE_EXPECT_EQ(walked.size(), listed.size());
+    for (size_t i = 0; i < walked.size(); ++i) KITE_EXPECT_EQ(walked[i], listed[i]);
+}
+
+// Every tab of every session, background ones included: a load token belongs to
+// a tab whether or not anybody can see it.
+KITE_TEST(workspace, for_each_tab_reaches_background_sessions_too) {
+    Workspace workspace;
+    Session* first = workspace.AddSession("one", "C:\\a");
+    first->Panes().front()->AddTab("C:\\a2");
+    Session* second = workspace.AddSession("two", "C:\\b");
+    second->Panes().front()->AddTab("C:\\b2");
+    workspace.ActivateSession(0);
+
+    int count = 0;
+    workspace.ForEachTab([&count](Tab&) { ++count; });
+    KITE_EXPECT_EQ(count, 4);
+}
+
+KITE_TEST(workspace, a_listing_finds_its_tab_by_token_and_nothing_else_does) {
+    Workspace workspace;
+    Session* first = workspace.AddSession("one", "C:\\a");
+    Tab* wanted = first->Panes().front()->AddTab("C:\\a2");
+    workspace.AddSession("two", "C:\\b");
+
+    wanted->loadToken = 42;
+    KITE_EXPECT_EQ(workspace.FindTabByLoadToken(42), wanted);
+    // An answer nobody is waiting for is nobody's: the caller drops it.
+    KITE_EXPECT_EQ(workspace.FindTabByLoadToken(43), static_cast<Tab*>(nullptr));
+    // Zero means "not loading", so it must never match a tab.
+    KITE_EXPECT_EQ(workspace.FindTabByLoadToken(0), static_cast<Tab*>(nullptr));
+}
+
+// What is on screen is one tab per pane of the active session - not the active
+// session's every tab, and not the background sessions' panes.
+KITE_TEST(workspace, visible_tabs_are_the_active_tabs_of_the_active_session) {
+    Workspace workspace;
+    Session* first = workspace.AddSession("one", "C:\\a");
+    Pane* left = first->Panes().front();
+    Tab* hidden = left->AddTab("C:\\a2");
+    left->Activate(0);
+    Pane* right = first->Split(left, SplitNode::Kind::LeftRight);
+    KITE_EXPECT(right != nullptr);
+    workspace.AddSession("two", "C:\\b");
+    workspace.ActivateSession(0);
+
+    const std::vector<Tab*> visible = workspace.VisibleTabs();
+    KITE_EXPECT_EQ(visible.size(), size_t{ 2 });
+    KITE_EXPECT_EQ(visible[0], left->activeTab());
+    KITE_EXPECT_EQ(visible[1], right->activeTab());
+    for (Tab* t : visible) KITE_EXPECT_NE(t, hidden);
+
+    // Switching sessions switches the answer wholesale.
+    workspace.ActivateSession(1);
+    KITE_EXPECT_EQ(workspace.VisibleTabs().size(), size_t{ 1 });
+}

@@ -314,3 +314,56 @@ KITE_TEST(keymap, no_display_string_spells_out_the_shortcut_editors_chord) {
     KITE_EXPECT(!str.Get("ui.key_help_hint_unbound").empty());
     KITE_EXPECT(!str.Get("ui.settings_hint_unbound").empty());
 }
+
+// ChordsFor() is what the F1 sheet, the settings screen and keys.ini all print,
+// so the order inside one command is display order - and every mutator has to
+// keep it. The version number rides along: the sheet keeps its own copy of the
+// table and asks this whether the copy is still good.
+KITE_TEST(keymap, chords_keep_their_order_through_bind_and_unbind) {
+    KeyMap keys;
+    keys.LoadDefaults();
+
+    const auto text = [&](Cmd id) { return keys.ChordText(id); };
+
+    keys.UnbindCommand(Cmd::NewTab);
+    KITE_EXPECT_EQ(keys.ChordsFor(Cmd::NewTab).size(), size_t{ 0 });
+
+    const uint64_t start = keys.revision();
+    keys.Bind(ParseChord("Ctrl+T"), Cmd::NewTab);
+    keys.Bind(ParseChord("Ctrl+Alt+N"), Cmd::NewTab);
+    keys.Bind(ParseChord("F4"), Cmd::NewTab);
+    KITE_EXPECT(keys.revision() != start);
+    // Bound in that order, printed in that order.
+    KITE_EXPECT_EQ(text(Cmd::NewTab), std::string("Ctrl+T, Ctrl+Alt+N, F4"));
+
+    // Taking the middle one out leaves the other two where they were.
+    keys.Unbind(ParseChord("Ctrl+Alt+N"));
+    KITE_EXPECT_EQ(text(Cmd::NewTab), std::string("Ctrl+T, F4"));
+
+    // Handing a chord to another command takes it off the first one, and the
+    // first one keeps the order of what is left.
+    keys.Bind(ParseChord("Ctrl+T"), Cmd::NewWindow);
+    KITE_EXPECT_EQ(text(Cmd::NewTab), std::string("F4"));
+    KITE_EXPECT_EQ(keys.Lookup(ParseChord("Ctrl+T")), Cmd::NewWindow);
+
+    // What ToIni() writes is the same list, one line per chord.
+    const Ini ini = keys.ToIni();
+    const Ini::Section* sec = ini.Find("keys");
+    KITE_EXPECT(sec != nullptr);
+    std::vector<std::string> written;
+    for (const Ini::Entry& e : sec->entries) {
+        if (e.key == std::string("tab.new")) written.push_back(e.value);
+    }
+    KITE_EXPECT_EQ(written.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(written[0], std::string("F4"));
+
+    // An unbound command reads back as a real line, never a comment.
+    keys.UnbindCommand(Cmd::NewTab);
+    const Ini after = keys.ToIni();
+    written.clear();
+    for (const Ini::Entry& e : after.Find("keys")->entries) {
+        if (e.key == std::string("tab.new")) written.push_back(e.value);
+    }
+    KITE_EXPECT_EQ(written.size(), size_t{ 1 });
+    KITE_EXPECT_EQ(written[0], std::string("none"));
+}

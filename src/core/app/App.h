@@ -14,7 +14,9 @@
 
 #include "core/app/PlacePicker.h"
 #include "core/app/CommandPalette.h"
+#include "core/app/FolderSizes.h"
 #include "core/app/Host.h"
+#include "core/app/Searching.h"
 #include "core/app/IconProvider.h"
 #include "core/app/SettingsEditor.h"
 #include "core/app/UndoStack.h"
@@ -182,23 +184,26 @@ public:
     uint32_t IconFor(const std::string& path);
 
     /// @brief フォルダの合計サイズを返し、必要なら数え始める。
-    /// @param[in] dir 行が並んでいるフォルダのパス
+    /// @param[in] full その項目のフルパス
     /// @param[in] entry 対象の項目
-    /// @return 数えた結果。フォルダでない・切ってある・まだ何も無いときは
-    ///         状態が `fs::SizeState::Unknown` のもの
-    /// @note UI 層が描画のたびに呼ぶ。**自動で数えるのは画面に出ている行だけ**
-    ///       ─ ここが呼ばれるのがその行だけなので、1 万件のフォルダでも頼むのは
-    ///       数十件で済む（シェルアイコンとまったく同じ形）
-    /// @note リンク（ジャンクション・シンボリックリンク）は数えない。歩きが
-    ///       リンクの先へ降りない以上、その中身は誰も数えていない
-    fs::FolderSize FolderSizeFor(const std::string& dir, const fs::Entry& entry);
+    /// @return 数えた結果。判断は `FolderSizes::For` に
+    /// @note UI 層が描画のたびに呼ぶ。パスは呼ぶ側が組む ─ 同じ行で切り取りの印
+    ///       にもアイコンにも要るので、描く側はどのみち 1 本持っている
+    fs::FolderSize FolderSizeFor(const std::string& full, const fs::Entry& entry) {
+        return folderSizes_.For(full, entry);
+    }
+
+    /// @brief フォルダのサイズを数える側を返す。
+    /// @return 部品への参照
+    /// @note 判断はすべてあちらが持つ。`App` は所有と配線だけ
+    FolderSizes& folderSizes() { return folderSizes_; }
 
     /// @brief 数えているフォルダがあることを伝える文字列を返す。
     /// @return ステータス行の右に出す文字列。数えていなければ空
     /// @note 実行中のファイル操作や検索と同じ扱いで、期限では消えない ─ 深い木は
     ///       数十秒かかるので、黙っていると「押したのに何も起きていない」と
     ///       見分けが付かない
-    std::string folderSizeStatus() const;
+    std::string folderSizeStatus() const { return folderSizes_.status(); }
 
     /// @brief カーソル行のフォルダについて、内訳を伝える文字列を返す。
     /// @return ステータス行の左に添える文字列。言うことが無ければ空
@@ -212,7 +217,7 @@ public:
     /// @return 待ち・実行中のものがあれば true
     /// @note テストが «数え終わるまで回す» のに使う（`fs::FolderSizeJob` は本物の
     ///       ワーカースレッドで走る）
-    bool folderSizesBusy() const;
+    bool folderSizesBusy() const { return folderSizes_.busy(); }
 
     /// @brief 単独ウィンドウとして動かすかを指定する。
     /// @param[in] standalone true なら単独ウィンドウ
@@ -342,6 +347,21 @@ public:
     /// @return 表示中なら true
     bool keyHelpVisible() const { return keyHelp_; }
 
+    /// @brief ショートカット一覧（F1）の 1 行。
+    struct KeyHelpLine {
+        bool header = false;     ///< 分類の見出しか
+        bool spacer = false;     ///< 分類の間の空行か
+        std::string label;       ///< 見出しまたはコマンドのラベル
+        std::string chord;       ///< 割り当てられた和音すべて。無ければ空
+    };
+
+    /// @brief ショートカット一覧に並べる行を返す。
+    /// @return コマンド表の定義順に並んだ行。分類ごとに見出しと空行が挟まる
+    /// @note 割り当てと言語が変わるまで同じ列を返す ─ 134 行ぶんのラベルと和音を
+    ///       毎フレーム組み直すと、表示中ずっと 1 フレームに数百回の割り当てが乗る。
+    ///       折り返しと空行の取捨は窓の大きさで決まるので、そちらは描く側の仕事
+    const std::vector<KeyHelpLine>& keyHelpLines() const;
+
     /// @brief ショートカットキー設定画面の状態を返す。
     /// @return 設定画面への参照
     const KeyEditor& keyEditor() const { return keyEditor_; }
@@ -421,7 +441,7 @@ public:
 
     /// @brief フォルダの合計サイズを数えるかどうかを返す。
     /// @return 設定されている数え方
-    FolderSizeMode folderSizeMode() const { return folderSizeMode_; }
+    FolderSizeMode folderSizeMode() const { return folderSizes_.mode(); }
 
     /// @brief タブバーを置く場所を返す。
     /// @return 設定されている場所
@@ -538,6 +558,15 @@ public:
     /// @return 項目数。SidebarSection::Count では 0
     int SidebarItemCount(SidebarSection section) const;
 
+    /// @brief サイドバーの 1 行が指すパスを返す。
+    /// @param[in] section 対象の区画
+    /// @param[in] index 区画の中での添字
+    /// @return 行のパス。範囲外、または SidebarSection::Count では空文字列
+    /// @note 行そのものは «区画 + 添字» で指す ─ 当たり判定の側にパスの写しを
+    ///       持たせると、サイドバーを描くたびに行数ぶんの std::string を作る
+    ///       ことになる（描画は毎フレーム全部を組み直す）
+    const std::string& SidebarPath(SidebarSection section, int index) const;
+
     /// @brief ステータスバーに出すメッセージを返す。
     /// @return メッセージ。無ければ空文字列
     const std::string& statusMessage() const { return statusMessage_; }
@@ -545,6 +574,14 @@ public:
     /// @brief ステータスメッセージの表示期限が切れたかを返す。
     /// @return 期限切れなら true
     bool statusExpired() const;
+
+    /// @brief ステータスメッセージの表示期限までの残り時間を返す。
+    /// @return 残りミリ秒。期限切れ、またはメッセージが無ければ 0
+    /// @note 期限を検出するには、そのとき 1 フレーム描かれる必要がある ─ 描画を
+    ///       要求するのはプラットフォーム側のタイマーなので、いつ起こせばよいかを
+    ///       ここが答える。500 ms おきに起きて «まだか» と訊いていたころは、
+    ///       4 秒のメッセージ 1 本につき全面再描画が 8 回走っていた
+    uint64_t statusRemainingMs() const;
 
     /// @brief ドライブ一覧を返す。
     /// @return ルート項目の一覧
@@ -1008,61 +1045,6 @@ private:
     ///       背面に回って一覧を手放した ─ を見つけたら、そこで歩きも打ち切る
     void PumpSearch();
 
-    /// @brief フォルダ 1 つを数えるようワーカーに頼む。
-    /// @param[in] path 数えるフォルダ
-    /// @param[in] force 答えが出ているもの・やめたものも数え直す
-    /// @note 表がまだ知らないときだけ実際に頼む ─ 描画から毎フレーム呼ばれる
-    ///       経路があるので、二重の依頼を止めているのは `FolderSizeCache::Request`
-    /// @note **頼まれたときは数え直す**（`force`）。数えた値は «そのときの値» なので、
-    ///       明示的な «数えて» に «もう知っている» と答えるのは嘘に近い
-    void RequestFolderSize(const std::string& path, bool force = false);
-
-    /// @brief 一覧に並んでいるフォルダをまとめて数えるよう頼む。
-    /// @param[in,out] tab 対象のタブ
-    /// @param[in] force 答えが出ているもの・やめたものも数え直す
-    /// @note **サイズで並べ替えているときはこれを通る。** 並べ替えの基準がその列で
-    ///       ある以上、値が要るのは画面に出ている行だけではない ─ 数えていない
-    ///       フォルダは 0 として並ぶので、見えている行だけ数えても順序は整わない
-    void RequestFolderSizesIn(Tab& tab, bool force = false);
-
-    /// @brief 数え終わった値を、そのタブの項目に写す。
-    /// @param[in,out] tab 対象のタブ
-    /// @return 1 つでも写したら true
-    /// @note **正は表（`sizes_`）のほうで、これは並べ替えのための写し。**
-    ///       `Tab::Rebuild()` は `fs::Entry::size` で並べるので、そこに入って
-    ///       いなければサイズ順もサイズの塊もフォルダを 0 として扱う。列に出す
-    ///       値は表から直接引く（`FolderSizeFor`）ので、2 つが食い違って見える
-    ///       ことはない
-    /// @note 写すのは数え終わったものだけ ─ 途中経過を並べ替えに載せると、
-    ///       数えている間ずっと行が動いて目で追えなくなる
-    bool ApplyFolderSizes(Tab& tab);
-
-    /// @brief サイズで並べ替えているタブのために、一覧のフォルダを数え始める。
-    /// @param[in,out] tab 対象のタブ
-    /// @note 自動で数える設定で、かつローカルの固定ディスクのときだけ走る。
-    ///       手で頼まれたとき（`Cmd::CountFolderSizes`）はこの制限を通さない ─
-    ///       共有や USB を数えるのは、それを頼んだ人の判断
-    void SyncFolderSizesForSort(Tab& tab);
-
-    /// @brief 数えているものと待っているものをすべて畳む。
-    /// @note 途中経過は残さない ─ 止めた値が «数え終わった» 値と同じ顔で
-    ///       残ると、どちらなのかを画面が言えない
-    void StopFolderSizes();
-
-    /// @brief 届いたフォルダのサイズを取り込む。
-    /// @note PumpLoader() から呼ばれる。並べ替えの基準がサイズのタブは、
-    ///       **数え終わるものが無くなってから 1 回だけ**並べ直す
-    void PumpFolderSizes();
-
-    /// @brief 自動で数えてよい場所かを判定する。
-    /// @param[in] path 対象のフォルダ
-    /// @return 数えてよければ true
-    /// @note 自動で歩くのはローカルの固定ディスクだけ。ネットワーク共有・
-    ///       リムーバブル・光学・仮想フォルダは、頼まれたときだけ歩く ─
-    ///       「待たせて空を返す機能は無い機能より悪い」と同じ判断で、分単位に
-    ///       なりうる歩きを黙って始めない
-    bool AutoCountEligible(const std::string& path) const;
-
     void RequestLoad(Tab& tab, bool force = false);
     void EnsureVisibleTabsLoaded();
     void RefreshTabsShowing(const std::string& dir);
@@ -1146,16 +1128,6 @@ private:
     // 終わるまでウィンドウがメッセージを 1 つも処理できない ─ 大きなコピーの間
     // 「使えなくなる」と報告された形がこれ。
     std::unique_ptr<fs::FileOpQueue> fileOps_;
-    // 再帰検索。**一度に 1 本しか歩かない** ─ 2 本走らせても同じディスクを取り合う
-    // だけで、2 本目の結果は誰も見ていない一覧へ届く（`fs::SearchJob` の冒頭）。
-    std::unique_ptr<fs::SearchJob> search_;
-    // フォルダの合計サイズ。表がウィンドウに 1 つなのは列と同じ理由 ─ タブごとに
-    // 持つと、同じフォルダを 2 枚のペインで見ているだけで 2 回歩くことになる。
-    std::unique_ptr<fs::FolderSizeJob> sizeJob_;
-    fs::FolderSizeCache sizes_;
-    // 並べ替えの基準がサイズのタブを «数え終わってから 1 回だけ» 並べ直すための印。
-    // 1 件確定するたびに並べ直すと、数えている間ずっと行が動いて目で追えない。
-    bool resortSizes_ = false;
     std::vector<PendingFileOp> pendingOps_;
 
     std::vector<fs::Root> roots_;
@@ -1164,6 +1136,15 @@ private:
     // OS の順で返ってくるので、覚えていないと次の RefreshRoots() で元に戻る。
     std::vector<std::string> quickAccessOrder_;
     std::vector<std::string> driveOrder_;
+
+    // フォルダの合計サイズ。表がウィンドウに 1 つなのは列と同じ理由 ─ タブごとに
+    // 持つと、同じフォルダを 2 枚のペインで見ているだけで 2 回歩くことになる。
+    // **roots_ の後に置くこと** ─ «自動で歩いてよい場所か» をそこへの参照で見る。
+    FolderSizes folderSizes_;
+
+    // 再帰検索。**一度に 1 本しか歩かない** ─ 2 本走らせても同じディスクを取り合う
+    // だけで、2 本目の結果は誰も見ていない一覧へ届く（`fs::SearchJob` の冒頭）。
+    Searching searching_;
 
     UndoStack undo_;
 
@@ -1183,6 +1164,12 @@ private:
     std::string completeRequested_;
     bool keyHelp_ = false;
     bool keysChanged_ = false;
+    // The F1 sheet, built from the command table. Rebuilt when the bindings move
+    // (the key map counts its own changes) or the language is reloaded, which is
+    // the one funnel every string change goes through.
+    mutable std::vector<KeyHelpLine> keyHelpLines_;
+    mutable uint64_t keyHelpKeysRevision_ = 0;
+    mutable bool keyHelpStale_ = true;
     bool sidebarVisible_ = true;
     std::vector<SidebarSection> sidebarSections_ = { SidebarSection::QuickAccess,
                                                      SidebarSection::Bookmarks,
@@ -1203,9 +1190,6 @@ private:
     // ZIP を「開く」と言われたときの答え。true なら中を一覧に出し、false なら
     // 関連付けられたアプリ（展開ソフト）に渡す
     bool openArchives_ = true;
-    // フォルダのサイズを数えるか。既定は «自動» ─ off にすると、この機能が在ること
-    // 自体が設定画面を開くまで誰にも伝わらない（書庫を開く既定と同じ判断）。
-    FolderSizeMode folderSizeMode_ = FolderSizeMode::Auto;
     bool standalone_ = false;
     // 確認待ちの «既定のファイルマネージャーにするか»。行が動かした値をそのまま
     // 読み直せない ─ 確認の間に行のカーソルは動きうるし、取り消せば値は戻る

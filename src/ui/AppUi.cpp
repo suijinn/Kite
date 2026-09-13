@@ -64,14 +64,44 @@ const char* EmptyListText(const Tab& tab) {
 
 AppUi::AppUi(App& app) : app_(app) {}
 
-void AppUi::Add(const RectF& r, Hit kind, int index, Pane* pane, SplitNode* node,
-                std::string path) {
-    regions_.push_back({ r, kind, pane, node, index, SidebarSection::Count, std::move(path) });
+void AppUi::Add(const RectF& r, Hit kind, int index, Pane* pane, SplitNode* node) {
+    regions_.push_back({ r, kind, pane, node, index, SidebarSection::Count });
 }
 
-void AppUi::AddSidebar(const RectF& r, Hit kind, SidebarSection section, int index,
-                       std::string path) {
-    regions_.push_back({ r, kind, nullptr, nullptr, index, section, std::move(path) });
+void AppUi::AddSidebar(const RectF& r, Hit kind, SidebarSection section, int index) {
+    regions_.push_back({ r, kind, nullptr, nullptr, index, section });
+}
+
+std::vector<std::string> AppUi::CrumbPaths(const Tab& tab) {
+    std::vector<std::string> out;
+    std::string p = tab.path;
+    while (!p.empty()) {
+        out.push_back(p);
+        const std::string up = vfs::ParentOf(p);
+        if (up == p) break;
+        p = up;
+    }
+    std::reverse(out.begin(), out.end());
+    return out;
+}
+
+std::string AppUi::PathIn(const Region* region) const {
+    if (!region) return {};
+    if (region->kind == Hit::SidebarItem) {
+        return app_.SidebarPath(region->section, region->index);
+    }
+    if (region->kind == Hit::Crumb && region->pane) {
+        // Rebuilt rather than remembered: the trail is a function of the tab's
+        // path, and this is asked once per click - not per row per frame, which
+        // is what carrying it in Region amounted to.
+        if (const Tab* tab = region->pane->activeTab()) {
+            const std::vector<std::string> crumbs = CrumbPaths(*tab);
+            if (region->index >= 0 && region->index < static_cast<int>(crumbs.size())) {
+                return crumbs[static_cast<size_t>(region->index)];
+            }
+        }
+    }
+    return {};
 }
 
 const AppUi::Region* AppUi::Pick(float x, float y) const {
@@ -103,11 +133,7 @@ bool AppUi::OutsideWindow(float x, float y) const {
 // states are deliberately not included, so pressing on a row does not blink it.
 bool AppUi::PointerOver(const RectF& box) const {
     if (!mouseInside_ || dropActive_) return false;
-    if (drag_ == Drag::Splitter || drag_ == Drag::Tab || drag_ == Drag::Marquee ||
-        drag_ == Drag::Sidebar || drag_ == Drag::Section || drag_ == Drag::Session ||
-        drag_ == Drag::TabBarWidth) {
-        return false;
-    }
+    if (DragHidesHover()) return false;
     return box.contains(mouseX_, mouseY_);
 }
 
@@ -234,39 +260,28 @@ void AppUi::PaintDragOverlay(Renderer& r) {
     }
 
     // Where the dragged tab would be inserted.
-    if (drag_ == Drag::Tab && !dropTabMarker_.empty()) {
-        r.FillRect(dropTabMarker_, th.accent);
+    if (const TabDrag* tab = std::get_if<TabDrag>(&drag_.what)) {
+        if (tab->started && !tab->marker.empty()) r.FillRect(tab->marker, th.accent);
     }
 
-    // And down the side of a column heading, where letting go would put it.
-    if (drag_ == Drag::Column && !dropColumnMarker_.empty()) {
-        r.FillRect(dropColumnMarker_, th.accent);
-    }
-
-    // The same caret for a sidebar item, laid across the row boundary rather
-    // than down the side of a tab, and for a whole section on its block edge.
-    if (drag_ == Drag::Sidebar && !dropSidebarMarker_.empty()) {
-        r.FillRect(dropSidebarMarker_, th.accent);
-    }
-    if (drag_ == Drag::Section && !dropSectionMarker_.empty()) {
-        r.FillRect(dropSectionMarker_, th.accent);
-    }
-    // And down the side of a session chip, the way a horizontal tab bar draws it:
-    // the chips are ordered along the row they wrapped into.
-    if (drag_ == Drag::Session && !dropSessionMarker_.empty()) {
-        r.FillRect(dropSessionMarker_, th.accent);
+    // The same caret for the four reorders: down the side of a column heading or
+    // a session chip, across the row boundary for a sidebar item, on the block
+    // edge for a whole section. Which edge it is was decided when the slot was
+    // proposed, so there is one line to draw here rather than four.
+    if (const ReorderDrag* drag = std::get_if<ReorderDrag>(&drag_.what)) {
+        if (drag->started && !drag->marker.empty()) r.FillRect(drag->marker, th.accent);
     }
 
     // The selection band. Drawn last and clipped to its own list, so sweeping
     // past the edge of the pane does not paint over the bars or the neighbour.
-    if (drag_ == Drag::Marquee && marqueePane_) {
-        const Tab* tab = marqueePane_->activeTab();
+    if (const MarqueeDrag* sweep = std::get_if<MarqueeDrag>(&drag_.what); sweep && sweep->pane) {
+        const Tab* tab = sweep->pane->activeTab();
         if (tab) {
-            const RectF& body = marqueePane_->listArea;
-            const float anchorY = body.t + marqueeAnchorY_ - tab->scroll;
+            const RectF& body = sweep->pane->viewport.listArea;
+            const float anchorY = body.t + sweep->anchorY - tab->scroll;
             const RectF band =
-                RectF{ std::min(marqueeAnchorX_, marqueeX_), std::min(anchorY, marqueeY_),
-                       std::max(marqueeAnchorX_, marqueeX_), std::max(anchorY, marqueeY_) }
+                RectF{ std::min(sweep->anchorX, sweep->x), std::min(anchorY, sweep->y),
+                       std::max(sweep->anchorX, sweep->x), std::max(anchorY, sweep->y) }
                     .intersect(body);
             if (!band.empty()) {
                 r.FillRect(band, th.accent.alpha(0.16f));
@@ -453,13 +468,14 @@ void AppUi::PaintSidebar(Renderer& r, const RectF& area) {
     const float iconCell = IconCell(th);
     const float top = area.t + 4.0f;
     float y = top - sidebarScroll_;
-    const Tab* current = const_cast<App&>(app_).workspace().focusedTab();
+    const Tab* current = app_.workspace().focusedTab();
     const std::string currentPath = current ? current->path : std::string();
 
     // A section is greyed out while it is the one being carried, heading and
     // rows alike: it is the whole block that moves, not the heading on its own.
     auto carrying = [&](SidebarSection id) {
-        return drag_ == Drag::Section && dragSection_ == id;
+        const ReorderDrag* drag = std::get_if<ReorderDrag>(&drag_.what);
+        return drag && drag->started && drag->kind == ReorderKind::Section && drag->section == id;
     };
 
     // Returns whether the items under this heading are to be laid out at all.
@@ -517,14 +533,16 @@ void AppUi::PaintSidebar(Renderer& r, const RectF& area) {
             // The row being carried keeps its place until the drop, but says so:
             // with the pointer several rows away, the marker alone does not tell
             // you what is being moved.
-            const bool carried = (drag_ == Drag::Sidebar && dragSidebarSection_ == id &&
-                                  dragSidebarIndex_ == index) ||
+            const ReorderDrag* moving = std::get_if<ReorderDrag>(&drag_.what);
+            const bool carried = (moving && moving->started &&
+                                  moving->kind == ReorderKind::Sidebar &&
+                                  moving->section == id && moving->index == index) ||
                                  carrying(id);
             const Color textColor = selected ? th.rowSelectedText : th.text;
             r.DrawText(label, { icon.r + 6.0f, row.t, row.r - 6.0f, row.b },
                        carried ? textColor.alpha(textColor.a * 0.45f) : textColor, FontRole::Ui,
                        TextAlign::Left);
-            AddSidebar(row, Hit::SidebarItem, id, index, fullPath);
+            AddSidebar(row, Hit::SidebarItem, id, index);
         }
         y += rowH;
     };
@@ -547,8 +565,7 @@ void AppUi::PaintSidebar(Renderer& r, const RectF& area) {
 
             case SidebarSection::Bookmarks:
                 if (section("ui.bookmarks", SidebarSection::Bookmarks)) {
-                    const std::vector<Bookmark>& marks =
-                        const_cast<App&>(app_).workspace().bookmarks;
+                    const std::vector<Bookmark>& marks = app_.workspace().bookmarks;
                     for (size_t i = 0; i < marks.size(); ++i) {
                         // A bookmark is a folder, so it falls back to one - the
                         // same placeholder quick access uses, for the same reason.
@@ -764,8 +781,8 @@ AppUi::TabLayout AppUi::LayoutTabBar(Pane& pane, const RectF& area) const {
 
     // Written back for the wheel: it has to know how far the bar can go, and only
     // the layout knows how many rows there are and how many of them fit.
-    pane.tabRows = out.rows;
-    pane.tabRowsPerPage = out.shownRows;
+    pane.viewport.tabRows = out.rows;
+    pane.viewport.tabRowsPerPage = out.shownRows;
     return out;
 }
 
@@ -923,8 +940,9 @@ void AppUi::PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area, b
     // "PC", which is a place the crumbs can now take you to.
     std::vector<std::pair<std::string, std::string>> crumbs;  // label, full path
     {
-        std::string p = tab->path;
-        while (!p.empty()) {
+        // The same trail a click resolves against, so the two cannot disagree
+        // about which crumb index is which folder.
+        for (std::string& p : CrumbPaths(*tab)) {
             std::string label;
             if (const char* key = vfs::LabelKey(p)) {
                 label = app_.strings().Get(key);
@@ -937,12 +955,8 @@ void AppUi::PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area, b
             } else {
                 label = path::DisplayName(p);
             }
-            crumbs.push_back({ std::move(label), p });
-            const std::string up = vfs::ParentOf(p);
-            if (up == p) break;
-            p = up;
+            crumbs.push_back({ std::move(label), std::move(p) });
         }
-        std::reverse(crumbs.begin(), crumbs.end());
     }
 
     float x = area.l + kPad;
@@ -959,7 +973,7 @@ void AppUi::PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area, b
         if (Hovered(box)) r.FillRoundRect(box.inset(0.0f, 1.0f), 3.0f, th.rowHover);
         r.DrawText(crumbs[i].first, box, last ? th.text : th.textDim, FontRole::Ui,
                    TextAlign::Center);
-        Add(box, Hit::Crumb, 0, pane, nullptr, crumbs[i].second);
+        Add(box, Hit::Crumb, static_cast<int>(i), pane);
         x = box.r;
 
         if (!last) {
@@ -969,7 +983,7 @@ void AppUi::PaintPathBar(Renderer& r, Pane* pane, Tab* tab, const RectF& area, b
         }
     }
 
-    if (const_cast<App&>(app_).HasBookmark(tab->path)) {
+    if (app_.HasBookmark(tab->path)) {
         glyph::Star(r, { area.r - 22.0f, area.t + 4.0f, area.r - 6.0f, area.b - 4.0f }, th.accent);
     }
     r.FillRect({ area.l, area.b - 1.0f, area.r, area.b }, th.border);
@@ -1075,10 +1089,10 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
 
     if (!tab) return;
 
-    pane->listHeight = body.h();
-    pane->rowHeight = th.rowHeight;
-    pane->rowsPerPage = std::max(1, static_cast<int>(body.h() / th.rowHeight) - 1);
-    pane->listArea = body;
+    pane->viewport.listHeight = body.h();
+    pane->viewport.rowHeight = th.rowHeight;
+    pane->viewport.rowsPerPage = std::max(1, static_cast<int>(body.h() / th.rowHeight) - 1);
+    pane->viewport.listArea = body;
 
     if (tab->loadToken != 0 && !tab->loaded) {
         r.DrawText(str.Get("ui.loading"), body.inset(kPad, 8.0f), th.textDim, FontRole::Ui,
@@ -1346,7 +1360,7 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
                         // フォルダの合計は木を歩かないと分からない。訊くのはこの
                         // 1 行だけなので、自動で数えるのも画面に出ている行だけに
                         // なる（シェルアイコンとまったく同じ形）。
-                        const fs::FolderSize folder = app_.FolderSizeFor(tab->path, e);
+                        const fs::FolderSize folder = app_.FolderSizeFor(full, e);
                         if (folder.state == fs::SizeState::Counting) {
                             // 増えていく途中の数。確定した値と同じ顔で出すと、
                             // まだ歩いている最中の合計がその答えに見える。

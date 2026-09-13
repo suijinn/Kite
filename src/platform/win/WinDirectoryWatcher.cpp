@@ -71,7 +71,13 @@ void WinDirectoryWatcher::WorkerMain() {
         DWORD bytes = 0;
         ULONG_PTR key = 0;
         OVERLAPPED* overlapped = nullptr;
-        const BOOL ok = ::GetQueuedCompletionStatus(port_, &bytes, &key, &overlapped, kPollMs);
+        // The timeout exists for the debounce tick and nothing else: watches,
+        // commands and the quit signal all arrive on the port. With nothing
+        // waiting to settle there is nothing to wake up for, so waiting forever
+        // is the whole answer - the alternative is 10 wake-ups a second for as
+        // long as Kite is open, most of them finding an empty map.
+        const DWORD wait = dirtyAtMs_.empty() ? INFINITE : kPollMs;
+        const BOOL ok = ::GetQueuedCompletionStatus(port_, &bytes, &key, &overlapped, wait);
 
         if (!ok && overlapped == nullptr) {
             // Timed out: this is also the debounce tick.

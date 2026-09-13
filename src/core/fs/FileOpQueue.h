@@ -41,17 +41,14 @@
 #pragma once
 
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
 #include <deque>
-#include <mutex>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
-#include "core/fs/DirectoryLoader.h"
 #include "core/fs/FileSystem.h"
+#include "core/fs/JobQueue.h"
 
 namespace kite::fs {
 
@@ -157,16 +154,14 @@ bool FileOpsConflict(const std::vector<FileOpTouch>& a, const std::vector<FileOp
 ///       操作系はワーカースレッドから呼ばれるので、スレッド安全でなければならない
 class FileOpQueue {
 public:
-    /// @brief ワーカースレッドを起動する。
+    /// @brief 操作キューを作る。**ワーカーは最初の依頼まで作らない。**
     /// @param[in] fsys 操作に使うファイルシステム。本オブジェクトより長生きすること
     /// @param[in] wake 完了通知先。本オブジェクトより長生きすること
     /// @param[in] workers 同時に走らせる上限。1 未満を渡した場合は 1 に丸める
+    /// @note 破棄では実行中の操作を**中断できない** ─ シェルに始めさせたコピーを
+    ///       途中で止める手段が無いので、終わるまで待つ。積んであるだけのものは
+    ///       捨てる（`JobQueue::Stop`）
     FileOpQueue(IFileSystem& fsys, IWakeSink& wake, int workers = kFileOpWorkers);
-
-    /// @brief ワーカースレッドの停止を待って破棄する。
-    /// @note 実行中の操作は**中断できない** ─ シェルに始めさせたコピーを途中で
-    ///       止める手段が無いので、終わるまで待つ。積んであるだけのものは捨てる
-    ~FileOpQueue();
 
     FileOpQueue(const FileOpQueue&) = delete;
     FileOpQueue& operator=(const FileOpQueue&) = delete;
@@ -182,55 +177,45 @@ public:
     /// @brief 完了済みの結果をすべて取り出す。
     /// @param[out] out 取り出した結果の追加先。既存の要素は保持される
     /// @note UI スレッドからのみ呼ぶこと
-    void Drain(std::vector<FileOpDone>& out);
+    void Drain(std::vector<FileOpDone>& out) { queue_.Drain(out); }
 
     /// @brief 未完了の依頼があるかを返す。
     /// @return 実行中または処理待ちのものがあれば true
-    bool busy() const { return pending() > 0; }
+    bool busy() const { return queue_.busy(); }
 
     /// @brief 未完了の依頼の数を返す。
     /// @return 実行中のものを含む、まだ結果を返していない依頼の数
-    int pending() const { return pending_.load(std::memory_order_relaxed); }
+    int pending() const { return queue_.pending(); }
 
     /// @brief いま実際に走っている依頼の数を返す。
     /// @return ワーカーが握っている依頼の数。待っているだけのものは含まない
     /// @note ステータス行が «実行中 n 件» と «他 m 件待機中» を言い分けるためにある
-    int running() const { return running_.load(std::memory_order_relaxed); }
+    int running() const { return queue_.running(); }
 
 private:
     struct Job {
-        uint64_t token;
+        uint64_t token = 0;
         FileOpRequest request;
         std::vector<FileOpTouch> touches;  ///< 衝突判定に使う、この依頼が触る場所
     };
 
-    void WorkerMain();
+    using Queue = JobQueue<Job, FileOpDone>;
 
     /// @brief 依頼を 1 つ実行する。ワーカースレッド上で呼ばれる。
     FileOpDone Run(const Job& job);
 
-    /// @brief いま走らせてよい依頼を探す。`mutex_` を持った状態で呼ぶこと。
-    /// @return `queue_` への添字。走らせてよいものが無ければ `queue_.size()`
+    /// @brief いま走らせてよい依頼を探す。`JobQueue` の錠の中で呼ばれる。
+    /// @param[in] queue 待っている依頼
+    /// @param[in] running いま走っている依頼
+    /// @return `queue` への添字。走らせてよいものが無ければ `queue.size()`
     /// @note 実行中のどれとも衝突せず、**自分より前に並んでいるどれとも衝突しない**
     ///       ものだけ。後者が無いと、先に頼まれた依頼を後の依頼が追い越しうる ─
     ///       関係し合う依頼の順序は依頼した順でなければならない
-    size_t FindRunnable() const;
+    static size_t FindRunnable(const std::deque<Job>& queue, const std::vector<const Job*>& running);
 
     IFileSystem& fs_;
-    IWakeSink& wake_;
-
-    std::mutex mutex_;
-    std::condition_variable cv_;
-    std::deque<Job> queue_;
-    std::vector<FileOpDone> done_;
-    // 実行中の依頼が触っている場所。トークンで引くのは、終わった順に抜けるため。
-    std::vector<std::pair<uint64_t, std::vector<FileOpTouch>>> active_;
-    bool stop_ = false;
-
     std::atomic<uint64_t> nextToken_{ 1 };
-    std::atomic<int> pending_{ 0 };
-    std::atomic<int> running_{ 0 };
-    std::vector<std::thread> threads_;
+    Queue queue_;
 };
 
 }  // namespace kite::fs

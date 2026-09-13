@@ -8,19 +8,16 @@
 
 namespace kite::fs {
 
-SearchJob::SearchJob(IFileSystem& fsys, IWakeSink& wake) : fs_(fsys), wake_(wake) {
-    thread_ = std::thread([this] { WorkerMain(); });
-}
+SearchJob::SearchJob(IFileSystem& fsys, IWakeSink& wake)
+    : fs_(fsys),
+      // 1 本だけ。2 本走らせても同じディスクを取り合うだけで、しかも 2 本目の
+      // 結果は誰も見ていない一覧へ届く。
+      queue_(wake, 1, [this](const Job& job, const Queue::Emit& emit) { Walk(job, emit); }) {}
 
 SearchJob::~SearchJob() {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stop_ = true;
-    }
-    // 歩いている最中なら、次のフォルダの切れ目で自分から抜ける。
+    // 歩いている最中なら、次のフォルダの切れ目で自分から抜ける ─ join する前に
+    // 立てておかないと、深い木を歩き終わるまで終了が止まる。
     active_.store(0, std::memory_order_relaxed);
-    cv_.notify_all();
-    if (thread_.joinable()) thread_.join();
 }
 
 uint64_t SearchJob::Start(const std::string& root, const std::string& query) {
@@ -28,17 +25,16 @@ uint64_t SearchJob::Start(const std::string& root, const std::string& query) {
         // 空の問いに答えは無い。走っているものは畳む ─ 打った文字を全部消した
         // 人の前に、消す前の答えが残り続けるのはただの嘘。
         active_.store(0, std::memory_order_relaxed);
+        queue_.Clear();
         return 0;
     }
     const uint64_t token = nextToken_.fetch_add(1, std::memory_order_relaxed);
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        pending_ = Job{ token, root, utf8::ToLowerAscii(query) };
-        hasPending_ = true;
-    }
     // 先に立てる ─ ワーカーが走り出す前にこれを見て、前の歩きが自分から抜ける。
+    // 積んでから受け取るのでは間に合わないので、採番はここが持つ。
     active_.store(token, std::memory_order_relaxed);
-    cv_.notify_one();
+    // 積んであるだけの古い問いは捨てる。走っているものは上の一行で畳んである。
+    queue_.Clear();
+    queue_.Request(Job{ token, root, utf8::ToLowerAscii(query) });
     return token;
 }
 
@@ -48,28 +44,20 @@ void SearchJob::Cancel(uint64_t token) {
     active_.compare_exchange_strong(expected, 0, std::memory_order_relaxed);
 }
 
-void SearchJob::Drain(std::vector<SearchBatch>& out) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (done_.empty()) return;
-    for (SearchBatch& b : done_) out.push_back(std::move(b));
-    done_.clear();
-}
+void SearchJob::Drain(std::vector<SearchBatch>& out) { queue_.Drain(out); }
 
-void SearchJob::Publish(uint64_t token, std::vector<Entry>& batch, bool done, bool truncated) {
+void SearchJob::Publish(const Queue::Emit& emit, uint64_t token, std::vector<Entry>& batch,
+                        bool done, bool truncated) {
     if (batch.empty() && !done) return;
     SearchBatch out;
     out.token = token;
     out.entries.swap(batch);
     out.done = done;
     out.truncated = truncated;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        done_.push_back(std::move(out));
-    }
-    wake_.Wake();
+    emit(std::move(out));
 }
 
-void SearchJob::Walk(const Job& job) {
+void SearchJob::Walk(const Job& job, const Queue::Emit& emit) {
     // 歩き方そのものは `fs::WalkTree` が持つ ─ 幅優先、リンクの先へは降りない、
     // 読めないフォルダは飛ばす、打ち切りはフォルダの切れ目。ここが足すのは
     // «名前に当たったら集める» という訪問子だけで、フォルダのサイズを数える側
@@ -88,7 +76,7 @@ void SearchJob::Walk(const Job& job) {
         if (result.status != Status::Ok) return true;
 
         for (const Entry& e : result.entries) {
-            if (utf8::ToLowerAscii(e.name).find(job.needle) == std::string::npos) continue;
+            if (!utf8::ContainsLowerAscii(e.name, job.needle)) continue;
             Entry hit = e;
             // 名前を親のパスに繋いでも指せない ─ 当たった項目は今いるフォルダの
             // 直下とは限らないので、`address` に «その項目自身のパス» を入れる
@@ -108,33 +96,17 @@ void SearchJob::Walk(const Job& job) {
         const uint64_t now = plat::NowMs();
         if (batch.size() >= kSearchBatch || now - lastFlush >= kSearchFlushMs) {
             lastFlush = now;
-            Publish(job.token, batch, false, false);
+            Publish(emit, job.token, batch, false, false);
         }
         return true;
     });
 
     if (truncated) {
-        Publish(job.token, batch, true, true);
+        Publish(emit, job.token, batch, true, true);
         return;
     }
     if (!alive()) return;
-    Publish(job.token, batch, true, false);
-}
-
-void SearchJob::WorkerMain() {
-    for (;;) {
-        Job job;
-        {
-            std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this] { return stop_ || hasPending_; });
-            if (stop_) return;
-            job = std::move(pending_);
-            hasPending_ = false;
-        }
-        running_.store(true, std::memory_order_relaxed);
-        Walk(job);
-        running_.store(false, std::memory_order_relaxed);
-    }
+    Publish(emit, job.token, batch, true, false);
 }
 
 }  // namespace kite::fs
