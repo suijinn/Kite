@@ -1853,6 +1853,100 @@ KITE_TEST(appui, clicking_a_chord_twice_removes_that_one_binding) {
     KITE_EXPECT_EQ(f.app.keys().Lookup(ParseChord("Ctrl+R")), Cmd::Refresh);
 }
 
+namespace {
+
+// The guide line the way the panel breaks it: the string table separates its
+// pieces with a run of spaces, and each piece is a chord and what it does.
+std::vector<std::string> GuidePieces(const std::string& hint) {
+    std::vector<std::string> out;
+    for (size_t i = 0; i < hint.size();) {
+        const size_t sep = hint.find("  ", i);
+        if (sep == std::string::npos) {
+            out.push_back(hint.substr(i));
+            break;
+        }
+        if (sep > i) out.push_back(hint.substr(i, sep - i));
+        i = hint.find_first_not_of(' ', sep);
+        if (i == std::string::npos) break;
+    }
+    return out;
+}
+
+// Every piece of a guide line reached the screen, in a box wide enough to hold
+// the run it was drawn in. The renderer clips to the rect it is handed, so a run
+// measured wider than its own rect is one the reader can only see the front of.
+void ExpectGuideReadable(const test::FakeRenderer& r, const Color& scrim,
+                         const std::string& hint) {
+    const std::vector<test::FakeRenderer::Text> panel = r.TextsAfterFill(scrim);
+    for (const std::string& piece : GuidePieces(hint)) {
+        bool found = false;
+        for (const test::FakeRenderer::Text& t : panel) {
+            if (t.text.find(piece) == std::string::npos) continue;
+            found = true;
+            const float need = static_cast<float>(t.text.size()) * 7.0f;  // フェイクの測り方
+            if (need > t.rect.w() + 0.5f) {
+                KITE_FAIL("\"" + t.text + "\" is cut off (" + std::to_string(need) + " > " +
+                          std::to_string(t.rect.w()) + ")");
+            }
+            break;
+        }
+        if (!found) KITE_FAIL("\"" + piece + "\" never reached the screen");
+    }
+}
+
+}  // namespace
+
+// The line along the foot of the shortcut editor names every key that works
+// there, "Esc: close" last. It used to be poured into one fixed 20 px strip and
+// clipped, which held only while the font did: raise it and the line was cut off
+// partway, taking the way out of the panel with it.
+KITE_TEST(appui, the_shortcut_editor_guide_is_never_cut_off) {
+    Fixture f;
+    f.app.Execute(Cmd::ShowKeySettings);
+    f.Paint();
+    ExpectGuideReadable(f.renderer, f.app.theme().overlayScrim,
+                        f.app.strings().Get("ui.key_settings_hint"));
+}
+
+// The same line, with the font raised. Nothing about the strip may stay at 13 px
+// worth of room - it is a container for letters, and Theme::Scale exists because
+// containers held at a constant cut their contents off from the bottom.
+KITE_TEST(appui, the_guide_follows_the_font_size) {
+    Fixture f;
+    f.app.Execute(Cmd::ShowKeySettings);
+    f.Paint();
+
+    const std::string hint = f.app.strings().Get("ui.key_settings_hint");
+    const size_t lines = f.renderer.TextsAfterFill(f.app.theme().overlayScrim).size();
+
+    f.renderer.lineHeight = 40.0f;
+    f.Paint();
+    ExpectGuideReadable(f.renderer, f.app.theme().overlayScrim, hint);
+
+    // Taller lines, so the rows the guide pushed out have to be gone from the
+    // panel - a band that grew over the list would say nothing about the room it
+    // took.
+    KITE_EXPECT(f.renderer.TextsAfterFill(f.app.theme().overlayScrim).size() < lines);
+
+    for (const test::FakeRenderer::Text& t :
+         f.renderer.TextsAfterFill(f.app.theme().overlayScrim)) {
+        if (t.text.find(GuidePieces(hint).front()) == std::string::npos) continue;
+        KITE_EXPECT(t.rect.h() >= 40.0f);
+        break;
+    }
+}
+
+// Both choosers draw the same foot, so the rule lives in one place and is
+// checked on the other screen too - a container rule added to one of them alone
+// is how the two stop opening at the same size.
+KITE_TEST(appui, the_command_palette_guide_is_never_cut_off) {
+    Fixture f;
+    f.app.Execute(Cmd::ShowCommandPalette);
+    f.Paint();
+    ExpectGuideReadable(f.renderer, f.app.theme().overlayScrim,
+                        f.app.strings().Get("ui.command_palette_hint"));
+}
+
 // The shortcut sheet in a window too small for it. Three things share its title
 // line and every row holds two more, and each of them used to be handed a rect
 // running to the far edge - which reads as columns only while there is room for
