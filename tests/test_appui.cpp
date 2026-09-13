@@ -2794,6 +2794,26 @@ KITE_TEST(appui, hiding_a_column_gives_its_width_to_the_name) {
     KITE_EXPECT_NEAR(ColumnLeft(f, "ui.size"), nameRight + extWidth, 0.5f);
 }
 
+KITE_TEST(appui, the_extension_column_keeps_the_spelling_on_disk) {
+    Fixture f;
+    // 大文字の拡張子を持つ項目を 1 つ足して開き直す。
+    f.files.AddFile("C:\\home", "README.MD", 20, 1200);
+    f.app.RefreshFocused();
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    // 列が出すのはディスクに在る綴りそのまま ─ 小文字に直さない。
+    const test::FakeRenderer::Text* ext = f.TextNamed("MD");
+    KITE_EXPECT(ext != nullptr);
+    KITE_EXPECT(f.TextNamed("md") == nullptr);
+    // 出ているのは拡張子の列であって、名前に書かれた文字ではない。
+    if (ext) KITE_EXPECT_NEAR(ext->rect.l, ColumnLeft(f, "ui.ext") + 4.0f, 0.5f);
+
+    f.app.SetColumnVisible(SortKey::Ext, false);
+    f.Paint();
+    KITE_EXPECT(f.TextNamed("MD") == nullptr);
+}
+
 KITE_TEST(appui, group_headings_are_drawn_in_the_list) {
     Fixture f;
     f.Paint();
