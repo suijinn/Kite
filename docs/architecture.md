@@ -111,7 +111,6 @@ CMake ターゲットは 3 つ:
 （とサイズはドライブ一覧）だけで済む ─ だから `App&` を持たずに立てられる。入力欄・
 ファイル操作・チューザが `App.cpp` に残っているのは、そこに在るのが判断ではなく**配線**
 だから（判断は `TextField` / `fs::FileOpQueue` / `PlacePicker` がすでに持っている）。
-詳細は [refactoring-plan.md](refactoring-plan.md)。
 
 **テストが層分離の防波堤。** `kite_tests` は `kite_core` だけをリンクするので、`core/` や
 `ui/` に Windows ヘッダが紛れ込めばビルドが壊れる。ただし Windows 上では

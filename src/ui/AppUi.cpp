@@ -1343,7 +1343,12 @@ void AppUi::PaintList(Renderer& r, Pane* pane, Tab* tab, const RectF& area, bool
         for (const PlacedColumn& column : placed) {
             switch (column.id) {
                 case SortKey::Ext: {
-                    const std::string ext = e.isDir() ? std::string() : path::Extension(e.name);
+                    // 書かれたままの綴りで出す（`Extension()` は小文字で答えるので、
+                    // `README.MD` の列が `md` になっていた）。ディスクに在る名前に
+                    // ついての値なので、列が勝手に直す理由が無い ─ 複製の名前を
+                    // 組むときに «拡張子は書かれたまま» としているのと同じ話。
+                    const std::string_view ext =
+                        e.isDir() ? std::string_view() : path::ExtensionView(e.name);
                     r.DrawText(ext, { column.l + 4.0f, row.t, column.r, row.b }, detail,
                                FontRole::UiSmall, TextAlign::Left);
                     break;
