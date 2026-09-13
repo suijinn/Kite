@@ -24,10 +24,13 @@ CLAUDE.md。
                     ┌──────────────────────────────────────┐
                     │ kite.exe                             │
                     │   UI スレッド（描画・入力）           │
-                    │   DirectoryLoader ワーカー × 2        │
-                    │   FileOpQueue ワーカー × 4            │
-                    │   WinIconProvider ワーカー            │
                     │   WinDirectoryWatcher ワーカー        │
+                    │   ─ 以下は最初の依頼まで立たない ─    │
+                    │   DirectoryLoader ワーカー × 2        │
+                    │   FolderSizeJob ワーカー × 2          │
+                    │   FileOpQueue ワーカー × 4            │
+                    │   SearchJob ワーカー                  │
+                    │   WinIconProvider ワーカー            │
                     └───┬──────────┬──────────┬────────────┘
                         │          │          │  名前付きパイプ
         ┌───────────────┘          │          └───────────────┐
@@ -44,6 +47,9 @@ CLAUDE.md。
   共有するとメニューを開いている間アイコンも仮想フォルダの列挙も止まる。
 - **どれも最初の要求まで起動しない。** 右クリックもシェルアイコンも仮想フォルダも使わない
   起動では、プロセスは 1 つのまま。ホストは 60 秒使われなければ自分で終了する。
+- **`kite.exe` 側のワーカーも同じ**（`fs::JobQueue`、§5）。監視だけが最初から立っていて、
+  残りは最初の依頼で立つ ─ 検索もファイル操作もしない起動では、そのぶんのスレッドが
+  そもそも存在しない。
 - **やりとりするのは文字列と画素だけ。** PIDL もハンドルも渡らない。書式は
   `platform/win/ShellHostProtocol.h`（Windows 非依存で、`tests/test_hostproto.cpp` が直接
   検証する）。書式を変えたら `kMagic` も変える ─ 版の食い違うホストとは握手で失敗させる。
@@ -61,22 +67,26 @@ CLAUDE.md。
 src/
   core/          OS 呼び出しを行わない。例外は core/base/Platform.h の 6 つの自由関数のみ
     base/          UTF-8 / パス / INI / 書式 / 自然順ソート / Platform.h
-    fs/            IFileSystem 抽象、非同期 DirectoryLoader / FileOpQueue、
-                   DirectoryWatcher、VirtualPath
+    fs/            IFileSystem 抽象、非同期ワーカーの骨格 JobQueue と、その上の
+                   DirectoryLoader / FileOpQueue / SearchJob / FolderSizeJob、
+                   再帰の歩き TreeWalk、DirectoryWatcher、VirtualPath
     model/         Tab → Pane → SplitNode ツリー → Session → Workspace
     input/         コマンド表・キーマップ・TextField・パス補完・型入力ジャンプ・キー設定
     i18n/          文字列テーブル（en / ja 内蔵）
     theme/         配色とメトリクス
     app/           App（唯一のディスパッチ点）、UndoStack、IconCache、
                    PickerList / PlacePicker / CommandPalette、SettingsEditor、ConfigDir
-      App.cpp        状態・移動・一覧・入力欄・ファイル操作
+      App.cpp        状態・移動・一覧・入力欄・ファイル操作・チューザ
       AppCommands.cpp App::Execute（コマンド 1 つに case 1 つ）
       AppConfig.cpp  設定とセッションの読み書き、設定画面との受け渡し
+      FolderSizes.*  フォルダの合計サイズ（表・ワーカー・数え方の設定）
+      Searching.*    再帰検索（開始・打ち切り・取り込み・進み具合の文言）
+      Host.h         IHost / IShellIntegration と、再描画を頼む番人 ui::Redraw
   ui/            OS 非依存。抽象 ui::Renderer に対してのみ描画する
     Renderer.h     描画プリミティブのインターフェース
     AppUi.cpp      レイアウト・描画・ヒットテスト
     AppUiOverlays.cpp F1・Ctrl+Shift+,・Ctrl+,・Ctrl+P・Ctrl+Shift+P の 1 枚もの
-    AppUiMouse.cpp 当たり判定の振り分けとドラッグ
+    AppUiMouse.cpp 当たり判定の振り分けと、押す・動かす・離す・回すの 4 つ
     Glyphs.cpp     シェルアイコンが届くまでのベクタ描画
   platform/win/  Windows ヘッダが現れる唯一の場所
   main_win.cpp   起動の入口（単一インスタンスの振り分け）
@@ -95,6 +105,13 @@ CMake ターゲットは 3 つ:
 **`ShellMenu.cpp`（`IContextMenu`）・`ShellIcons.cpp`（アイコンオーバーレイ）・
 `ShellFolder.cpp`（`IShellFolder` の列挙）を `kite` ターゲットに足してはならない。**
 リンクした時点で隔離の意味が消える。CI が検査している。
+
+**`App` から外に出ているのは «葉» だけ。** `FolderSizes` と `Searching` は、外から見た口が
+«表 1 つ・ワーカー 1 つ・文言 1 つ» に収まり、受け取る依存もファイルシステムと表示文字列
+（とサイズはドライブ一覧）だけで済む ─ だから `App&` を持たずに立てられる。入力欄・
+ファイル操作・チューザが `App.cpp` に残っているのは、そこに在るのが判断ではなく**配線**
+だから（判断は `TextField` / `fs::FileOpQueue` / `PlacePicker` がすでに持っている）。
+詳細は [refactoring-plan.md](refactoring-plan.md)。
 
 **テストが層分離の防波堤。** `kite_tests` は `kite_core` だけをリンクするので、`core/` や
 `ui/` に Windows ヘッダが紛れ込めばビルドが壊れる。ただし Windows 上では
@@ -145,16 +162,27 @@ Workspace ─ Session[]（1 つがアクティブ）
 
 ```
 WinWindow（WM_KEYDOWN → Chord）
-  → App::OnKey
+  → App::OnKey ── ui::Redraw をスコープに立てる
     → KeyMap が Chord を Cmd に変換
       → App::Execute（唯一の switch）
         → Workspace を書き換え / IFileSystem・IShellIntegration を呼ぶ
-          → IHost::Invalidate()
-            → WinWindow::Paint → AppUi::Paint → ui::Renderer
+  ← 抜けるときに Redraw が IHost::Invalidate()
+      → WinWindow::Paint → AppUi::Paint → ui::Renderer
 ```
 
+**再描画を頼むのは入口で 1 回。** `App::OnKey` / `App::OnChar` / `App::PumpLoader` /
+`AppUi::OnMouse` の 4 つが `ui::Redraw`（`core/app/Host.h`）を立て、抜けるときに 1 度だけ
+頼む ─ 「入力を受け取った」「ワーカーの結果を回収した」は、どちらも必ず何かを変えたと
+みなしてよい。降りるのは「動かしただけで何も変わらなかったマウス移動」のときだけで、
+1 ピクセルごとに頼めば動かしている間ずっと全面再描画になる。
+
+深いほうの全員が思い出して呼ぶ形だと、1 か所抜けた日に «次の無関係な打鍵まで画面が
+変わらない» という不具合が戻る（CLAUDE.md「`App::SetStatus` は自分で再描画を要求する」の
+罠は、まさにその形で報告された）。入口を通らない経路 ─ `SetStatus`、`SetWindowActive`、
+`OpenForwardedPaths`、`PerformDrop`、`RefreshFocused`、IME の 2 つ ─ だけが今も自分で呼ぶ。
+
 これにより「どの操作にもキーを割り当てられる」が機能ではなく構造として保証される。
-コマンド表は `KITE_COMMAND_LIST`（`core/input/Commands.h`）の 125 行。
+コマンド表は `KITE_COMMAND_LIST`（`core/input/Commands.h`）の 132 行。
 
 キーマップを通らないものは 4 つだけで、いずれも「入力そのものを対象にする」画面:
 
@@ -166,30 +194,86 @@ WinWindow（WM_KEYDOWN → Chord）
 | 型入力ジャンプ（`App::TypeAheadChar`） | **キーマップが答えなかった打鍵だけ**を受け取る |
 
 **描画は毎フレーム組み直す。** `AppUi` はレイアウト結果を持ち越さず、描きながら
-`Region`（矩形 + `Hit` の種別）を積み、クリックは `Pick`（後ろから引く）で解決する。
-ホバーも「どの行に乗っているか」ではなく最後のポインタ座標を持つだけ ─ ホイールで一覧が
-動いたときにマウスイベントは来ないため（CLAUDE.md「制御フロー」）。
+`Region`（矩形 + `Hit` の種別 + 添字）を積み、クリックは `Pick`（後ろから引く）で解決する。
+`Region` は**文字列を持たない** ─ 毎フレーム全部を積み直すので、パスの要る 2 種
+（サイドバーの行・パンくず）は添字から引き直す。ホバーも「どの行に乗っているか」では
+なく最後のポインタ座標を持つだけ ─ ホイールで一覧が動いたときにマウスイベントは来ない
+ため（CLAUDE.md「制御フロー」）。
+
+**マウスは「今おこなっている 1 つの操作」を `std::variant` 1 つで持つ**（`AppUi::DragState`）。
+分割線・タブ・ファイル・選択の枠・並べ替え 4 種・列の幅・タブバーの幅がその選択肢で、
+押しただけと本番は `started` フラグで分ける。`AppUi::OnMouse` は押す・動かす・離す・回すの
+4 つへ振り分けるだけ ─ 種別ごとのフィールドを平置きしていたころは、`CancelDrag` がそれを
+1 つずつ初期値へ戻す列で、フィールドを足すたびに抜けた。
 
 ## 5. 非同期の作り
 
 **ディレクトリ列挙を UI スレッドで動かさない。** 冷えたネットワーク共有は 1 回の
-`FindFirstFile` で数秒ブロックする。
+`FindFirstFile` で数秒ブロックする。同じ話が、検索・フォルダのサイズ・ファイル操作にも
+そのまま当てはまる。
+
+### 骨格は 1 つ
+
+4 つとも `fs::JobQueue<Job, Result>`（`core/fs/JobQueue.h`）の上に乗っている ─
+`mutex + condition_variable + 待ち行列 + 結果の箱 + 停止フラグ + スレッド列`、そして
+`Request` / `Drain` / `busy`。以前は同じ骨格が 4 回書かれていた。
+
+```
+UI スレッド              ワーカー N 本
+  Request(job)  ──積む──→  Run(job, emit)
+                             │ emit(result) は 0 回でも何回でも
+  Drain(out)    ←─回収──  結果の箱 ──→ IHost::Wake()
+```
+
+**各クラスが持ち込むのは «本数» と «次にどれを走らせてよいか» の 2 つだけ。**
+
+| クラス | 本数 | 本数の理由 | `Pick`（次にどれを走らせるか） |
+| --- | --- | --- | --- |
+| `DirectoryLoader` | 2 | 冷えた共有 1 つに全部が並ばないため | 先頭（既定） |
+| `FolderSizeJob` | 2 | 画面に出ている行が全部同時に答えを待っている | 先頭（既定） |
+| `FileOpQueue` | 4 | 手で始める操作が 5 つ重なる場面が無い | `FileOpsConflict`（後述） |
+| `SearchJob` | 1 | 2 本目の結果を誰も見ていない | 先頭（既定。待ち行列は常に 1 件） |
+
+- **ワーカーは最初の依頼まで作らない。** 検索もファイル操作もしない起動では、その
+  スレッドがそもそも存在しない（監視だけは `main_win.cpp` が最初から立てる）。
+- **共有プールにはしない。** `SHFileOperation` はスレッドを占有するので他と混ぜられず、
+  上の「本数の理由」もクラスごとに別。
+- **結果は 0 回でも何回でも流せる**（`Emit`）。列挙とファイル操作は 1 依頼 = 1 結果だが、
+  検索とサイズは歩きながら途中経過を出す ─ そこを固定すると 2 つが骨格に乗らない。
+- **トークンは骨格が配らない。** 何で依頼を識別するかがクラスごとに違う（検索はワーカーが
+  走り出す **前** に `active_` を立てる必要があり、サイズは «代» で数える）ので、採番は
+  各クラスに置いてある。
+- **打ち切りの合図も骨格の外。** 検索は `active_`、サイズは `epoch_` で、どちらも
+  フォルダの切れ目でワーカーが自分から抜ける（`fs::TreeWalk` が見ている）。
+
+### 列挙
 
 ```
 App::RequestLoad(tab) → DirectoryLoader::Request(path) → トークンを返す
-                          ワーカー（既定 2 本）が IFileSystem::List
+                          ワーカーが IFileSystem::List
                           → IHost::Wake()（WM_KITE_WAKE を投げるだけ）
 App::PumpLoader() ← UI スレッドが結果を回収し、トークンの一致するタブへ流す
 ```
 
-- **答えはトークンで突き合わせる。** 打鍵の途中で届いた古い結果は黙って捨てられる。
-  アドレスバーの補完も同じ経路を使い、タブとは別のトークンを持つ。
-- **アイコンも同じ形**。`IconCache` が要求を貯め、`WinIconProvider` のワーカーがホストへ
-  まとめて投げ、結果は次のフレームでアップロードされる。
+- **答えはトークンで突き合わせる**（`Workspace::FindTabByLoadToken`）。打鍵の途中で届いた
+  古い結果は黙って捨てられる。アドレスバーの補完も同じ経路を使い、タブとは別のトークンを
+  持つ。
+- **アイコンだけは骨格の外**。`IconCache` が要求を貯め、`WinIconProvider` のワーカーが
+  ホストへ **64 件まとめて** 投げ、結果は次のフレームでアップロードされる ─ バッチ単位で
+  あることと、«ホストが入れ替わったら回収前の結果ごと捨てる» 後始末があるため、
+  `JobQueue` には乗せていない（遅延起動はもともとあちらが先にやっていた）。
 - **`Wake()` は再描画を意味しない。** 列挙結果が無ければ `PumpLoader` は何もしないので、
   `WM_KITE_WAKE` の側で必ず `Invalidate()` する（CLAUDE.md「すでに踏んだ罠」）。
 - **変更通知**は `WinDirectoryWatcher` のワーカーが全ハンドルを所有し、`Watch`/`Unwatch` は
-  コマンドを投函するだけ（未完了の読み取りを抱えたままハンドルを閉じないため）。
+  コマンドを投函するだけ（未完了の読み取りを抱えたままハンドルを閉じないため）。掃く
+  ものが無い間は `INFINITE` で待つ ─ 10 回/秒で起きて空の表を見ても意味が無い。
+
+### 検索とフォルダのサイズ
+
+どちらも `fs::TreeWalk` の同じ歩き（幅優先、リンクの先へは降りない、読めないフォルダは
+飛ばす、打ち切りはフォルダの切れ目）の上にあり、違うのは訪問子だけ ─ 検索は名前に
+当たったものを集め、サイズはバイト数と件数を足す。判断を持つのは `core/app/Searching` と
+`core/app/FolderSizes` で、どちらも `App&` を持たない（§2）。
 
 **ファイル操作も同じ理由で UI スレッドから追い出してある。** `SHFileOperation` は完了
 するまで戻らないので、そこで呼ぶと数 GB のコピーの間ウィンドウがメッセージを 1 つも
@@ -319,7 +403,7 @@ ctest --preset release
 configure の時点で止める。開発者プロンプト以外からは `build.ps1`（常に `vcvars64.bat` を
 読む）を使う。
 
-テストは **25 スイート・686 ケース**、判定は 100 行の自作ハーネス（`tests/TestFramework.h`）。
+テストは **30 スイート・886 ケース**、判定は 100 行の自作ハーネス（`tests/TestFramework.h`）。
 OS 境界のフェイクは `tests/Fakes.h` に揃えてあり、`FakePlatform.cpp` が `Platform.h` の
 6 つをメモリ上で実装するので、実ディスクにも実時計にも触れずに `App` を端から端まで
 動かせる。`FakeRenderer` は塗った矩形・色・文字の外接矩形を覚えるので、**ウィンドウ無しで
