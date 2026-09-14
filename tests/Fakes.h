@@ -171,6 +171,12 @@ public:
         return { root };
     }
 
+    // Volumes mounted on a folder rather than a drive letter - the shape a cloud
+    // takes when it lives under C:\. Empty unless a test puts one there.
+    std::vector<fs::Root> mountPoints;
+
+    std::vector<fs::Root> MountPoints() override { return mountPoints; }
+
     std::string HomeDir() override { return home; }
     std::string ConfigDir() override { return config; }
 

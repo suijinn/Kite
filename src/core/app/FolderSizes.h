@@ -12,7 +12,11 @@
 /// だけではない（`SyncForSort`）。
 ///
 /// **`App` を持たない。** 要る依頼だけを構築時に受け取る ─ ファイルシステム、
-/// 表示文字列、そして «自動で歩いてよい場所か» を答えるためのドライブ一覧。
+/// 表示文字列、そして «自動で歩いてよい場所か» を答えるためのボリュームの一覧。
+///
+/// その一覧はドライブ文字だけではない。クラウドはフォルダにも載る（`C:\\Box`）
+/// ので、ドライブ文字で «C: は固定ディスク» と答えると、そのクラウドの中を歩くのが
+/// ローカルのディスクと同じ扱いになる ─ 決めるのは «いちばん深く一致するマウント先»。
 
 #pragma once
 
@@ -35,10 +39,12 @@ public:
     /// @brief 依存を結び付けて構築する。**ワーカーはまだ作らない。**
     /// @param[in] fsys 歩きに使うファイルシステム。本オブジェクトより長生きすること
     /// @param[in] strings ステータス行の文言を引く表。同上
-    /// @param[in] roots ドライブ一覧。`AutoCountEligible` が «固定ディスクか» を
-    ///            ここで判定する。同上（`App::RefreshRoots` が差し替える実体）
+    /// @param[in] volumes ボリュームの一覧 ─ ドライブ文字（`fs::IFileSystem::Roots`）と
+    ///            フォルダに載ったマウント先（同 `MountPoints`）を並べたもの。
+    ///            `AutoCountEligible` が «固定ディスクか» をここで判定する。同上
+    ///            （`App::RefreshRoots` が差し替える実体）
     FolderSizes(fs::IFileSystem& fsys, const Strings& strings,
-                const std::vector<fs::Root>& roots);
+                const std::vector<fs::Root>& volumes);
 
     ~FolderSizes();
 
@@ -65,7 +71,7 @@ public:
     void SetMode(FolderSizeMode mode);
 
     /// @brief «自動では数えない» と決めた印を捨てる。
-    /// @note ドライブ一覧が変わったら呼ぶ（`App::RefreshRoots`）─ USB を挿した
+    /// @note ボリュームの一覧が変わったら呼ぶ（`App::RefreshRoots`）─ USB を挿した
     ///       のに «数えない» のままでは、その判断の根拠のほうが古い
     void RootsChanged() { cache_.ForgetSkipped(); }
 
@@ -161,14 +167,17 @@ private:
     /// @param[in] path 対象のフォルダ
     /// @return 数えてよければ true
     /// @note 自動で歩くのはローカルの固定ディスクだけ。ネットワーク共有・
-    ///       リムーバブル・光学・仮想フォルダは、頼まれたときだけ歩く ─
+    ///       リムーバブル・光学・クラウド・仮想フォルダは、頼まれたときだけ歩く ─
     ///       「待たせて空を返す機能は無い機能より悪い」と同じ判断で、分単位に
     ///       なりうる歩きを黙って始めない
+    /// @note **答えるのは «いちばん深く一致するマウント先»。** ドライブ文字だけを
+    ///       見ると、フォルダに載ったクラウド（`C:\\Box`）が «C: は固定ディスク» の
+    ///       一言で歩きに入る
     bool AutoCountEligible(const std::string& path) const;
 
     fs::IFileSystem& fs_;
     const Strings& strings_;
-    const std::vector<fs::Root>& roots_;
+    const std::vector<fs::Root>& volumes_;
 
     std::unique_ptr<fs::FolderSizeJob> job_;
     fs::FolderSizeCache cache_;

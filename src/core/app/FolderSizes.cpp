@@ -7,9 +7,22 @@
 
 namespace kite {
 
+namespace {
+
+// «この場所はそのマウント先に載っているか» ─ マウント先そのものも含む。
+// 末尾の区切りは場所によって在ったり無かったりする（`Roots()` の "C:\" と
+// タブの "C:\Box"）ので、綴りを揃えてから比べる。
+bool Covers(const std::string& path, const std::string& root) {
+    if (root.empty()) return false;
+    return utf8::EqualsIgnoreCaseAscii(path::Normalize(path), path::Normalize(root)) ||
+           path::IsInside(path, root);
+}
+
+}  // namespace
+
 FolderSizes::FolderSizes(fs::IFileSystem& fsys, const Strings& strings,
-                         const std::vector<fs::Root>& roots)
-    : fs_(fsys), strings_(strings), roots_(roots) {}
+                         const std::vector<fs::Root>& volumes)
+    : fs_(fsys), strings_(strings), volumes_(volumes) {}
 
 FolderSizes::~FolderSizes() = default;
 
@@ -81,12 +94,23 @@ bool FolderSizes::AutoCountEligible(const std::string& p) const {
     // ネットワークは共有 1 つで分単位になりうる。「待たせて空を返す機能は無い機能
     // より悪い」と同じ判断で、黙って歩き始めない ─ 頼まれれば歩く。
     if (path::UncServerLength(p) > 0) return false;
-    for (const fs::Root& r : roots_) {
-        if (r.kind != fs::RootKind::Fixed) continue;
-        if (utf8::EqualsIgnoreCaseAscii(p, r.path) || path::IsInside(p, r.path)) return true;
+
+    // **答えるのは «いちばん深く一致するマウント先»。** ドライブ文字だけを見て
+    // いたころは、`C:\Box` のようにフォルダへ載ったクラウドが «C: は固定ディスク»
+    // の一言で自動の歩きに入っていた ─ 下に載っているもののほうが新しい答えを
+    // 持つ（クラウド側がドライブ文字を取っていれば今までどおりそこで止まる）。
+    const fs::Root* best = nullptr;
+    size_t depth = 0;
+    for (const fs::Root& v : volumes_) {
+        if (!Covers(p, v.path)) continue;
+        const size_t length = path::Normalize(v.path).size();
+        if (best && length <= depth) continue;
+        best = &v;
+        depth = length;
     }
-    // どのドライブの下か分からないものは «固定ディスクだと分かっている» に入らない。
-    return false;
+    // どのボリュームの下か分からないものは «固定ディスクだと分かっている» に
+    // 入らない。
+    return best && best->kind == fs::RootKind::Fixed;
 }
 
 bool FolderSizes::ApplyTo(Tab& tab) const {

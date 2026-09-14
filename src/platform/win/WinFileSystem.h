@@ -43,6 +43,13 @@ public:
     ///       固定・リムーバブルドライブに限っている
     std::vector<fs::Root> Roots() override;
 
+    /// @copydoc fs::IFileSystem::MountPoints
+    /// @note ボリュームの一覧（`FindFirstVolumeW`）と、クラウドが登録した同期
+    ///       ルート（`SyncRootManager`）の 2 つから作る。前者はフォルダに載った
+    ///       ボリューム、後者はフィルタドライバで NTFS の上に乗るもの ─
+    ///       どちらも «C: の下» に居るので、ドライブ文字からは見えない
+    std::vector<fs::Root> MountPoints() override;
+
     /// @copydoc fs::IFileSystem::HomeDir
     std::string HomeDir() override;
 
