@@ -651,6 +651,107 @@ KITE_TEST(foldersize, a_place_not_counted_by_itself_is_only_decided_once) {
     KITE_EXPECT_EQ(state(sizes.cache().Get(full)), static_cast<int>(fs::SizeState::Counting));
 }
 
+// クラウドはドライブ文字を取るとは限らない ─ Box は `C:\Box` のようにフォルダへ
+// 載る。ドライブ文字だけを見ていたころは «C: は固定ディスク» の一言でその中を
+// 歩き始めていた ─ マウント先の下は、ドライブ文字から見ればただのフォルダ。
+KITE_TEST(foldersize, a_cloud_mounted_on_a_folder_is_not_walked_by_itself) {
+    FakeFileSystem files;
+    FakeHost host;
+    Strings strings;
+    strings.Load("en");
+
+    fs::Root disk;
+    disk.path = "C:\\";
+    disk.kind = fs::RootKind::Fixed;
+    fs::Root cloud;
+    cloud.path = "C:\\Box\\";
+    cloud.kind = fs::RootKind::Cloud;
+    const std::vector<fs::Root> volumes = { disk, cloud };
+
+    FolderSizes sizes(files, strings, volumes);
+    sizes.Start(host);
+
+    fs::Entry entry;
+    entry.name = "Projects";
+    entry.attrs = fs::Attr::Directory;
+
+    const auto state = [&](const std::string& path) {
+        return static_cast<int>(sizes.For(path, entry).state);
+    };
+
+    // 下にあるほうが新しい答えを持つ ─ «C: の下» でもあるが、答えるのは深いほう。
+    KITE_EXPECT_EQ(state("C:\\Box\\Projects"), static_cast<int>(fs::SizeState::Skipped));
+    // マウント先そのものも同じ。中身はクラウドの側にある。
+    KITE_EXPECT_EQ(state("C:\\Box"), static_cast<int>(fs::SizeState::Skipped));
+    // 同じディスクでも、クラウドの外は今までどおり歩く。
+    KITE_EXPECT_EQ(state("C:\\home"), static_cast<int>(fs::SizeState::Counting));
+    // 名前の頭が同じだけの兄弟は «その下» ではない。
+    KITE_EXPECT_EQ(state("C:\\Boxes"), static_cast<int>(fs::SizeState::Counting));
+}
+
+// «いちばん深く一致するマウント先» であって «クラウドがどこかに居るか» ではない。
+// 逆向き ─ クラウドの中にローカルのボリュームが載っている ─ でも同じ規則で決まる。
+KITE_TEST(foldersize, the_deepest_mount_is_the_one_that_answers) {
+    FakeFileSystem files;
+    FakeHost host;
+    Strings strings;
+    strings.Load("en");
+
+    fs::Root disk;
+    disk.path = "C:\\";
+    disk.kind = fs::RootKind::Fixed;
+    fs::Root cloud;
+    cloud.path = "C:\\Box\\";
+    cloud.kind = fs::RootKind::Cloud;
+    fs::Root local;
+    local.path = "C:\\Box\\local\\";
+    local.kind = fs::RootKind::Fixed;
+    const std::vector<fs::Root> volumes = { disk, cloud, local };
+
+    FolderSizes sizes(files, strings, volumes);
+    sizes.Start(host);
+
+    fs::Entry entry;
+    entry.name = "src";
+    entry.attrs = fs::Attr::Directory;
+
+    KITE_EXPECT_EQ(static_cast<int>(sizes.For("C:\\Box\\docs", entry).state),
+                   static_cast<int>(fs::SizeState::Skipped));
+    KITE_EXPECT_EQ(static_cast<int>(sizes.For("C:\\Box\\local\\src", entry).state),
+                   static_cast<int>(fs::SizeState::Counting));
+}
+
+// マウント先の一覧は `App::RefreshRoots` がドライブ文字の後ろに足す。ここが
+// 抜けると、判断そのものは正しいのに使われる一覧がドライブ文字だけに戻る。
+KITE_TEST(foldersize, the_app_hands_the_mount_points_to_the_decision) {
+    ResetFakePlatform();
+    FakeFileSystem files;
+    FakeShell shell;
+    FakeHost host;
+    FakeWatcher watcher;
+    PopulateStandardTree(files);
+    files.AddDir("C:\\cloud");
+    files.AddDir("C:\\cloud\\inner");
+
+    fs::Root cloud;
+    cloud.path = "C:\\cloud\\";
+    cloud.kind = fs::RootKind::Cloud;
+    files.mountPoints = { cloud };
+
+    App app{ files, shell, host, &watcher };
+    app.SetStandalone(true);
+    app.Init({});
+    PumpUntilSettled(app);
+
+    fs::Entry entry;
+    entry.name = "inner";
+    entry.attrs = fs::Attr::Directory;
+    KITE_EXPECT_EQ(static_cast<int>(app.folderSizes().For("C:\\cloud\\inner", entry).state),
+                   static_cast<int>(fs::SizeState::Skipped));
+    KITE_EXPECT_EQ(static_cast<int>(app.folderSizes().For("C:\\home\\alpha", entry).state),
+                   static_cast<int>(fs::SizeState::Counting));
+}
+
 // The decision was made by looking at the drive list, so a new drive makes it
 // stale - plugging in a USB stick must not leave "not counted" standing.
 KITE_TEST(foldersize, a_new_drive_list_throws_the_skip_marks_away) {

@@ -7,6 +7,7 @@
 #include <shlobj.h>
 
 #include <cstdio>
+#include <cwchar>
 
 #include "core/app/ConfigDir.h"
 #include "core/base/PathUtil.h"
@@ -299,6 +300,125 @@ bool LooksLikeCloudLabel(const std::string& label) {
     return false;
 }
 
+// What a volume says it is, before anything second-guesses it. Drive letters and
+// folder mount points read it the same way: two spellings of this would let one
+// volume answer differently depending on which list it was found through.
+fs::RootKind DriveKind(UINT type) {
+    switch (type) {
+        case DRIVE_FIXED: return fs::RootKind::Fixed;
+        case DRIVE_REMOVABLE: return fs::RootKind::Removable;
+        case DRIVE_REMOTE: return fs::RootKind::Network;
+        case DRIVE_CDROM: return fs::RootKind::Optical;
+        case DRIVE_RAMDISK: return fs::RootKind::Ram;
+        default: return fs::RootKind::Unknown;
+    }
+}
+
+// A mounted volume, read with the same rules a drive letter gets. Capacity is not
+// asked for: nothing displays these, and the one caller only wants the kind.
+fs::Root DescribeMount(const std::wstring& root) {
+    fs::Root entry;
+    entry.path = ToUtf8(root);
+    entry.kind = DriveKind(::GetDriveTypeW(root.c_str()));
+    if (entry.kind == fs::RootKind::Network) return entry;
+
+    wchar_t name[MAX_PATH] = {};
+    wchar_t fsName[MAX_PATH] = {};
+    if (!::GetVolumeInformationW(root.c_str(), name, MAX_PATH, nullptr, nullptr, nullptr, fsName,
+                                 MAX_PATH)) {
+        return entry;
+    }
+    entry.label = ToUtf8(name);
+    // A cloud that mounts a volume calls itself a fixed disk - measured, Google
+    // Drive's G: comes back as DRIVE_FIXED holding FAT32. The name it gives the
+    // volume, or the one its driver gives the filesystem, is what says otherwise.
+    if (LooksLikeCloudLabel(entry.label) || LooksLikeCloudLabel(ToUtf8(fsName))) {
+        entry.kind = fs::RootKind::Cloud;
+    }
+    return entry;
+}
+
+// Volumes mounted on a folder rather than on a drive letter. That is the shape a
+// cloud takes when it is asked to live under a letter that is already taken: the
+// drive list cannot see it, and the letter it sits under says "fixed disk" for
+// the whole tree below.
+void AppendFolderMounts(std::vector<fs::Root>& out) {
+    wchar_t volume[MAX_PATH] = {};
+    HANDLE find = ::FindFirstVolumeW(volume, MAX_PATH);
+    if (find == INVALID_HANDLE_VALUE) return;
+
+    do {
+        std::vector<wchar_t> names(512);
+        DWORD needed = 0;
+        if (!::GetVolumePathNamesForVolumeNameW(volume, names.data(),
+                                                static_cast<DWORD>(names.size()), &needed)) {
+            if (::GetLastError() != ERROR_MORE_DATA) continue;
+            names.assign(needed + 1, L'\0');
+            if (!::GetVolumePathNamesForVolumeNameW(volume, names.data(),
+                                                    static_cast<DWORD>(names.size()), &needed)) {
+                continue;
+            }
+        }
+        // A double-NUL terminated list - one volume can be mounted in more than
+        // one place at a time.
+        for (const wchar_t* p = names.data(); *p; p += ::wcslen(p) + 1) {
+            // A drive root is what Roots() already answers for.
+            if (::wcslen(p) <= 3) continue;
+            out.push_back(DescribeMount(p));
+        }
+    } while (::FindNextVolumeW(find, volume, MAX_PATH));
+
+    ::FindVolumeClose(find);
+}
+
+// The sync roots a cloud registered through the Cloud Files API. Those are a
+// filter driver over the NTFS volume rather than a volume of their own, so
+// neither the drive list nor the volume list mentions them - the registry is the
+// only place that says a folder on the system disk is somebody's cloud.
+void AppendCloudSyncRoots(std::vector<fs::Root>& out) {
+    HKEY manager = nullptr;
+    const wchar_t* kManager =
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\SyncRootManager";
+    if (::RegOpenKeyExW(HKEY_CURRENT_USER, kManager, 0, KEY_READ, &manager) != ERROR_SUCCESS) {
+        return;
+    }
+
+    for (DWORD i = 0;; ++i) {
+        wchar_t provider[256] = {};
+        DWORD length = 256;
+        if (::RegEnumKeyExW(manager, i, provider, &length, nullptr, nullptr, nullptr, nullptr) !=
+            ERROR_SUCCESS) {
+            break;
+        }
+        HKEY roots = nullptr;
+        const std::wstring sub = std::wstring(provider) + L"\\UserSyncRoots";
+        if (::RegOpenKeyExW(manager, sub.c_str(), 0, KEY_READ, &roots) != ERROR_SUCCESS) continue;
+
+        for (DWORD v = 0;; ++v) {
+            wchar_t name[256] = {};
+            DWORD nameLength = 256;
+            wchar_t data[MAX_PATH] = {};
+            DWORD bytes = sizeof(data) - sizeof(wchar_t);
+            DWORD type = 0;
+            if (::RegEnumValueW(roots, v, name, &nameLength, nullptr, &type,
+                                reinterpret_cast<BYTE*>(data), &bytes) != ERROR_SUCCESS) {
+                break;
+            }
+            // A registry string is not obliged to carry its own terminator.
+            data[MAX_PATH - 1] = L'\0';
+            if (type != REG_SZ || data[0] == L'\0') continue;
+
+            fs::Root entry;
+            entry.path = ToUtf8(data);
+            entry.label = ToUtf8(provider);
+            entry.kind = fs::RootKind::Cloud;
+            out.push_back(std::move(entry));
+        }
+        ::RegCloseKey(roots);
+    }
+    ::RegCloseKey(manager);
+}
+
 // How much room the volume a folder sits on has, and how much of it is left.
 // Both stay 0 when the question cannot be answered.
 //
@@ -488,21 +608,19 @@ std::vector<fs::Root> WinFileSystem::Roots() {
         fs::Root entry;
         entry.path = ToUtf8(root);
 
-        switch (::GetDriveTypeW(root.c_str())) {
-            case DRIVE_FIXED: entry.kind = fs::RootKind::Fixed; break;
-            case DRIVE_REMOVABLE: entry.kind = fs::RootKind::Removable; break;
-            case DRIVE_REMOTE: entry.kind = fs::RootKind::Network; break;
-            case DRIVE_CDROM: entry.kind = fs::RootKind::Optical; break;
-            case DRIVE_RAMDISK: entry.kind = fs::RootKind::Ram; break;
-            default: entry.kind = fs::RootKind::Unknown; break;
-        }
+        entry.kind = DriveKind(::GetDriveTypeW(root.c_str()));
 
         std::string label;
+        // A cloud drive names itself in one of two places; whichever one it is,
+        // the kind that comes out must match what DescribeMount() would answer.
+        bool cloudFs = false;
         if (entry.kind != fs::RootKind::Network) {
             wchar_t name[MAX_PATH] = {};
+            wchar_t fsName[MAX_PATH] = {};
             if (::GetVolumeInformationW(root.c_str(), name, MAX_PATH, nullptr, nullptr, nullptr,
-                                        nullptr, 0)) {
+                                        fsName, MAX_PATH)) {
                 label = ToUtf8(name);
+                cloudFs = LooksLikeCloudLabel(ToUtf8(fsName));
             }
             // Only ask for capacity where the answer is cheap; a disconnected
             // network drive would block the caller for seconds.
@@ -524,9 +642,16 @@ std::vector<fs::Root> WinFileSystem::Roots() {
 
         const std::string drive = std::string(1, static_cast<char>('A' + i)) + ":";
         entry.label = label.empty() ? drive : (label + " (" + drive + ")");
-        if (LooksLikeCloudLabel(label)) entry.kind = fs::RootKind::Cloud;
+        if (cloudFs || LooksLikeCloudLabel(label)) entry.kind = fs::RootKind::Cloud;
         out.push_back(std::move(entry));
     }
+    return out;
+}
+
+std::vector<fs::Root> WinFileSystem::MountPoints() {
+    std::vector<fs::Root> out;
+    AppendFolderMounts(out);
+    AppendCloudSyncRoots(out);
     return out;
 }
 

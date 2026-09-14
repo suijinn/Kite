@@ -219,7 +219,7 @@ void ApplySavedOrder(std::vector<fs::Root>& roots, const std::vector<std::string
 App::App(fs::IFileSystem& filesystem, IShellIntegration& shell, IHost& host,
          fs::IDirectoryWatcher* watcher)
     : fs_(filesystem), shell_(shell), host_(host), watcher_(watcher),
-      folderSizes_(filesystem, strings_, roots_), searching_(filesystem, strings_) {
+      folderSizes_(filesystem, strings_, volumes_), searching_(filesystem, strings_) {
     theme_ = Theme::Dark();
 }
 
@@ -290,6 +290,11 @@ std::string App::folderSizeDetail() const {
 
 void App::RefreshRoots() {
     roots_ = fs_.Roots();
+    // ドライブ文字だけでは «そのパスがどのボリュームに載っているか» に答えられない
+    // ─ クラウドはフォルダにも載る（C:\Box）ので、そこはドライブ文字から見ると
+    // «固定ディスクの C: の下» でしかない。サイドバーには出さず、判断にだけ使う。
+    volumes_ = roots_;
+    for (fs::Root& m : fs_.MountPoints()) volumes_.push_back(std::move(m));
     quickAccess_ = fs_.QuickAccess();
     // The platform names these places in the OS's language; Kite's own may be a
     // different one. Its answer is what is on screen everywhere else, so it is
