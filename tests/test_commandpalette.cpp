@@ -214,6 +214,18 @@ KITE_TEST(palette, filtering_matches_in_the_middle_of_a_word) {
     KITE_EXPECT(RowOf(palette, Cmd::ToggleHidden) >= 0);
 }
 
+// 絞り込んでも並びは定義順のまま。行き先の一覧は «パスの末尾に当たった行» を上へ
+// 出すが、コマンドには末尾に当たるものが無いので、こちらは 1 行も動かない ─ 探している
+// 行が打鍵ごとに動くと、目で追うより打ち直すほうが速くなる。
+KITE_TEST(palette, filtering_does_not_reorder_the_rows) {
+    CommandPalette palette = Opened();
+    Type(palette, "tab");
+
+    KITE_EXPECT(RowOf(palette, Cmd::NewTab) >= 0);
+    KITE_EXPECT(RowOf(palette, Cmd::NewTab) < RowOf(palette, Cmd::CloseTab));
+    KITE_EXPECT(RowOf(palette, Cmd::CloseTab) < RowOf(palette, Cmd::MoveTabRight));
+}
+
 // 選択は行番号ではなくコマンドで覚える。打鍵ごとに行番号は振り直される。
 KITE_TEST(palette, the_selection_stays_on_the_same_command_while_typing) {
     CommandPalette palette = Opened();

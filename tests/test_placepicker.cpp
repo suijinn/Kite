@@ -22,6 +22,17 @@ std::vector<Bookmark> TenBookmarks() {
     return marks;
 }
 
+// 同じ語が «末尾の名前» にも «パスの途中» にも出てくる 3 件。絞り込みの順位付けは
+// これで見る ─ 深いフォルダを名前で探せるようにパス全体に当てている以上、その下に
+// あるものが全部一緒に釣れてくるのは避けられない。
+std::vector<Bookmark> KiteBookmarks() {
+    std::vector<Bookmark> marks;
+    marks.push_back({ "notes", "C:\\work\\kite\\docs\\notes" });
+    marks.push_back({ "old", "C:\\work\\kiteold" });
+    marks.push_back({ "main", "C:\\work\\kite" });
+    return marks;
+}
+
 KeyMap Defaults() {
     KeyMap keys;
     keys.LoadDefaults();
@@ -181,6 +192,71 @@ KITE_TEST(placepicker, the_filter_matches_the_name_and_the_path) {
     OpenWith(picker, TenBookmarks(), {});
     for (char c : std::string("ALPHA")) picker.HandleChar(static_cast<uint32_t>(c));
     KITE_EXPECT_EQ(static_cast<int>(picker.rows().size()), 2);  // alpha と nested
+}
+
+// 当たった行が複数あるときは «そのフォルダ自身» を指している行が上に来る。パスの
+// 途中に当たっただけの行 ─ つまりその下で開いているもの全部 ─ に押し下げられては、
+// 打った語が名指しているものに届かない。
+KITE_TEST(placepicker, the_tail_of_the_path_decides_which_match_comes_first) {
+    PlacePicker picker;
+    OpenWith(picker, KiteBookmarks(), {});
+    // 打つ前は渡された並びのまま。
+    KITE_EXPECT_EQ(picker.rows()[0].name, std::string("notes"));
+
+    for (char c : std::string("kite")) picker.HandleChar(static_cast<uint32_t>(c));
+    KITE_EXPECT_EQ(static_cast<int>(picker.rows().size()), 3);
+    // 末尾がそのもの → 末尾の一部 → パスの途中だけ。
+    KITE_EXPECT_EQ(picker.rows()[0].name, std::string("main"));
+    KITE_EXPECT_EQ(picker.rows()[1].name, std::string("old"));
+    KITE_EXPECT_EQ(picker.rows()[2].name, std::string("notes"));
+
+    // 消せば元の並びに戻る ─ 順位は打った語についてのものでしかない。
+    for (int i = 0; i < 4; ++i) picker.HandleKey(ParseChord("Backspace"));
+    KITE_EXPECT(picker.filter().empty());
+    KITE_EXPECT_EQ(picker.rows()[0].name, std::string("notes"));
+}
+
+// 順位が同じ行どうしは渡された並びのまま ─ ブックマークが先、タブが後、という
+// 5 種類の順は順位付けの中でも崩れない。
+KITE_TEST(placepicker, rows_of_the_same_rank_keep_the_order_they_were_given) {
+    PlacePicker picker;
+    std::vector<PlacePicker::OpenTab> tabs;
+    tabs.push_back({ 0, 1, true, "kite", "D:\\mirror\\kite" });
+    OpenWith(picker, KiteBookmarks(), {}, tabs);
+
+    for (char c : std::string("kite")) picker.HandleChar(static_cast<uint32_t>(c));
+    KITE_EXPECT_EQ(static_cast<int>(picker.rows().size()), 4);
+    // 末尾が "kite" そのものの 2 件が先で、その中はブックマーク → タブのまま。
+    KITE_EXPECT_EQ(picker.rows()[0].path, std::string("C:\\work\\kite"));
+    KITE_EXPECT(picker.rows()[1].kind == PlacePicker::Kind::Tab);
+    KITE_EXPECT_EQ(picker.rows()[2].name, std::string("old"));
+    KITE_EXPECT_EQ(picker.rows()[3].name, std::string("notes"));
+}
+
+// 表示名や種別だけに当たった行は下 ─ 名前は利用者が付けたもので、どこを指しているかは
+// 言っていない。
+KITE_TEST(placepicker, a_hit_on_the_name_alone_does_not_jump_the_queue) {
+    PlacePicker picker;
+    std::vector<Bookmark> marks;
+    marks.push_back({ "kite のメモ", "C:\\home\\memo" });
+    marks.push_back({ "main", "C:\\work\\kite" });
+    OpenWith(picker, marks, {});
+
+    for (char c : std::string("kite")) picker.HandleChar(static_cast<uint32_t>(c));
+    KITE_EXPECT_EQ(static_cast<int>(picker.rows().size()), 2);
+    KITE_EXPECT_EQ(picker.rows()[0].name, std::string("main"));
+}
+
+// 順位付けは行を入れ替えるので、選択は行番号では追えない ─ id で覚えてある。
+KITE_TEST(placepicker, the_selection_survives_the_reordering) {
+    PlacePicker picker;
+    OpenWith(picker, KiteBookmarks(), {});
+    picker.SelectRow(RowOf(picker, "notes"));
+    KITE_EXPECT_EQ(picker.selectedIndex(), 0);
+
+    for (char c : std::string("kite")) picker.HandleChar(static_cast<uint32_t>(c));
+    KITE_EXPECT_EQ(picker.selectedIndex(), 0);  // まだ notes のまま
+    KITE_EXPECT_EQ(picker.cursor(), 2);         // 行番号のほうは末尾へ動いた
 }
 
 // 絞り込むたびに行番号は振り直されるので、選択は「行」ではなく「ブックマーク」で

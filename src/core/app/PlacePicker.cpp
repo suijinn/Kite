@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "core/base/PathUtil.h"
 #include "core/base/Utf8.h"
 #include "core/input/Commands.h"
 
@@ -131,16 +132,26 @@ void PlacePicker::Open(const Strings& str, const KeyMap& keys, const Sources& sr
 
     // The id is the row's own position, not the bookmark index: the rows come from
     // five places now, and the only thing they have in common is where they sit in
-    // this list. It only has to survive filtering, which does not reorder.
+    // this list. Filtering both drops rows and reorders what is left, so the id is
+    // also the only thing the selection can be held by.
     //
     // Matched on the name, the path and the kind: bookmarks are often named for
     // the project and looked for by where they are (or the other way round), and
     // the kind lets "tab" bring up everything that is open.
+    //
+    // The path's last segment is what decides which of the matches comes first.
+    // Matching the whole path is what makes a deep folder findable by its name at
+    // all, but it is also why one word can pull in every row below that folder -
+    // "kite" reaches C:\work\Kite and every tab open inside it, and the one that
+    // *is* Kite is the one that was being asked for. The name is not the answer
+    // here: a bookmark carries whatever it was called, so it can say "Kite" while
+    // pointing somewhere else entirely, and the tail is the folder itself.
     std::vector<PickerList::Entry> entries;
     entries.reserve(all_.size());
     for (size_t i = 0; i < all_.size(); ++i) {
         entries.push_back({ static_cast<int>(i),
-                            { all_[i].name, all_[i].path, all_[i].kindLabel } });
+                            { all_[i].name, all_[i].path, all_[i].kindLabel },
+                            path::FileName(all_[i].path) });
     }
     list_.Reset(std::move(entries), selected);
     Sync();

@@ -41,6 +41,10 @@ public:
     struct Entry {
         int id = 0;                       ///< 呼び出し側が行を指すための値。一覧の中で重複しないこと
         std::vector<std::string> fields;  ///< 絞り込みに掛ける文字列。**どれか 1 つ**に当たれば一致
+        /// 当たった行のうち上に出すものを決める «末尾»（行き先の一覧ならパスの最後の
+        /// 名前）。**空なら順位付けをしない** ─ 全行が同じ順位になり、並びは渡された
+        /// ままになる
+        std::string tail;
     };
 
     /// @brief 絞り込みに掛けない «モードの印» を決める。
@@ -67,6 +71,9 @@ public:
 
     /// @brief 絞り込み後の行の id を順に返す。
     /// @return 表示する行の id 列。絞り込みが何にも当たらなければ空
+    /// @note 並びは**「末尾がそのもの」→「末尾の一部に当たった」→「それ以外」**の順で、
+    ///       同じ順位の中では渡された並びのまま（Entry::tail を持たない画面では
+    ///       全行が最後の 1 つに入るので、並びは一切動かない）
     const std::vector<int>& shown() const { return shown_; }
 
     /// @brief 絞り込み前の件数を返す。
@@ -149,6 +156,7 @@ public:
     /// @return 消費したら true。制御文字なら false
     /// @note 一致は Entry::fields のどれかへの部分一致（ASCII の大文字小文字は畳む）。
     ///       前方一致にすると、深いパスの末尾のフォルダ名や語尾で探せない
+    /// @note 当たった行の並びは Entry::tail に当たったものが先（shown() を参照）
     bool HandleChar(uint32_t codepoint);
 
 private:

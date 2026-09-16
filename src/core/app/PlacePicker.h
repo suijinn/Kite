@@ -136,6 +136,9 @@ public:
     ///       上に並ぶ行の位置は履歴が入れ替わっても動かない
     /// @note 絞り込みは開くたびに初期化する。前回打った文字が残っていると、開いた
     ///       瞬間に一覧が虫食いになって「ブックマークが消えた」と読めてしまう
+    /// @note **その並びが動くのは絞り込みを打ったときだけ。** 当たった行のうち
+    ///       «パスの末尾の名前» に当たったものが上に出る（rows() を参照）─ 5 種類の
+    ///       順は、同じ順位の行どうしの間でそのまま残る
     void Open(const Strings& str, const KeyMap& keys, const Sources& src,
               const std::string& currentPath);
 
@@ -148,6 +151,10 @@ public:
 
     /// @brief 一覧の行を返す。
     /// @return 絞り込み後の行。絞り込みが何にも当たらなければ空
+    /// @note 並びは**「パスの末尾がそのもの」→「末尾の名前の一部に当たった」→
+    ///       「それ以外に当たった」**の順。パスの途中や表示名だけに当たった行より、
+    ///       そのフォルダ自身を指している行が先に来る ─ 同じ順位の中では Open() に
+    ///       渡された並びのまま
     const std::vector<Row>& rows() const { return rows_; }
 
     /// @brief 行き先の総数を返す。
@@ -232,12 +239,13 @@ public:
     /// @return 消費したら true。表示していなければ false
     /// @note 名前・パス・種別の名前に部分一致で当てる（「タブ」と打てば開いている
     ///       タブだけが並ぶ）。前方一致にすると、深いパスの末尾のフォルダ名で探せない
+    /// @note 当たった行の並びはパスの末尾に当たったものが先（rows() を参照）
     bool HandleChar(uint32_t codepoint);
 
 private:
     void Sync();
 
-    PickerList list_;        ///< 絞り込みとカーソル。Row::index を id として渡す
+    PickerList list_;        ///< 絞り込みとカーソル。all_ への添字を id として渡す
     std::vector<Row> all_;   ///< 絞り込み前の全行
     std::vector<Row> rows_;  ///< 絞り込み後の行。list_.shown() を引き当てたもの
     bool visible_ = false;
