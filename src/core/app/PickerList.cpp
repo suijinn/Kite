@@ -7,12 +7,35 @@
 namespace kite {
 namespace {
 
+// Whole tail, part of the tail, matched elsewhere. The ranks themselves never
+// leave Rebuild() - what the header promises is the resulting order, not this.
+constexpr int kRankCount = 3;
+
 bool Matches(const std::string& needle, const PickerList::Entry& entry) {
     if (needle.empty()) return true;
     for (const std::string& field : entry.fields) {
         if (utf8::ContainsLowerAscii(field, needle)) return true;
     }
     return false;
+}
+
+// How near the row's own end the hit landed. Small is high.
+//
+// A substring test over the whole path answers "does this word appear anywhere
+// under here", and for a filter that is too generous to sort by: typing "kite"
+// aims at the folder called Kite, not at the dozen rows that merely live below
+// it and spell it in the middle of their path. The tail is what the row is
+// called, so a hit there is a hit on the thing itself.
+//
+// Rows without a tail (the command palette has none) all land in the last rank,
+// which leaves that screen's order exactly as it was handed over.
+int TailRank(const std::string& needle, const PickerList::Entry& entry) {
+    if (needle.empty() || entry.tail.empty()) return kRankCount - 1;
+    // Whole tail first: with Kite and KiteOld both on screen, the one that *is*
+    // what was typed has to win, or the ranking has not answered anything.
+    if (utf8::EqualsIgnoreCaseAscii(entry.tail, needle)) return 0;
+    if (utf8::ContainsLowerAscii(entry.tail, needle)) return 1;
+    return kRankCount - 1;
 }
 
 }  // namespace
@@ -50,9 +73,18 @@ void PickerList::Rebuild() {
     }
     const std::string needle = utf8::ToLowerAscii(query_);
 
-    shown_.clear();
+    // Collected rank by rank rather than sorted: the order inside a rank has to
+    // stay the order the caller handed over - bookmarks, then tabs, then quick
+    // access, then drives, then history - and a comparison that has to keep
+    // saying so is one more place for it to stop being true.
+    std::vector<int> ranked[kRankCount];
     for (const Entry& entry : all_) {
-        if (Matches(needle, entry)) shown_.push_back(entry.id);
+        if (!Matches(needle, entry)) continue;
+        ranked[TailRank(needle, entry)].push_back(entry.id);
+    }
+    shown_.clear();
+    for (const std::vector<int>& rank : ranked) {
+        shown_.insert(shown_.end(), rank.begin(), rank.end());
     }
 
     // The selection is held as an id, not as a row number: typing one more letter
