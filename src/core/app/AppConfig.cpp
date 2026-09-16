@@ -57,11 +57,19 @@ FolderSizeMode FolderSizeModeFromName(const std::string& s) {
 }
 
 const char* TabBarPositionName(TabBarPosition p) {
-    return p == TabBarPosition::Left ? "left" : "top";
+    switch (p) {
+        case TabBarPosition::Left: return "left";
+        case TabBarPosition::Sidebar: return "sidebar";
+        default: return "top";
+    }
 }
 
+// 知らない綴りは "top"。`sidebar` を足した版が書いたファイルを古い版が読めば
+// 横置きに落ちるだけで、どこも指さない状態にはならない。
 TabBarPosition TabBarPositionFromName(const std::string& s) {
-    return s == "left" ? TabBarPosition::Left : TabBarPosition::Top;
+    if (s == "left") return TabBarPosition::Left;
+    if (s == "sidebar") return TabBarPosition::Sidebar;
+    return TabBarPosition::Top;
 }
 
 // 列を出すかどうかを訊く 3 行と、その列。行を足すならここも足す ─ 対応表を
@@ -218,6 +226,10 @@ void App::LoadConfig() {
     // 戻せる幅に丸めてから使う ─ 0 と書かれたバーは縁ごと画面から消える。
     tabBarWidth_ = std::clamp(settings_.GetFloat("ui", "tab_bar_width", kDefaultTabBarWidth),
                               kTabBarMinWidth, kTabBarMaxWidth);
+    // サイドバーの幅も同じ ─ 縁を掴んで決める値になったので、読むのはここだけ
+    // （Theme::ApplyIni は読まない）。
+    sidebarWidth_ = std::clamp(settings_.GetFloat("ui", "sidebar_width", kDefaultSidebarWidth),
+                               kSidebarMinWidth, kSidebarMaxWidth);
     ApplyTheme();
 
     language_ = settings_.GetStr("ui", "language", "auto");
@@ -234,6 +246,7 @@ void App::LoadConfig() {
         sidebarCollapsed_[i] =
             settings_.GetBool("ui", SidebarCollapseKey(static_cast<SidebarSection>(i)), false);
     }
+    tabsSectionCollapsed_ = settings_.GetBool("ui", "tabs_section_collapsed", false);
     LoadSidebarSections();
     // The escape hatch for the one thing shell icons cost: they are what pulls
     // third-party overlay handlers into the picture at all. Off, Kite draws its
@@ -339,6 +352,7 @@ void App::ApplyTheme() {
     // （Theme::ApplyIni は読まない）。Scale() の前に置くのは、器としての倍率を
     // 他の高さや幅と同じ 1 か所で受けるため ─ 掛け算を 2 通りにしない。
     theme_.tabBarWidth = tabBarWidth_;
+    theme_.sidebarWidth = sidebarWidth_;
     theme_.Scale(uiFactor());
     // 列も文字を入れる器なので同じ率で伸ばす（行やサイドバーの幅と同じ話 ─
     // 据え置くと、文字だけが大きくなって「2026-08-09 17:11」が切れる）。
@@ -394,6 +408,44 @@ void App::ResetTabBarWidth() {
     // 変わらなかったときも同じ文言。訊かれているのは «既定に戻っているか» で、
     // その答えはどちらの場合も「戻っている」（ResetColumnWidths と同じ）。
     SetStatus(strings_.Get("ui.tab_bar_reset"));
+}
+
+// 縦置きタブバーの幅とまったく同じ作り ─ 受け取るのは画面の上の幅なので、覚える
+// 前に割り戻す。
+bool App::SetSidebarWidth(float width) {
+    const float factor = uiFactor();
+    const float wanted = std::clamp(factor > 0.0f ? width / factor : width, kSidebarMinWidth,
+                                    kSidebarMaxWidth);
+    if (wanted == sidebarWidth_) return false;
+    sidebarWidth_ = wanted;
+    ApplyTheme();
+    dirty_ = true;
+    return true;
+}
+
+void App::ResetSidebarWidth() {
+    if (sidebarWidth_ != kDefaultSidebarWidth) {
+        sidebarWidth_ = kDefaultSidebarWidth;
+        ApplyTheme();
+        dirty_ = true;
+    }
+    SetStatus(strings_.Get("ui.sidebar_reset"));
+}
+
+// 統合が意味を持つのは «タブバーが 1 本しか要らないとき» だけ。返すものが «帯 1 本
+// ぶんの幅» なので、サイドバーが出ていなければ相乗りする相手が居らず、ペインが
+// 2 つあればサイドバーはどちらのタブなのかを言えない ─ どちらのときも、画面に
+// 出ていないタブがクリックできなくなるほうへ倒れる。だから欠けたら Left として立つ。
+bool App::tabsInSidebar() const {
+    if (tabBarPosition_ != TabBarPosition::Sidebar) return false;
+    if (!sidebarVisible_) return false;
+    const Session* session = workspace_.activeSession();
+    return session && session->root && session->root->leaf();
+}
+
+void App::ToggleTabsSection() {
+    tabsSectionCollapsed_ = !tabsSectionCollapsed_;
+    dirty_ = true;
 }
 
 bool App::MoveColumn(int from, int to) {
@@ -494,7 +546,7 @@ SettingsValues App::CollectSettings() const {
     v.Set(SettingId::ShellIcons, shellIcons_ ? 1 : 0);
     v.Set(SettingId::OpenArchives, openArchives_ ? 1 : 0);
     v.Set(SettingId::FolderSizes, static_cast<int>(folderSizes_.mode()));
-    v.Set(SettingId::TabBarPos, tabBarPosition_ == TabBarPosition::Left ? 1 : 0);
+    v.Set(SettingId::TabBarPos, static_cast<int>(tabBarPosition_));
     v.Set(SettingId::NewTabPos, newTabPosition_ == NewTabPosition::AfterCurrent ? 1 : 0);
     v.Set(SettingId::NewTabHidden, defaultView_.showHidden ? 1 : 0);
     v.Set(SettingId::NewTabDirsFirst, defaultView_.dirsFirst ? 1 : 0);
@@ -559,7 +611,15 @@ void App::ApplySetting(SettingId id, const SettingsValues& values) {
             }
             break;
         case SettingId::TabBarPos:
-            tabBarPosition_ = (index != 0) ? TabBarPosition::Left : TabBarPosition::Top;
+            tabBarPosition_ = static_cast<TabBarPosition>(
+                std::clamp(index, 0, static_cast<int>(TabBarPosition::Sidebar)));
+            // 選んだのに画面が何も変わらない組み合わせがある ─ サイドバーを隠して
+            // いるときと、分割しているとき。何も動かない操作は「効かないキー」と
+            // 見分けが付かないので、ここだけは行の値のほかに理由も言う。
+            if (tabBarPosition_ == TabBarPosition::Sidebar && !tabsInSidebar()) {
+                SetStatus(strings_.Get(sidebarVisible_ ? "ui.tabs_in_sidebar_split"
+                                                       : "ui.tabs_in_sidebar_hidden"));
+            }
             break;
         case SettingId::NewTabPos:
             newTabPosition_ = (index != 0) ? NewTabPosition::AfterCurrent : NewTabPosition::End;
@@ -644,6 +704,8 @@ bool App::SaveSettings() {
     settings_.Set("ui", "new_tab_position", NewTabPositionName(newTabPosition_));
     settings_.Set("ui", "tab_bar_position", TabBarPositionName(tabBarPosition_));
     settings_.SetFloat("ui", "tab_bar_width", tabBarWidth_);
+    settings_.SetFloat("ui", "sidebar_width", sidebarWidth_);
+    settings_.SetBool("ui", "tabs_section_collapsed", tabsSectionCollapsed_);
 
     // Rewritten whole rather than merged: a folder that has since disappeared
     // would otherwise sit in the file forever, holding a slot nothing fills.

@@ -32,6 +32,20 @@ inline constexpr float kDefaultTabBarWidth = 170.0f;
 inline constexpr float kTabBarMinWidth = 80.0f;    ///< 縦置きタブバーの最小幅（DIP）
 inline constexpr float kTabBarMaxWidth = 400.0f;   ///< 縦置きタブバーの最大幅（DIP）
 
+/// @brief サイドバーの幅（DIP）の既定値と、掴んで動かせる範囲。
+///
+/// **値の正は App（`[ui] sidebar_width`）で、Theme::ApplyIni はここを読まない** ─
+/// 縦置きタブバーの幅とまったく同じ約束。縁を掴んで決めるものになった以上、
+/// ApplyTheme() を通るたびにファイルの値が動かした幅の上にかぶさってはならない。
+///
+/// 下限は「クイックアクセス」の見出しと、アイコン 1 つぶんを引いた残りに名前が
+/// 数文字は残るところ。上限は «それ以上覚えない» 線で、実際に効く上限は窓の半分
+/// （AppUi::Paint）のほう ─ サイドバーが一覧を押し潰したら、一覧を読むための
+/// アプリではなくなる。
+inline constexpr float kDefaultSidebarWidth = 190.0f;
+inline constexpr float kSidebarMinWidth = 120.0f;   ///< サイドバーの最小幅（DIP）
+inline constexpr float kSidebarMaxWidth = 480.0f;   ///< サイドバーの最大幅（DIP）
+
 /// @brief 画面全体の配色と寸法。
 struct Theme {
     Color windowBg;   ///< ウィンドウ背景
@@ -93,7 +107,9 @@ struct Theme {
     float pathBarHeight = 26.0f;     ///< パスバーの高さ（DIP）
     float sessionBarHeight = 26.0f;  ///< セッションバーの高さ（DIP）
     float statusBarHeight = 22.0f;   ///< ステータスバーの高さ（DIP）
-    float sidebarWidth = 190.0f;     ///< サイドバーの幅（DIP）
+    /// サイドバーの幅（DIP）。正は App::sidebarWidth() の側で、ここに入るのは倍率を
+    /// 掛けた後の値（App::ApplyTheme）─ 縦置きタブバーの幅とまったく同じ扱い。
+    float sidebarWidth = kDefaultSidebarWidth;
     float splitterWidth = 4.0f;      ///< ペイン分割線の幅（DIP）
     float fontSize = kDefaultFontSize;  ///< 基準フォントサイズ（DIP）
     float uiScale = 1.0f;            ///< フォントサイズ全体の倍率

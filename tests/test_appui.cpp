@@ -173,10 +173,11 @@ struct Fixture {
         return leaf ? leaf->rect : RectF{};
     }
 
-    // Move the tab bar to the left of the list. Driven through the settings
-    // screen rather than the ini, so the path the user actually takes is the one
-    // under test.
-    void UseVerticalTabBar() {
+    // Move the tab bar off the top. Driven through the settings screen rather
+    // than the ini, so the path the user actually takes is the one under test.
+    // `steps` counts along TabBarPosition from Top: 1 is beside the list, 2 is
+    // inside the sidebar.
+    void MoveTabBar(int steps) {
         app.Execute(Cmd::ShowSettings);
         SettingsEditor& editor = app.settingsEditor();
         for (size_t i = 0; i < editor.rows().size(); ++i) {
@@ -185,10 +186,54 @@ struct Fixture {
                 break;
             }
         }
-        editor.Adjust(1, app.strings());
+        editor.Adjust(steps, app.strings());
         app.ApplyPendingSetting();
         app.Execute(Cmd::ShowSettings);  // close
         Paint();
+    }
+
+    void UseVerticalTabBar() { MoveTabBar(1); }
+    void UseTabsInSidebar() { MoveTabBar(2); }
+
+    // The sidebar as it was painted this frame.
+    RectF sidebarRect() const {
+        const Theme& th = app.theme();
+        return { 0.0f, ContentTop(th), th.sidebarWidth,
+                 renderer.size.h - th.statusBarHeight };
+    }
+
+    // The "tabs" heading at the top of the sidebar.
+    RectF TabsHeadingRect() const {
+        const Theme& th = app.theme();
+        const float top = ContentTop(th) + 4.0f;
+        return { 2.0f, top, sidebarRect().r - 2.0f, top + th.rowHeight };
+    }
+
+    // Row `index` of the tab strip inside the sidebar - the heading sits above
+    // it, and every tab is one line tall.
+    RectF SidebarTabRect(int index) const {
+        const Theme& th = app.theme();
+        const float top = TabsHeadingRect().b + static_cast<float>(index) * th.tabBarHeight;
+        return { 0.0f, top, sidebarRect().r, top + th.tabBarHeight };
+    }
+
+    // 名前だけでは足りない ─ 同じフォルダのタブは名前が同じだし、サイドバーの
+    // 他の区画にも同じ名前の行が在る。どの矩形の中に落ちたかまで見る。
+    bool TextDrawnIn(const std::string& s, const RectF& box) const {
+        for (const test::FakeRenderer::Text& t : renderer.texts) {
+            if (t.text != s) continue;
+            if (t.ink.t >= box.t - 0.01f && t.ink.b <= box.b + 0.01f && t.ink.l >= box.l - 0.01f &&
+                t.ink.r <= box.r + 0.01f) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    std::string TabName(int index) {
+        Pane* p = pane();
+        if (!p || index >= static_cast<int>(p->tabs.size())) return {};
+        return app.DisplayName(*p->tabs[index]);
     }
 
     // Well below the last row: the empty part of the list, where a band starts.
@@ -1759,6 +1804,178 @@ KITE_TEST(appui, the_horizontal_bar_has_no_edge_to_grab) {
     f.Paint();
 
     KITE_EXPECT_NEAR(f.app.theme().tabBarWidth, before, 0.01f);
+}
+
+// --- tabs in the sidebar ----------------------------------------------------
+//
+// 統合が返すのは «帯 1 本ぶんの幅»。だから一覧はサイドバーの右端から始まり、
+// ペインの左には何も立たない。
+
+KITE_TEST(appui, tabs_in_the_sidebar_give_the_pane_its_left_edge_back) {
+    Fixture f;
+    f.UseTabsInSidebar();
+
+    const Theme& th = f.app.theme();
+    const RectF pane = f.paneRect();
+    KITE_EXPECT(f.app.tabsInSidebar());
+    // ペインの左端がそのまま一覧の左端 ─ 縦置きならここに tabBarWidth が入る。
+    KITE_EXPECT_NEAR(f.pane()->viewport.listArea.l, pane.l, 0.01f);
+    KITE_EXPECT_NEAR(f.pane()->viewport.listArea.t, pane.t + th.pathBarHeight + th.headerHeight,
+                     0.01f);
+
+    // タブのラベルはサイドバーの中に在る。
+    KITE_EXPECT(f.TextDrawnIn(f.TabName(0), f.SidebarTabRect(0)));
+}
+
+// 条件が欠けたらペインの脇へ戻る。設定はそのままなので、戻せばまた入る。
+KITE_TEST(appui, splitting_the_session_puts_the_bar_back_beside_each_pane) {
+    Fixture f;
+    f.UseTabsInSidebar();
+    const RectF beforeSplit = f.pane()->viewport.listArea;
+
+    f.app.Execute(Cmd::SplitLeftRight);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    KITE_EXPECT_FALSE(f.app.tabsInSidebar());
+    const RectF pane = f.paneRect();
+    KITE_EXPECT_NEAR(f.pane()->viewport.listArea.l, pane.l + f.app.theme().tabBarWidth, 0.01f);
+
+    f.app.Execute(Cmd::ClosePane);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+    KITE_EXPECT(f.app.tabsInSidebar());
+    KITE_EXPECT_NEAR(f.pane()->viewport.listArea.l, beforeSplit.l, 0.01f);
+}
+
+KITE_TEST(appui, hiding_the_sidebar_puts_the_bar_back_beside_the_list) {
+    Fixture f;
+    f.UseTabsInSidebar();
+
+    f.app.Execute(Cmd::ToggleSidebar);
+    f.Paint();
+    KITE_EXPECT_FALSE(f.app.tabsInSidebar());
+    const RectF pane = f.paneRect();
+    KITE_EXPECT_NEAR(f.pane()->viewport.listArea.l, pane.l + f.app.theme().tabBarWidth, 0.01f);
+    // タブはどこかに出ていなければならない ─ 画面に無いタブはクリックできない。
+    KITE_EXPECT(f.TextDrawnIn(f.TabName(0),
+                              { pane.l, pane.t, pane.l + f.app.theme().tabBarWidth,
+                                pane.t + f.app.theme().tabBarHeight }));
+}
+
+KITE_TEST(appui, a_tab_in_the_sidebar_can_be_clicked) {
+    Fixture f;
+    f.UseTabsInSidebar();
+    for (int i = 0; i < 3; ++i) f.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    const RectF row = f.SidebarTabRect(2);
+    f.Click(row.l + 30.0f, (row.t + row.b) * 0.5f);
+    test::PumpUntilSettled(f.app);
+    KITE_EXPECT_EQ(f.pane()->active, 2);
+}
+
+// 見出しは畳める。**畳んである間、«何枚開いているか» を言うのは件数だけ**になる。
+KITE_TEST(appui, the_tabs_heading_folds_the_section_and_keeps_saying_how_many) {
+    Fixture f;
+    f.UseTabsInSidebar();
+    f.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    const RectF heading = f.TabsHeadingRect();
+    KITE_EXPECT(f.TextDrawnIn("2", heading));
+    KITE_EXPECT(f.TextDrawnIn(f.TabName(0), f.SidebarTabRect(0)));
+
+    // 押した瞬間に畳む ─ この見出しは並べ替えの取っ手ではないので、待つ理由が無い。
+    f.Press(40.0f, (heading.t + heading.b) * 0.5f);
+    KITE_EXPECT(f.app.tabsSectionCollapsed());
+    f.Paint();
+    KITE_EXPECT_FALSE(f.TextDrawnIn(f.TabName(0), f.SidebarTabRect(0)));
+    // 畳んである間、«何枚開いているか» を言うのはこの数だけになる。
+    KITE_EXPECT(f.TextDrawnIn("2", heading));
+
+    f.Release(40.0f, (heading.t + heading.b) * 0.5f);
+    f.Click(40.0f, (heading.t + heading.b) * 0.5f);
+    KITE_EXPECT_FALSE(f.app.tabsSectionCollapsed());
+}
+
+// 統合したバーは自前のスクロールを持たない ─ 長ければサイドバーごと動く。
+// 二重にすると «どちらが動くか» が読めなくなる。
+KITE_TEST(appui, the_sidebar_tabs_have_no_scrollbar_of_their_own) {
+    Fixture f;
+    f.UseTabsInSidebar();
+    for (int i = 0; i < 40; ++i) f.app.Execute(Cmd::NewTab);
+    test::PumpUntilSettled(f.app);
+    f.Paint();
+
+    KITE_EXPECT_EQ(f.pane()->viewport.tabRows, f.pane()->viewport.tabRowsPerPage);
+    // ホイールはサイドバーのもの。
+    const float before = f.app.theme().sidebarWidth;
+    f.Wheel(40.0f, ContentTop(f.app.theme()) + 100.0f, -1.0f);
+    f.Paint();
+    KITE_EXPECT_EQ(f.pane()->tabScroll, 0);
+    KITE_EXPECT_NEAR(f.app.theme().sidebarWidth, before, 0.01f);
+}
+
+// --- the sidebar edge -------------------------------------------------------
+
+KITE_TEST(appui, dragging_the_sidebar_edge_changes_its_width) {
+    Fixture f;
+    f.Paint();
+    const float before = f.app.theme().sidebarWidth;
+    const float y = ContentTop(f.app.theme()) + 80.0f;
+
+    f.Press(before - 2.0f, y);
+    f.Drag(before + 50.0f, y);
+    f.Release(before + 50.0f, y);
+    f.Paint();
+
+    KITE_EXPECT_NEAR(f.app.theme().sidebarWidth, before + 50.0f, 1.01f);
+    // 一覧はその差ぶんだけ右へ寄る ─ 幅を変えたのだから、そこは動く。
+    KITE_EXPECT_NEAR(f.paneRect().l, f.app.theme().sidebarWidth + 1.0f, 0.01f);
+
+    // 掴む場所がそのまま «戻す» 場所。
+    f.DoubleClick(f.app.theme().sidebarWidth - 2.0f, y);
+    f.Paint();
+    KITE_EXPECT_NEAR(f.app.theme().sidebarWidth, before, 0.01f);
+}
+
+// 縁は下限と上限で止まる。下限を割ると、行に残る名前が数文字も無くなる。
+KITE_TEST(appui, the_sidebar_edge_stops_at_its_limits) {
+    Fixture f;
+    f.Paint();
+    const float y = ContentTop(f.app.theme()) + 80.0f;
+
+    f.Press(f.app.theme().sidebarWidth - 2.0f, y);
+    f.Drag(10.0f, y);
+    f.Release(10.0f, y);
+    f.Paint();
+    KITE_EXPECT_NEAR(f.app.theme().sidebarWidth, kSidebarMinWidth, 0.51f);
+
+    f.Press(f.app.theme().sidebarWidth - 2.0f, y);
+    f.Drag(f.renderer.size.w - 10.0f, y);
+    f.Release(f.renderer.size.w - 10.0f, y);
+    f.Paint();
+    // 画面の半分で止まる ─ 覚えている幅もそこまで（次に窓を広げたときに跳ばない）。
+    KITE_EXPECT(f.app.theme().sidebarWidth <= f.renderer.size.w * 0.5f + 0.01f);
+}
+
+// 縁は行より «後» に登録されるので、重なった数ピクセルは幅のもの。
+KITE_TEST(appui, the_sidebar_edge_wins_over_the_row_it_overlaps) {
+    Fixture f;
+    f.Paint();
+    const Theme& th = f.app.theme();
+    const float before = th.sidebarWidth;
+    // クイックアクセスの最初の行の高さで、帯のいちばん右。
+    const float y = ContentTop(th) + 4.0f + th.rowHeight * 1.5f;
+
+    f.Press(before - 1.0f, y);
+    f.Drag(before + 40.0f, y);
+    f.Release(before + 40.0f, y);
+    f.Paint();
+    KITE_EXPECT(f.app.theme().sidebarWidth > before);
 }
 
 KITE_TEST(appui, nothing_behind_the_settings_screen_is_lit) {
