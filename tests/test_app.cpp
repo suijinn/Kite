@@ -2834,6 +2834,88 @@ KITE_TEST(app, resetting_the_tab_bar_width_answers_even_when_nothing_moves) {
     KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.tab_bar_reset"));
 }
 
+// --- the sidebar's width ----------------------------------------------------
+//
+// 縁を掴んで決める値になったので、約束はタブバーの幅とまったく同じ ─ 正は App の
+// 側にあり、Theme::ApplyIni は `[ui] sidebar_width` を読まない。
+
+KITE_TEST(app, the_sidebar_width_survives_a_save_and_a_reload) {
+    Harness h;
+    KITE_EXPECT(h.app.SetSidebarWidth(240.0f));
+    KITE_EXPECT(h.app.SaveAll());
+
+    h.app.Execute(Cmd::ReloadConfig);
+    KITE_EXPECT_NEAR(h.app.sidebarWidth(), 240.0f, 0.01f);
+    KITE_EXPECT_NEAR(h.app.theme().sidebarWidth, 240.0f, 0.01f);
+}
+
+KITE_TEST(app, the_sidebar_width_follows_the_text_size) {
+    Harness h;
+    const float was = h.app.theme().sidebarWidth;
+
+    h.app.Execute(Cmd::FontLarger);
+    KITE_EXPECT(h.app.theme().sidebarWidth > was);
+    h.app.Execute(Cmd::FontReset);
+    KITE_EXPECT_NEAR(h.app.theme().sidebarWidth, was, 0.01f);
+}
+
+// 掴んで動かした幅の上に ini の値がもう一度かぶさらないこと。ApplyTheme() は
+// テーマ切り替えでも設定再読み込みでも通る道なので、両方が読むと «動かしたのに
+// 戻る» がその場で出る。
+KITE_TEST(app, a_sidebar_width_from_the_settings_file_is_what_the_bar_gets) {
+    test::ResetFakePlatform();
+    test::FakeFiles()["C:\\home\\config\\settings.ini"] = "[ui]\nsidebar_width=250\n";
+
+    test::FakeFileSystem files;
+    test::PopulateStandardTree(files);
+    test::FakeShell shell;
+    test::FakeHost host;
+    App app(files, shell, host);
+    app.Init({});
+    test::PumpUntilSettled(app);
+
+    KITE_EXPECT_NEAR(app.sidebarWidth(), 250.0f, 0.01f);
+    KITE_EXPECT_NEAR(app.theme().sidebarWidth, 250.0f, 0.01f);
+
+    // テーマを切り替えても、掴んだ幅のまま。
+    app.Execute(Cmd::ToggleTheme);
+    KITE_EXPECT_NEAR(app.theme().sidebarWidth, 250.0f, 0.01f);
+}
+
+KITE_TEST(app, a_wild_sidebar_width_in_the_settings_file_is_pulled_back_into_range) {
+    test::ResetFakePlatform();
+    test::FakeFiles()["C:\\home\\config\\settings.ini"] = "[ui]\nsidebar_width=0\n";
+
+    test::FakeFileSystem files;
+    test::PopulateStandardTree(files);
+    test::FakeShell shell;
+    test::FakeHost host;
+    App app(files, shell, host);
+    app.Init({});
+    test::PumpUntilSettled(app);
+
+    KITE_EXPECT_NEAR(app.sidebarWidth(), kSidebarMinWidth, 0.01f);
+}
+
+KITE_TEST(app, resetting_the_sidebar_width_answers_even_when_nothing_moves) {
+    Harness h;
+    h.app.ResetSidebarWidth();
+    KITE_EXPECT_NEAR(h.app.sidebarWidth(), kDefaultSidebarWidth, 0.01f);
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.sidebar_reset"));
+}
+
+// 畳んだ «タブ» 区画は次の起動でも畳んだまま。他の区画と同じ理由で、畳んだことが
+// 戻ってしまっては畳む意味が無い。
+KITE_TEST(app, the_folded_tabs_section_survives_a_save_and_a_reload) {
+    Harness h;
+    KITE_EXPECT_FALSE(h.app.tabsSectionCollapsed());
+    h.app.ToggleTabsSection();
+    KITE_EXPECT(h.app.SaveAll());
+
+    h.app.Execute(Cmd::ReloadConfig);
+    KITE_EXPECT(h.app.tabsSectionCollapsed());
+}
+
 KITE_TEST(app, the_reset_width_chord_reaches_the_command) {
     Harness h;
     const int date = h.app.columns().IndexOf(SortKey::Date);

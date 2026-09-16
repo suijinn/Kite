@@ -224,7 +224,7 @@ bool AppUi::ResolveTabDrop(float x, float y, Pane** outPane, int* outIndex) cons
         index = region->index;
         // Past the midpoint means "after this tab" - along whichever axis the
         // tabs are ordered on.
-        const bool vertical = (app_.tabBarPosition() == TabBarPosition::Left);
+        const bool vertical = app_.tabBarVertical();
         const PointF middle = region->rect.center();
         if (vertical ? (y > middle.y) : (x > middle.x)) ++index;
     }
@@ -439,6 +439,7 @@ bool AppUi::DragHidesHover() const {
     if (std::holds_alternative<SplitterDrag>(drag_.what)) return true;
     if (std::holds_alternative<MarqueeDrag>(drag_.what)) return true;
     if (std::holds_alternative<TabBarWidthDrag>(drag_.what)) return true;
+    if (std::holds_alternative<SidebarWidthDrag>(drag_.what)) return true;
     if (const TabDrag* tab = std::get_if<TabDrag>(&drag_.what)) return tab->started;
     if (const ReorderDrag* drag = std::get_if<ReorderDrag>(&drag_.what)) {
         // 列だけは外す ─ 幅も並べ替えも一覧の «上» で起きるので、行が光っても
@@ -576,6 +577,14 @@ bool AppUi::OnDrag(const MouseEvent& e, Redraw& redraw) {
         return true;
     }
 
+    if (const SidebarWidthDrag* side = std::get_if<SidebarWidthDrag>(&drag_.what)) {
+        // 縦置きタブバーの縁とまったく同じ ─ 掴んでいるのは右の縁で、左端は動かない。
+        float width = e.x - side->left;
+        if (side->max > 0.0f) width = std::min(width, side->max);
+        app_.SetSidebarWidth(width);
+        return true;
+    }
+
     if (const TabBarWidthDrag* bar = std::get_if<TabBarWidthDrag>(&drag_.what)) {
         // 掴んでいるのは右の縁で、バーの左端は動かない ─ 幅は差でそのまま出る
         // （列の縁と左右が逆なだけ）。ペインの半分で頭打ちにするのは、
@@ -633,7 +642,7 @@ bool AppUi::OnDrag(const MouseEvent& e, Redraw& redraw) {
             // the leading edge of tab `index`, or the trailing edge of the
             // one before it when inserting at the end. Which edge that is
             // follows the bar's orientation.
-            const bool vertical = (app_.tabBarPosition() == TabBarPosition::Left);
+            const bool vertical = app_.tabBarVertical();
             for (const Region& candidate : regions_) {
                 if (candidate.kind != Hit::TabItem || candidate.pane != pane) continue;
                 const RectF& box = candidate.rect;
@@ -662,7 +671,8 @@ bool AppUi::OnDrag(const MouseEvent& e, Redraw& redraw) {
     int shape = 0;
     if (region && region->kind == Hit::Splitter) {
         shape = (region->node->kind == SplitNode::Kind::LeftRight) ? 2 : 3;
-    } else if (region && (region->kind == Hit::ColumnEdge || region->kind == Hit::TabBarEdge)) {
+    } else if (region && (region->kind == Hit::ColumnEdge || region->kind == Hit::TabBarEdge ||
+                          region->kind == Hit::SidebarEdge)) {
         // 分割線と同じ形。掴めば横に動くもの、というのは同じ話なので。
         shape = 2;
     }
@@ -692,7 +702,8 @@ bool AppUi::OnRelease(const MouseEvent&) {
     // 掴んでいる間マウスを占有するもの ─ 離せば終わり、それ以上の意味は無い。
     if (std::holds_alternative<SplitterDrag>(drag_.what) ||
         std::holds_alternative<ColumnWidthDrag>(drag_.what) ||
-        std::holds_alternative<TabBarWidthDrag>(drag_.what)) {
+        std::holds_alternative<TabBarWidthDrag>(drag_.what) ||
+        std::holds_alternative<SidebarWidthDrag>(drag_.what)) {
         CancelDrag();
         return true;
     }
@@ -789,7 +800,7 @@ bool AppUi::OnWheel(const MouseEvent& e) {
         Pane& pane = *region->pane;
         // A notch is worth three tabs either way: a row of the vertical bar
         // holds one tab, a row of the horizontal bar holds a screenful.
-        const int step = (app_.tabBarPosition() == TabBarPosition::Left) ? 3 : 1;
+        const int step = app_.tabBarVertical() ? 3 : 1;
         const int wanted =
             pane.tabScroll - static_cast<int>(std::lround(e.wheel * static_cast<float>(step)));
         pane.tabScroll = std::clamp(wanted, 0, pane.viewport.tabRows - pane.viewport.tabRowsPerPage);
@@ -895,6 +906,28 @@ bool AppUi::OnPress(const MouseEvent& e) {
                 (it == order.end()) ? -1 : static_cast<int>(std::distance(order.begin(), it));
             drag_.start = { e.x, e.y };
             drag_.what = std::move(drag);
+            return true;
+        }
+
+        case Hit::TabSectionHeader:
+            if (e.button != 0) return true;
+            // 押した瞬間に畳む。他の区画が離すまで待つのは、そちらの見出しが
+            // 並べ替えの取っ手でもあるからで、この区画は動かせない ─ 待つ理由が無い。
+            app_.ToggleTabsSection();
+            return true;
+
+        case Hit::SidebarEdge: {
+            if (e.button != 0) return true;
+            // 縁のダブルクリックで既定の幅へ。掴む場所がそのまま «戻す» 場所、
+            // というのは列やタブバーの縁と同じ読み方で、1 回目の押下は幅を動かさない。
+            if (e.clicks >= 2) {
+                app_.ResetSidebarWidth();
+                return true;
+            }
+            drag_.start = { e.x, e.y };
+            // 上限は窓の半分（描くときのクランプと同じ線）。渡さないと、画面の
+            // サイドバーはもう伸びないのに覚えている幅だけが増える。
+            drag_.what = SidebarWidthDrag{ sidebarRect_.l, (surface_.w - sidebarRect_.l) * 0.5f };
             return true;
         }
 

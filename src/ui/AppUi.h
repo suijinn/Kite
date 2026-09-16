@@ -109,6 +109,8 @@ private:
         SessionAdd,
         SidebarSectionHeader,
         SidebarItem,
+        SidebarEdge,       ///< サイドバーの右の縁。掴むと幅が変わる
+        TabSectionHeader,  ///< サイドバーに統合した «タブ» 区画の見出し
         TabBar,
         TabItem,
         TabClose,
@@ -216,13 +218,23 @@ private:
         float max = 0.0f;
     };
 
+    /// サイドバーの右の縁を掴んで幅を変えている。
+    ///
+    /// 縦置きタブバーの縁とまったく同じ形 ─ 左端は動かないので幅は
+    /// «ポインタ − 左端»、上限を控えるのは画面のクランプ（窓の半分）に任せると
+    /// バーはもう伸びないのに覚えている幅だけが増えるため。
+    struct SidebarWidthDrag {
+        float left = 0.0f;
+        float max = 0.0f;
+    };
+
     /// 左ボタンが今おこなっている操作 ─ **1 つだけ**。
     ///
     /// 種別ごとのフィールドを平置きしていたころは、`CancelDrag` がそれを 1 つずつ
     /// 初期値へ戻す列で、フィールドを足すたびに抜けた。型にしてあれば `drag_ = {}`
     /// で全部が消える。
     using DragWhat = std::variant<std::monostate, SplitterDrag, TabDrag, FileDrag, MarqueeDrag,
-                                  ReorderDrag, ColumnWidthDrag, TabBarWidthDrag>;
+                                  ReorderDrag, ColumnWidthDrag, TabBarWidthDrag, SidebarWidthDrag>;
 
     /// 今のドラッグと、それが始まった点。
     struct DragState {
@@ -281,12 +293,21 @@ private:
         int rows = 1;            ///< 折り返して必要になった行数
         int firstRow = 0;        ///< 画面に出る先頭の行
         int shownRows = 1;       ///< 実際に描く行数。rows を超えない
+        /// サイドバーの «タブ» 区画として描くか。**数え方は縦置きのまま**で、
+        /// 変わるのは 4 つだけ ─ 厚みが区画の幅になる、全行を出す（スクロールは
+        /// サイドバーのものなので自前では持たない）、地と縁と幅の取っ手を出さない、
+        /// つまみを出さない。
+        bool inSidebar = false;
     };
 
     bool SessionChipEditing(int index) const;
     float LayoutSessionBar(Renderer& r, const RectF& area);
     void PaintSessionBar(Renderer& r, const RectF& area);
     TabLayout LayoutTabBar(Pane& pane, const RectF& area) const;
+    /// サイドバーに統合したタブ区画が要る高さ。タブ 1 枚ぶんずつと、末尾の `+` の 1 行。
+    float SidebarTabsHeight(const Pane& pane) const;
+    /// サイドバーの上端に «タブ» 区画を描く。y は見出しの上端で、描いた下端を返す。
+    float PaintSidebarTabs(Renderer& r, const RectF& area, float y);
     void PaintSidebar(Renderer& r, const RectF& area);
     void PaintStatusBar(Renderer& r, const RectF& area);
     void PaintTextField(Renderer& r, const RectF& box, const TextField& f, FontRole role,

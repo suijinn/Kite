@@ -39,7 +39,10 @@ const char* const kLanguage[] = { "settings.language.auto", "settings.language.e
 const char* const kNewTabPos[] = { "settings.new_tab_pos.end", "settings.new_tab_pos.after" };
 const char* const kFolderSizes[] = { "settings.folder_sizes.off", "settings.folder_sizes.manual",
                                      "settings.folder_sizes.auto" };
-const char* const kTabBarPos[] = { "settings.tab_bar_pos.top", "settings.tab_bar_pos.left" };
+// 並びは TabBarPosition の定義順そのもの ─ 添字がそのまま値になるので、対応表を
+// もう 1 つ持たずに済む（CollectSettings / ApplySetting は static_cast で往復する）。
+const char* const kTabBarPos[] = { "settings.tab_bar_pos.top", "settings.tab_bar_pos.left",
+                                   "settings.tab_bar_pos.sidebar" };
 
 // 既定の文字サイズの刻み。1 DIP きざみで、これがそのまま `[ui] font_size` の
 // 取りうる値になる（App が読み込んだ値をこの表に丸める）─ 行が出せない大きさで
@@ -68,7 +71,7 @@ const Info kSettings[] = {
       nullptr, &kFontScaleNumeric },
     { SettingId::Sidebar, SettingGroup::Appearance, "settings.sidebar", 2, kOnOff, nullptr },
     { SettingId::ShellIcons, SettingGroup::Appearance, "settings.shell_icons", 2, kOnOff, nullptr },
-    { SettingId::TabBarPos, SettingGroup::Tabs, "settings.tab_bar_pos", 2, kTabBarPos, nullptr },
+    { SettingId::TabBarPos, SettingGroup::Tabs, "settings.tab_bar_pos", 3, kTabBarPos, nullptr },
     { SettingId::NewTabPos, SettingGroup::Tabs, "settings.new_tab_pos", 2, kNewTabPos, nullptr },
     { SettingId::OpenArchives, SettingGroup::Files, "settings.open_archives", 2, kOnOff, nullptr },
     // 切り替えたことがその場で目で確かめられる ─ サイズ列が数え始める（あるいは

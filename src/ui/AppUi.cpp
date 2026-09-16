@@ -34,6 +34,9 @@ constexpr float kHiddenInk = 0.55f;
 // 縦置きタブバーの縁を掴める幅。列の縁と違って «内側» にしか取れないので、
 // 片側 3 px ではなく 5 px ─ 掴める帯の広さは同じになる。
 constexpr float kTabBarGrab = 5.0f;
+// サイドバーの縁も同じ ─ 帯の内側 5 px。行は右端の 2 px 手前まであるので重なるが、
+// 縁のほうを後から登録するのでそちらが勝つ（掴めない縁は取っ手ではない）。
+constexpr float kSidebarGrab = 5.0f;
 
 std::string SortArrow(bool desc) { return desc ? "\xE2\x96\xBC" : "\xE2\x96\xB2"; }  // ▼ ▲
 
@@ -212,7 +215,10 @@ void AppUi::Paint(Renderer& r) {
     }
 
     if (app_.sidebarVisible()) {
-        const RectF side = { rest.l, rest.t, rest.l + th.sidebarWidth, rest.b };
+        // 窓の半分より先へは出さない。タブバーがペインの半分で止まるのと同じ線で、
+        // 理由も同じ ─ 帯が一覧を押し潰したら、一覧を読むためのアプリではなくなる。
+        const float sideW = std::min(th.sidebarWidth, rest.w() * 0.5f);
+        const RectF side = { rest.l, rest.t, rest.l + sideW, rest.b };
         PaintSidebar(r, side);
         rest.l = side.r;
         r.FillRect({ rest.l, rest.t, rest.l + 1.0f, rest.b }, th.border);
@@ -453,6 +459,65 @@ void AppUi::PaintSessionBar(Renderer& r, const RectF& area) {
 
 // --- sidebar ----------------------------------------------------------------
 
+// 統合したタブ区画が要る高さ。タブ 1 枚ぶんずつと、末尾の `+` の 1 行。
+//
+// 高さを先に出してから帯の矩形を作るのは、統合したバーが «収まる» ものだから ─
+// 縦置きのバーは与えられた高さに何行入るかを数えるが、こちらは行の数がそのまま
+// 高さを決める（溢れた先はサイドバーのスクロールで、バー自身は何も隠さない）。
+float AppUi::SidebarTabsHeight(const Pane& pane) const {
+    return static_cast<float>(pane.tabs.size() + 1) * app_.theme().tabBarHeight;
+}
+
+// サイドバーの上端の «タブ» 区画。見出しは他の 3 つと同じ作法（折り畳める、押せる
+// ことがホバーで分かる）だが、**並べ替えの対象にはしない** ─ 他の 3 つは «行き先の
+// 置き場» で、性格が同じだから順番を入れ替えても意味が通る。タブは «今開いている
+// もの» で、しかもペインに属する唯一の区画なので、その並びの約束を共有できない。
+// 上端に固定なのは、既存の settings.ini に区画名が書かれていないことへの答えでも
+// ある（区画の列に足すと «書かれていない区画は末尾» の規則でドライブの下に生まれ、
+// 機能を有効にしても画面に何も出ない環境ができる）。
+float AppUi::PaintSidebarTabs(Renderer& r, const RectF& area, float y) {
+    Pane* pane = app_.workspace().focusedPane();
+    if (!pane) return y;
+
+    const Theme& th = app_.theme();
+    const Strings& str = app_.strings();
+    const float rowH = th.rowHeight;
+    const bool collapsed = app_.tabsSectionCollapsed();
+
+    const RectF row = { area.l + 2.0f, y, area.r - 2.0f, y + rowH };
+    if (row.b > area.t && row.t < area.b) {
+        if (Hovered(row)) r.FillRoundRect(row, 4.0f, th.rowHover);
+        const Color headingColor = th.textDim.alpha(0.75f);
+        const RectF mark = { row.l + 4.0f, row.t, row.l + 4.0f + 12.0f, row.b };
+        if (collapsed) {
+            glyph::ChevronRight(r, mark, headingColor);
+        } else {
+            glyph::ChevronDown(r, mark, headingColor);
+        }
+        // 件数は右端に。塊の見出しが数を出しているのと同じ読み方で、**畳んである
+        // 間はこれが «何枚開いているか» を言う唯一のもの**になる。1 行に 2 つ置くので、
+        // 見出しには数が使い残した幅しか渡さない（矩形が重なれば文字も重なる）。
+        const std::string count = std::to_string(pane->tabs.size());
+        const float countW = r.MeasureText(count, FontRole::UiSmall);
+        r.DrawText(count, { row.r - kPad - countW, row.t, row.r - kPad, row.b }, headingColor,
+                   FontRole::UiSmall, TextAlign::Right);
+        r.DrawText(str.Get("ui.tabs"),
+                   { mark.r + 4.0f, row.t, row.r - kPad - countW - 6.0f, row.b }, headingColor,
+                   FontRole::UiSmall, TextAlign::Left);
+        AddSidebar(row, Hit::TabSectionHeader, SidebarSection::Count, 0);
+    }
+    y += rowH;
+    if (collapsed) return y;
+
+    // 帯そのものは縦置きのタブバーと同じコードが描く ─ 差し替えるのは渡す矩形だけ。
+    const RectF bar = { area.l, y, area.r, y + SidebarTabsHeight(*pane) };
+    const TabLayout layout = LayoutTabBar(*pane, bar);
+    // 統合しているのはペインが 1 つのときだけなので、このタブは必ず «キーボードの
+    // 居るペイン» のもの。窓が前面かどうかは FocusColor が見る。
+    PaintTabBar(r, pane, bar, true, layout);
+    return bar.b;
+}
+
 void AppUi::PaintSidebar(Renderer& r, const RectF& area) {
     const Theme& th = app_.theme();
     const Strings& str = app_.strings();
@@ -547,6 +612,11 @@ void AppUi::PaintSidebar(Renderer& r, const RectF& area) {
         y += rowH;
     };
 
+    // 上端に固定の «タブ» 区画。並べ替えの列（下のループ）には入らない。
+    if (app_.tabsInSidebar()) {
+        y = PaintSidebarTabs(r, area, y) + 6.0f;
+    }
+
     // The order the three come in is the user's, so this is a loop over that
     // order rather than three calls in the order they were written.
     const std::vector<SidebarSection>& order = app_.sidebarSections();
@@ -615,6 +685,12 @@ void AppUi::PaintSidebar(Renderer& r, const RectF& area) {
 
     sidebarContent_ = y + sidebarScroll_ - top;
     r.PopClip();
+
+    // 右の縁は幅を変える取っ手。行より «後» に登録するので、重なった数ピクセルは
+    // 幅のものになる（縦置きタブバーの縁と同じ順序の話 ─ Pick は後ろから引く）。
+    // 帯の «内側» だけを取るのは、一覧の側へはみ出させても後から登録される行が
+    // 必ず勝つから。クリップの外に出しているのは、当たり判定は描画ではないため。
+    Add({ area.r - kSidebarGrab, area.t, area.r, area.b }, Hit::SidebarEdge);
 }
 
 // --- split tree -------------------------------------------------------------
@@ -674,19 +750,23 @@ void AppUi::PaintPane(Renderer& r, Pane* pane, const RectF& area) {
     r.FillRect(area, th.listBg);
 
     RectF rest = area;
-    const TabLayout tabs = LayoutTabBar(*pane, area);
-    // 縦置きのバーはペインの高さいっぱいを取り、パスバーはその右から始まる。
-    // パスバーの下に潜り込ませると、タブの列だけが一覧より低い位置から始まって
-    // ペインの左上に用途の無い角ができる。
-    RectF tabBar;
-    if (tabs.vertical) {
-        tabBar = { rest.l, rest.t, rest.l + tabs.thickness, rest.b };
-        rest.l = tabBar.r;
-    } else {
-        tabBar = { rest.l, rest.t, rest.r, rest.t + tabs.thickness };
-        rest.t = tabBar.b;
+    // 統合しているときは、このペインのタブはサイドバーがすでに描いている ─ ここで
+    // 帯を取らないことが、そのまま «帯 1 本ぶんの幅を一覧へ返す» の中身になる。
+    if (!app_.tabsInSidebar()) {
+        const TabLayout tabs = LayoutTabBar(*pane, area);
+        // 縦置きのバーはペインの高さいっぱいを取り、パスバーはその右から始まる。
+        // パスバーの下に潜り込ませると、タブの列だけが一覧より低い位置から始まって
+        // ペインの左上に用途の無い角ができる。
+        RectF tabBar;
+        if (tabs.vertical) {
+            tabBar = { rest.l, rest.t, rest.l + tabs.thickness, rest.b };
+            rest.l = tabBar.r;
+        } else {
+            tabBar = { rest.l, rest.t, rest.r, rest.t + tabs.thickness };
+            rest.t = tabBar.b;
+        }
+        PaintTabBar(r, pane, tabBar, focused, tabs);
     }
-    PaintTabBar(r, pane, tabBar, focused, tabs);
 
     Tab* tab = pane->activeTab();
     const RectF pathBar = { rest.l, rest.t, rest.r, rest.t + th.pathBarHeight };
@@ -735,10 +815,21 @@ AppUi::TabLayout AppUi::LayoutTabBar(Pane& pane, const RectF& area) const {
     constexpr float kMinTabWidth = 70.0f;
 
     TabLayout out;
-    out.vertical = (app_.tabBarPosition() == TabBarPosition::Left);
+    out.vertical = app_.tabBarVertical();
+    out.inSidebar = app_.tabsInSidebar();
     const int count = static_cast<int>(pane.tabs.size());
 
-    if (out.vertical) {
+    if (out.inSidebar) {
+        // 統合したときの厚みは «区画の幅» ─ 覚えている tabBarWidth は使わない
+        // （幅を決めているのはサイドバーの縁のほう）。行はすべて出す: 隠す先が
+        // 無いからで、長い一覧はサイドバーごとスクロールする。スクロールを
+        // 二重に持つと «どちらが動くか» が読めなくなる。
+        out.perTab = th.tabBarHeight;
+        out.thickness = area.w();
+        out.perRow = 1;
+        out.rows = std::max(1, count);
+        out.shownRows = out.rows;
+    } else if (out.vertical) {
         out.perTab = th.tabBarHeight;
         // Never past half the pane: the same line the horizontal bar draws at
         // half the height, for the same reason.
@@ -789,7 +880,9 @@ AppUi::TabLayout AppUi::LayoutTabBar(Pane& pane, const RectF& area) const {
 void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused,
                         const TabLayout& layout) {
     const Theme& th = app_.theme();
-    r.FillRect(area, th.tabInactiveBg);
+    // 統合しているときは地を塗らない ─ サイドバーの panelBg がそのまま透ける。
+    // ここだけ別の色になっていては、区画として «サイドバーの中に在る» と読めない。
+    if (!layout.inSidebar) r.FillRect(area, th.tabInactiveBg);
     // Registered first so the individual tabs, added below, win the hit test.
     Add(area, Hit::TabBar, 0, pane);
 
@@ -812,9 +905,21 @@ void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused
 
         const bool active = (static_cast<int>(i) == pane->active);
         const RectF tabRect = { x, rowTop, x + slotStep, rowTop + rowStep };
+        // 統合したタブはサイドバーの «行» として読まれるので、塗りもそちらの作法に
+        // 合わせる ─ 左右 2 px 内側の丸角。ただしアクティブの印（下の縁の線）は
+        // タブのまま残す: «今いる場所を指している行»（クイックアクセスの選択）と
+        // «アクティブなタブ» は別のことを言っており、同じ塗りだけでは読み分けられない。
+        const RectF fill = layout.inSidebar
+                               ? RectF{ tabRect.l + 2.0f, tabRect.t, tabRect.r - 2.0f, tabRect.b }
+                               : tabRect;
 
-        r.FillRect(tabRect, active ? th.tabActiveBg : th.tabInactiveBg);
-        if (Hovered(tabRect)) r.FillRect(tabRect, th.rowHover);
+        if (layout.inSidebar) {
+            if (active) r.FillRoundRect(fill, 4.0f, th.rowSelected);
+            if (Hovered(tabRect)) r.FillRoundRect(fill, 4.0f, th.rowHover);
+        } else {
+            r.FillRect(tabRect, active ? th.tabActiveBg : th.tabInactiveBg);
+            if (Hovered(tabRect)) r.FillRect(tabRect, th.rowHover);
+        }
         if (active) {
             // Lit only in the pane holding the keyboard: with every pane's active
             // tab wearing the accent, the accent stopped meaning anything. It
@@ -822,30 +927,39 @@ void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused
             // near side of a column - so the mark reads as belonging to the
             // strip rather than pointing out of it.
             r.FillRect(layout.vertical
-                           ? RectF{ tabRect.l, tabRect.t, tabRect.l + 2.0f, tabRect.b }
+                           ? RectF{ fill.l, tabRect.t, fill.l + 2.0f, tabRect.b }
                            : RectF{ tabRect.l, tabRect.t, tabRect.r, tabRect.t + 2.0f },
                        FocusColor(focused));
         }
         // The hairline between neighbours, laid across whichever way they touch.
-        r.FillRect(layout.vertical
-                       ? RectF{ tabRect.l + 8.0f, tabRect.b - 1.0f, tabRect.r - 8.0f, tabRect.b }
-                       : RectF{ tabRect.r - 1.0f, tabRect.t + 5.0f, tabRect.r, tabRect.b - 5.0f },
-                   th.border);
+        // 統合しているときは引かない ─ サイドバーの行どうしは線で区切られていない
+        // ので、そこだけ罫線が入ると «タブの帯» が区画の中に残って見える。
+        if (!layout.inSidebar) {
+            r.FillRect(layout.vertical ? RectF{ tabRect.l + 8.0f, tabRect.b - 1.0f,
+                                               tabRect.r - 8.0f, tabRect.b }
+                                       : RectF{ tabRect.r - 1.0f, tabRect.t + 5.0f, tabRect.r,
+                                                tabRect.b - 5.0f },
+                       th.border);
+        }
 
-        const RectF close = { tabRect.r - 20.0f, tabRect.t + 6.0f, tabRect.r - 6.0f,
-                              tabRect.b - 6.0f };
-        const RectF label = { tabRect.l + 10.0f, tabRect.t, close.l - 4.0f, tabRect.b };
+        const RectF close = { fill.r - 20.0f, tabRect.t + 6.0f, fill.r - 6.0f, tabRect.b - 6.0f };
+        const RectF label = { fill.l + 10.0f, tabRect.t, close.l - 4.0f, tabRect.b };
         r.DrawText(app_.DisplayName(*pane->tabs[i]), label,
-                   active ? th.tabActiveText : th.tabInactiveText, FontRole::Ui, TextAlign::Left);
+                   layout.inSidebar ? (active ? th.rowSelectedText : th.text)
+                   : active         ? th.tabActiveText
+                                    : th.tabInactiveText,
+                   FontRole::Ui, TextAlign::Left);
         // The cross is drawn faint so a row of tabs does not read as a row of
         // buttons; under the pointer it has to be unambiguous, since this is
         // the one control here that destroys something.
         const bool overClose = Hovered(close);
         if (overClose) r.FillRoundRect(close.inset(-2.0f), 3.0f, th.rowHover);
         glyph::Cross(r, close,
-                     overClose ? th.text
-                     : active  ? th.tabActiveText.alpha(0.7f)
-                               : th.tabInactiveText.alpha(0.5f),
+                     overClose            ? th.text
+                     : layout.inSidebar   ? (active ? th.rowSelectedText.alpha(0.7f)
+                                                    : th.text.alpha(0.45f))
+                     : active             ? th.tabActiveText.alpha(0.7f)
+                                          : th.tabInactiveText.alpha(0.5f),
                      1.2f);
 
         Add(tabRect, Hit::TabItem, static_cast<int>(i), pane);
@@ -870,7 +984,12 @@ void AppUi::PaintTabBar(Renderer& r, Pane* pane, const RectF& area, bool focused
         }
     }
 
-    if (layout.vertical) {
+    if (layout.inSidebar) {
+        // 何も足さない。**縁も取っ手もつまみもサイドバーのもの** ─ 区画の右端に
+        // もう 1 本線を引けば «帯がサイドバーの中に居る» ことになるし、掴める縁が
+        // 隣り合って 2 本あれば、どちらが幅を変えるのかを画面が言えない。
+        // 隠れているタブも無い（全行を出す）ので、つまみが答えることも無い。
+    } else if (layout.vertical) {
         // One line down the far side, where the bar meets the listing. The tabs
         // already carry the lines between themselves.
         r.FillRect({ area.r - 1.0f, area.t, area.r, area.b }, th.border);

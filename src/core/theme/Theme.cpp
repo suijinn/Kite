@@ -161,10 +161,10 @@ void Theme::ApplyIni(const Ini& ini) {
     rowHeight = ini.GetFloat("ui", "row_height", rowHeight);
     // font_size はここで読まない ─ 読む場所は App だけ（Theme::ApplyIni の注記）。
     uiScale = ini.GetFloat("ui", "scale", uiScale);
-    sidebarWidth = ini.GetFloat("ui", "sidebar_width", sidebarWidth);
-    // tab_bar_width もここでは読まない ─ 縁を掴んで決める値なので、読む場所は
-    // App だけ（Theme.h の kDefaultTabBarWidth の注記）。両方が読むと、掴んで
-    // 動かした幅の上にファイルの値がもう一度かぶさる。
+    // tab_bar_width と sidebar_width もここでは読まない ─ どちらも縁を掴んで決める
+    // 値なので、読む場所は App だけ（Theme.h の kDefaultTabBarWidth と
+    // kDefaultSidebarWidth の注記）。両方が読むと、掴んで動かした幅の上に
+    // ファイルの値がもう一度かぶさる。
 
     const std::string family = ini.GetStr("ui", "font_family");
     if (!family.empty()) fontFamily = family;

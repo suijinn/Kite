@@ -445,8 +445,37 @@ public:
 
     /// @brief タブバーを置く場所を返す。
     /// @return 設定されている場所
-    /// @note UI 層はこれ 1 つでタブバーの向きを決める。Left なら縦置き
+    /// @note **向きを訊きたいだけなら tabBarVertical()、サイドバーに入るかなら
+    ///       tabsInSidebar() を通すこと。** どちらも «Left か Sidebar か» を数える
+    ///       場所を UI 層に増やさないために在る
     TabBarPosition tabBarPosition() const { return tabBarPosition_; }
+
+    /// @brief タブバーが縦置きかを返す。
+    /// @return 縦に積むなら true（Left と Sidebar）
+    /// @note 折り返しも落とし先の判定も «縦か横か» でしか分かれないので、数え方は
+    ///       1 つにしてある ─ `== Left` と書いた場所が 1 つ残ると、サイドバーに
+    ///       入れた途端にそこだけ横置きの計算を始める
+    bool tabBarVertical() const { return tabBarPosition_ != TabBarPosition::Top; }
+
+    /// @brief タブバーをサイドバーの中に入れるかを返す。
+    /// @return 入れるなら true
+    /// @note 設定が Sidebar であることに加えて、**サイドバーが出ていること**と
+    ///       **ペインが 1 つであること**が要る。統合が返すのは «帯 1 本ぶんの幅» な
+    ///       ので、相乗りする相手が居ないときも、バーが 2 本要るときも意味を持たない
+    ///       ─ 欠けたら Left として立つ。判断をここ 1 か所に置くのは、描画・当たり
+    ///       判定・マウスの 3 つで答えが食い違わないようにするため
+    bool tabsInSidebar() const;
+
+    /// @brief サイドバーの «タブ» 区画が折り畳まれているかを返す。
+    /// @return 折り畳まれていれば true
+    /// @note `sidebarCollapsed_` の配列に入れていないのは、この区画が
+    ///       SidebarSection ではないから（上端に固定で、並べ替えの対象にしない）
+    bool tabsSectionCollapsed() const { return tabsSectionCollapsed_; }
+
+    /// @brief サイドバーの «タブ» 区画の折り畳みを切り替える。
+    /// @note 状態は `[ui] tabs_section_collapsed` に残る（他の区画と同じ理由 ─
+    ///       畳んだことが次の起動で戻ると、畳む意味が無い）
+    void ToggleTabsSection();
 
     /// @brief 縦置きタブバーの幅を返す。
     /// @return 幅（DIP、**倍率を掛ける前**の値）。横置きでは使わない
@@ -470,6 +499,25 @@ public:
     /// @brief サイドバーが表示中かを返す。
     /// @return 表示中なら true
     bool sidebarVisible() const { return sidebarVisible_; }
+
+    /// @brief サイドバーの幅を返す。
+    /// @return 幅（DIP、**倍率を掛ける前**の値）
+    /// @note 画面に出る幅は `theme().sidebarWidth`（倍率を掛けた後）。掛けるのは
+    ///       ApplyTheme() の 1 か所だけ、というのは列やタブバーの幅と同じ約束
+    float sidebarWidth() const { return sidebarWidth_; }
+
+    /// @brief サイドバーの幅を変える。
+    /// @param[in] width 新しい幅（DIP、**倍率を掛けた後**の値）
+    /// @return 実際に変わったら true
+    /// @note 掛け算済みの幅を受けるのは、掴んでいる縁の位置がそのまま答えだから。
+    ///       割り戻して覚えるので、文字を大きくすればサイドバーも同じだけ広くなる。
+    ///       範囲は kSidebarMinWidth〜kSidebarMaxWidth に丸める
+    bool SetSidebarWidth(float width);
+
+    /// @brief サイドバーの幅を組み込みの既定に戻す。
+    /// @note すでに既定のときも黙らない ─ 何も動かない操作は「効かないキー」と
+    ///       見分けが付かないので、ステータス行がそう言う（ResetTabBarWidth と同じ）
+    void ResetSidebarWidth();
 
     /// @brief サイドバーの区画を上から順に返す。
     /// @return 区画の並び。必ず全区画がちょうど 1 回ずつ含まれる
@@ -1181,6 +1229,13 @@ private:
                                                      SidebarSection::Bookmarks,
                                                      SidebarSection::Drives };
     bool sidebarCollapsed_[static_cast<size_t>(SidebarSection::Count)] = {};
+    // 統合したタブ区画の折り畳み。SidebarSection ではないので配列の外に居る
+    // （上端に固定で、並べ替えの対象にしない ─ 他の 3 つが «行き先の置き場» なのに
+    // 対して、これは «今開いているもの»）。
+    bool tabsSectionCollapsed_ = false;
+    // サイドバーの幅。倍率を掛ける前の値で覚えるのは列やタブバーの幅と同じ理由で、
+    // 掛けるのは ApplyTheme() の 1 か所だけ。
+    float sidebarWidth_ = kDefaultSidebarWidth;
     float fontScale_ = 1.0f;
     // 倍率 100 % のときの文字の大きさ。器（行・バー・サイドバー幅）は
     // Theme::kDefaultFontSize の文字が入る前提の値なので、ここを動かすと

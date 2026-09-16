@@ -230,10 +230,67 @@ KITE_TEST(settings, the_tab_bar_starts_above_the_list_and_can_be_moved_beside_it
                    static_cast<int>(TabBarPosition::Left));
     KITE_EXPECT(h.SettingsFile().find("tab_bar_position=left") != std::string::npos);
 
-    // 上下 1 つの選択肢しか無いので、戻すのも同じ 1 手。
+    // もう 1 つ先がサイドバー。«位置» の 3 択なので、(上, 統合 on) のような意味を
+    // 持たない組み合わせは表現しようが無い。
+    h.app.settingsEditor().Adjust(1, h.app.strings());
+    h.app.ApplyPendingSetting();
+    KITE_EXPECT_EQ(static_cast<int>(h.app.tabBarPosition()),
+                   static_cast<int>(TabBarPosition::Sidebar));
+    KITE_EXPECT(h.SettingsFile().find("tab_bar_position=sidebar") != std::string::npos);
+
+    h.app.settingsEditor().Adjust(-1, h.app.strings());
     h.app.settingsEditor().Adjust(-1, h.app.strings());
     h.app.ApplyPendingSetting();
     KITE_EXPECT_EQ(static_cast<int>(h.app.tabBarPosition()), static_cast<int>(TabBarPosition::Top));
+}
+
+// 統合が効くのは «タブバーが 1 本しか要らないとき» だけ。設定はそのまま残る ─
+// 条件が戻れば、何も操作しなくてもタブはサイドバーへ入る。
+KITE_TEST(settings, tabs_move_into_the_sidebar_only_while_one_pane_has_it_showing) {
+    Harness h;
+    h.OpenAt(SettingId::TabBarPos);
+    h.app.settingsEditor().Adjust(2, h.app.strings());
+    h.app.ApplyPendingSetting();
+    KITE_EXPECT(h.app.tabsInSidebar());
+
+    // 分割すればバーは 2 本要る ─ サイドバーはどちらのタブなのかを言えない。
+    h.app.Execute(Cmd::SplitLeftRight);
+    KITE_EXPECT_FALSE(h.app.tabsInSidebar());
+    KITE_EXPECT_EQ(static_cast<int>(h.app.tabBarPosition()),
+                   static_cast<int>(TabBarPosition::Sidebar));
+
+    h.app.Execute(Cmd::ClosePane);
+    KITE_EXPECT(h.app.tabsInSidebar());
+
+    // 隠れているサイドバーには相乗りできない。
+    h.app.Execute(Cmd::ToggleSidebar);
+    KITE_EXPECT_FALSE(h.app.tabsInSidebar());
+    h.app.Execute(Cmd::ToggleSidebar);
+    KITE_EXPECT(h.app.tabsInSidebar());
+
+    // 縦置きであることのほうは、統合できていてもいなくても変わらない ─ 効かない
+    // 組み合わせで «横置き» に落ちると、分割するたびにバーの向きが変わる。
+    KITE_EXPECT(h.app.tabBarVertical());
+}
+
+// 選んだのに画面が変わらない組み合わせがある ─ 何も動かない操作は「効かないキー」と
+// 見分けが付かないので、そのときだけ理由を言う。
+KITE_TEST(settings, choosing_the_sidebar_while_it_is_hidden_says_why_nothing_moved) {
+    Harness h;
+    h.app.Execute(Cmd::ToggleSidebar);
+    h.OpenAt(SettingId::TabBarPos);
+    h.app.settingsEditor().Adjust(2, h.app.strings());
+    h.app.ApplyPendingSetting();
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.tabs_in_sidebar_hidden"));
+
+    h.app.Execute(Cmd::ToggleSidebar);
+    h.app.Execute(Cmd::SplitLeftRight);
+    h.OpenAt(SettingId::TabBarPos);
+    h.app.settingsEditor().Adjust(-1, h.app.strings());
+    h.app.ApplyPendingSetting();
+    h.app.settingsEditor().Adjust(1, h.app.strings());
+    h.app.ApplyPendingSetting();
+    KITE_EXPECT_EQ(h.app.statusMessage(), h.app.strings().Get("ui.tabs_in_sidebar_split"));
 }
 
 KITE_TEST(settings, the_saved_tab_bar_position_is_read_back_on_the_next_run) {
