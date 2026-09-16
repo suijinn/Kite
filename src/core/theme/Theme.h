@@ -40,7 +40,7 @@ inline constexpr float kTabBarMaxWidth = 400.0f;   ///< 縦置きタブバーの
 ///
 /// 下限は「クイックアクセス」の見出しと、アイコン 1 つぶんを引いた残りに名前が
 /// 数文字は残るところ。上限は «それ以上覚えない» 線で、実際に効く上限は窓の半分
-/// （AppUi::Paint）のほう ─ サイドバーが一覧を押し潰したら、一覧を読むための
+/// （%AppUi::Paint）のほう ─ サイドバーが一覧を押し潰したら、一覧を読むための
 /// アプリではなくなる。
 inline constexpr float kDefaultSidebarWidth = 190.0f;
 inline constexpr float kSidebarMinWidth = 120.0f;   ///< サイドバーの最小幅（DIP）
@@ -108,7 +108,7 @@ struct Theme {
     float sessionBarHeight = 26.0f;  ///< セッションバーの高さ（DIP）
     float statusBarHeight = 22.0f;   ///< ステータスバーの高さ（DIP）
     /// サイドバーの幅（DIP）。正は App::sidebarWidth() の側で、ここに入るのは倍率を
-    /// 掛けた後の値（App::ApplyTheme）─ 縦置きタブバーの幅とまったく同じ扱い。
+    /// 掛けた後の値（%App::ApplyTheme）─ 縦置きタブバーの幅とまったく同じ扱い。
     float sidebarWidth = kDefaultSidebarWidth;
     float splitterWidth = 4.0f;      ///< ペイン分割線の幅（DIP）
     float fontSize = kDefaultFontSize;  ///< 基準フォントサイズ（DIP）
