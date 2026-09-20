@@ -301,9 +301,11 @@ KITE_TEST(app, a_drive_root_leads_up_to_the_computer) {
 
 KITE_TEST(app, the_recycle_bin_names_itself_when_asking_for_a_menu) {
     Harness h;
-    // A deleted item addresses the hidden $R copy of itself, so parsing that
-    // path would hand the shell an ordinary file - with no "Restore" on it. The
-    // folder travels with the request so the shell can find the item inside it.
+    // The Recycle Bin itself is an absolute shell parsing name.  Sending it
+    // back as its own container makes the host look for the bin among the
+    // bin's children, so its item menu cannot be built.  Context Menu targets
+    // the bin itself so "Empty Recycle Bin" remains available with a cursor on
+    // any deleted item.
     h.files.AddFile(vfs::kRecycleBin, "notes.txt", 12, 0);
     h.app.OpenPath(vfs::kRecycleBin, false);
     h.Settle();
@@ -312,7 +314,9 @@ KITE_TEST(app, the_recycle_bin_names_itself_when_asking_for_a_menu) {
     h.app.Execute(Cmd::CursorBottom);
     h.app.ShowContextMenuAt(10, 10, false);
     KITE_EXPECT_EQ(h.shell.contextMenuCalls, 1);
-    KITE_EXPECT_EQ(h.shell.lastContextMenuFolder, std::string(vfs::kRecycleBin));
+    KITE_EXPECT_EQ(h.shell.lastContextMenuFolder, std::string{});
+    KITE_EXPECT_EQ(h.shell.lastContextMenuPaths, std::vector<std::string>{ vfs::kRecycleBin });
+    KITE_EXPECT_FALSE(h.shell.lastContextMenuBackground);
 
     // A real folder must not name one: the shell would enumerate it again for
     // every right-click, and parsing the paths is both correct and free there.
@@ -1595,6 +1599,26 @@ KITE_TEST(app, the_extended_context_menu_is_a_distinct_command) {
     h.app.Execute(Cmd::ExtendedContextMenu);
     KITE_EXPECT(h.shell.lastContextMenuExtended);
     KITE_EXPECT_EQ(h.shell.contextMenuCalls, 2);
+}
+
+KITE_TEST(app, recycle_bin_context_menus_target_the_bin_itself) {
+    Harness h;
+    h.files.AddFile(vfs::kRecycleBin, "notes.txt", 12, 0);
+    h.app.OpenPath(vfs::kRecycleBin, false);
+    h.Settle();
+    h.app.Execute(Cmd::CursorBottom);
+
+    h.app.Execute(Cmd::ContextMenu);
+    KITE_EXPECT_EQ(h.shell.lastContextMenuPaths, std::vector<std::string>{ vfs::kRecycleBin });
+    KITE_EXPECT_EQ(h.shell.lastContextMenuFolder, std::string{});
+    KITE_EXPECT_FALSE(h.shell.lastContextMenuBackground);
+    KITE_EXPECT_FALSE(h.shell.lastContextMenuExtended);
+
+    h.app.Execute(Cmd::ExtendedContextMenu);
+    KITE_EXPECT_EQ(h.shell.lastContextMenuPaths, std::vector<std::string>{ vfs::kRecycleBin });
+    KITE_EXPECT_EQ(h.shell.lastContextMenuFolder, std::string{});
+    KITE_EXPECT_FALSE(h.shell.lastContextMenuBackground);
+    KITE_EXPECT(h.shell.lastContextMenuExtended);
 }
 
 KITE_TEST(app, the_folder_menu_targets_the_folder_even_with_a_selection) {

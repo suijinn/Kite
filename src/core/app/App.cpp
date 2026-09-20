@@ -1143,15 +1143,21 @@ void App::ToggleBookmark(const std::string& p) {
 void App::ShowContextMenuAt(int screenX, int screenY, bool extended) {
     Tab* t = workspace_.focusedTab();
     if (!t) return;
+    // The Recycle Bin puts "Empty Recycle Bin" on its own item menu, not on a
+    // deleted item's menu.  A cursor always supplies an item through
+    // SelectionPaths(), so without this special target the ordinary Menu and
+    // Shift+F10 commands could never offer the bin's command while it held
+    // anything.
+    if (t->path == vfs::kRecycleBin) {
+        ShowShellMenu({ t->path }, screenX, screenY, extended, false, true);
+        return;
+    }
     // A cursor parked on ".." has no selection to offer, so this falls through to
     // the folder being listed - and to the menu an empty-space right-click gives,
     // which is a different menu from the one the folder gets as an item.
     std::vector<std::string> paths = t->SelectionPaths();
     if (paths.empty()) {
-        // Still offered inside the Recycle Bin, and worth having there: the
-        // background menu answers for the bin itself, which is where "Empty
-        // Recycle Bin" lives.
-        ShowShellMenu({ t->path }, screenX, screenY, extended, true);
+        ShowShellMenu({ t->path }, screenX, screenY, extended, true, true);
         return;
     }
     ShowShellMenu(paths, screenX, screenY, extended, false);
@@ -1176,7 +1182,7 @@ void App::ShowFolderContextMenu(bool extended) {
     //
     // Inside the Recycle Bin the target here is the bin itself, and its item
     // menu is the useful one: "Empty Recycle Bin" and Properties.
-    ShowShellMenu({ t->path }, x, y, extended, false);
+    ShowShellMenu({ t->path }, x, y, extended, false, true);
 }
 
 void App::ShowBackgroundContextMenu(int screenX, int screenY, bool extended) {
@@ -1184,7 +1190,7 @@ void App::ShowBackgroundContextMenu(int screenX, int screenY, bool extended) {
     if (!t || t->path.empty()) return;
     // The cursor row is not what was clicked, so it must not answer: pointing at
     // the empty space means the folder itself, as the space inside it.
-    ShowShellMenu({ t->path }, screenX, screenY, extended, true);
+    ShowShellMenu({ t->path }, screenX, screenY, extended, true, true);
 }
 
 void App::DoRestore() {
@@ -1281,10 +1287,17 @@ std::string App::ShellMenuContainer() {
 }
 
 void App::ShowShellMenu(const std::vector<std::string>& paths, int screenX, int screenY,
-                        bool extended, bool background) {
+                        bool extended, bool background, bool targetIsFolder) {
     if (paths.empty()) return;
-    if (!shell_.ShowContextMenu(ShellMenuContainer(), paths, screenX, screenY, extended,
-                                      background, theme_.dark)) {
+    // A virtual folder's children need the container so the shell can resolve
+    // their parsing names back to its child PIDLs.  The folder itself is
+    // already an absolute parsing name, however; looking it up among its own
+    // children finds nothing.  In particular, that made the Recycle Bin's
+    // item menu fail before it could offer "Empty Recycle Bin".
+    std::string container = ShellMenuContainer();
+    if (targetIsFolder) container.clear();
+    if (!shell_.ShowContextMenu(container, paths, screenX, screenY, extended, background,
+                                theme_.dark)) {
         // The menu runs in a separate process; losing it means that process
         // could not be started, or a shell extension took it down. Say so rather
         // than letting a right-click look like it did nothing.

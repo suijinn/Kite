@@ -1114,7 +1114,7 @@ private:
     bool MoveCompletion(int delta);
 
     void ShowShellMenu(const std::vector<std::string>& paths, int screenX, int screenY,
-                       bool extended, bool background);
+                       bool extended, bool background, bool targetIsFolder = false);
     bool CursorRowAnchor(int& screenX, int& screenY);
 
     void UpdateTitle();
